@@ -5,6 +5,7 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
+source "$MUSTER_ROOT/lib/core/k8s_diag.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
@@ -110,6 +111,8 @@ ${_k8s_env_lines}"
         done
       fi
       echo ""
+
+      k8s_diagnose_failure "$target"
 
       menu_select "Rollback failed. What do you want to do?" "Retry" "Force cleanup and retry" "Abort"
 

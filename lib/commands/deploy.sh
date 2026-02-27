@@ -2,11 +2,13 @@
 # muster/lib/commands/deploy.sh — Deploy orchestration
 
 source "$MUSTER_ROOT/lib/tui/menu.sh"
+source "$MUSTER_ROOT/lib/tui/checklist.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/tui/progress.sh"
 source "$MUSTER_ROOT/lib/tui/streambox.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
+source "$MUSTER_ROOT/lib/core/k8s_diag.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
@@ -38,13 +40,43 @@ cmd_deploy() {
   # Get deploy order
   local services=()
   if [[ "$target" == "all" ]]; then
+    local all_services=()
     while IFS= read -r svc; do
       [[ -z "$svc" ]] && continue
       local skip
       skip=$(config_get ".services.${svc}.skip_deploy")
       [[ "$skip" == "true" ]] && continue
-      services[${#services[@]}]="$svc"
+      all_services[${#all_services[@]}]="$svc"
     done < <(config_get '.deploy_order[]' 2>/dev/null || config_services)
+
+    # Interactive: let user choose all or specific services
+    if [[ -t 0 ]] && (( ${#all_services[@]} > 1 )); then
+      menu_select "Deploy which services?" "All services" "Select services"
+      if [[ "$MENU_RESULT" == "Select services" ]]; then
+        checklist_select "Select services to deploy:" "${all_services[@]}"
+        if [[ -z "$CHECKLIST_RESULT" ]]; then
+          warn "No services selected"
+          _unload_env_file
+          return 0
+        fi
+        while IFS= read -r svc; do
+          [[ -z "$svc" ]] && continue
+          services[${#services[@]}]="$svc"
+        done <<< "$CHECKLIST_RESULT"
+      else
+        local _i=0
+        while (( _i < ${#all_services[@]} )); do
+          services[${#services[@]}]="${all_services[$_i]}"
+          _i=$(( _i + 1 ))
+        done
+      fi
+    else
+      local _i=0
+      while (( _i < ${#all_services[@]} )); do
+        services[${#services[@]}]="${all_services[$_i]}"
+        _i=$(( _i + 1 ))
+      done
+    fi
   else
     services[0]="$target"
   fi
@@ -241,6 +273,8 @@ ${_k8s_env_lines}"
             done
           fi
           echo ""
+
+          k8s_diagnose_failure "$svc"
 
           menu_select "Deploy failed. What do you want to do?" "Retry" "Rollback ${name}" "Skip and continue" "Abort"
 
