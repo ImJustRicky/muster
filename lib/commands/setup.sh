@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# muster/lib/commands/setup.sh — Guided setup wizard
+# muster/lib/commands/setup.sh — Guided setup wizard (scan-first)
 
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/checklist.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
+source "$MUSTER_ROOT/lib/tui/order.sh"
+source "$MUSTER_ROOT/lib/core/scanner.sh"
 
 SETUP_TOTAL_STEPS=7
 
@@ -36,29 +38,22 @@ _SETUP_CUR_STEP=1
 _SETUP_CUR_LABEL=""
 _SETUP_CUR_PHRASE=""
 _SETUP_CUR_SUMMARY=()
-_SETUP_CUR_PROMPT="false"    # if true, last summary line is a prompt (no trailing newline)
+_SETUP_CUR_PROMPT="false"
 
-# Called by WINCH trap to redraw on resize
-# Only redraws when at a read prompt (safe). During menus/checklists,
-# the next step transition will adapt to the new size.
 _setup_redraw() {
   if [[ "$_SETUP_CUR_PROMPT" == "true" ]]; then
     _setup_screen_inner
   fi
 }
 
-# Draw the banner + label + summary (full screen, used on step transitions)
 _setup_screen_inner() {
   clear
   update_term_size
 
-  # W = inner width between │ borders. Total line = 2 (margin) + 1 (│) + W + 1 (│) = W + 4
-  # Must fit within TERM_COLS to avoid wrapping
   local W=$(( TERM_COLS - 4 ))
   (( W > 56 )) && W=56
   (( W < 10 )) && W=10
 
-  # Progress bar
   local bar_w=$(( W - 4 ))
   (( bar_w < 1 )) && bar_w=1
   local filled=$(( _SETUP_CUR_STEP * bar_w / SETUP_TOTAL_STEPS ))
@@ -72,24 +67,20 @@ _setup_screen_inner() {
 
   local step_text="step ${_SETUP_CUR_STEP}/${SETUP_TOTAL_STEPS}"
 
-  # Truncate phrase to fit box
   local max_phrase_len=$(( W - 2 ))
   local display_phrase="$_SETUP_CUR_PHRASE"
   if (( ${#display_phrase} > max_phrase_len )); then
     display_phrase="${display_phrase:0:$((max_phrase_len - 3))}..."
   fi
 
-  # Truncate step text if needed
   local display_step="$step_text"
   if (( ${#display_step} > max_phrase_len )); then
     display_step="${display_step:0:$((max_phrase_len - 3))}..."
   fi
 
-  # Build horizontal border using printf repeat
   local hline
   hline=$(printf '%*s' "$W" "" | sed 's/ /─/g')
 
-  # Build padding strings (plain spaces, no ANSI)
   local p_empty
   p_empty=$(printf '%*s' "$W" "")
   local p_title
@@ -109,7 +100,6 @@ _setup_screen_inner() {
   (( p_step_pad < 0 )) && p_step_pad=0
   p_step=$(printf '%*s' "$p_step_pad" "")
 
-  # Draw box using printf (no echo -e on mixed content)
   echo ""
   printf '  %b┌%s┐%b\n' "${ACCENT_BRIGHT}" "$hline" "${RESET}"
   printf '  %b│%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "$p_empty" "${ACCENT_BRIGHT}" "${RESET}"
@@ -125,7 +115,6 @@ _setup_screen_inner() {
     echo -e "  ${BOLD}${_SETUP_CUR_LABEL}${RESET}"
   fi
 
-  # Redraw summary lines (last line uses printf to keep cursor on same line for prompts)
   local _sum_count=${#_SETUP_CUR_SUMMARY[@]}
   local _sum_i=0
   local s
@@ -139,8 +128,6 @@ _setup_screen_inner() {
   done
 }
 
-# Public: set state and draw
-# Pick phrase once per session (on first call)
 _SETUP_SESSION_PHRASE=""
 
 _setup_screen() {
@@ -154,22 +141,87 @@ _setup_screen() {
   _setup_screen_inner
 }
 
-# Helper: build summary lines for step 2
-_build_stack_summary() {
-  _SETUP_CUR_PROMPT="false"
-  _SETUP_CUR_SUMMARY=("")
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Project: ${project_path}${RESET}"
-  [[ "$has_db" == "yes" && -n "$db_type" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} Database: ${db_type}"
-  [[ "$has_db" == "yes" && -z "$db_type" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} Database: yes"
-  [[ "$has_api" == "yes" && -n "$api_type" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} API/Web: ${api_type}"
-  [[ "$has_api" == "yes" && -z "$api_type" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} API/Web: yes"
-  [[ "$has_workers" == "yes" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} Workers: yes"
-  [[ "$has_proxy" == "yes" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} Proxy: yes"
+# ── Sanitize service name to a config key ──
+_svc_to_key() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//'
 }
 
+# ── Copy template hooks for a service, replacing placeholders ──
+_setup_copy_hooks() {
+  local stack="$1" svc_key="$2" svc_name="$3" hook_dir="$4"
+  local template_dir="${MUSTER_ROOT}/templates/hooks/${stack}"
+
+  if [[ ! -d "$template_dir" ]]; then
+    # No templates for this stack, write stub hooks
+    _setup_write_stub_hooks "$hook_dir"
+    return
+  fi
+
+  local f
+  for f in "${template_dir}"/*.sh; do
+    [[ ! -f "$f" ]] && continue
+    local basename
+    basename=$(basename "$f")
+    sed \
+      -e "s/{{SERVICE_NAME}}/${svc_name}/g" \
+      -e "s/{{NAMESPACE}}/default/g" \
+      -e "s/{{PORT}}/8080/g" \
+      -e "s/{{COMPOSE_FILE}}/docker-compose.yml/g" \
+      "$f" > "${hook_dir}/${basename}"
+    chmod +x "${hook_dir}/${basename}"
+  done
+}
+
+_setup_write_stub_hooks() {
+  local hook_dir="$1"
+
+  cat > "${hook_dir}/deploy.sh" << 'HOOK'
+#!/usr/bin/env bash
+# Deploy hook — add your deploy commands here
+echo "TODO: Add deploy commands"
+exit 0
+HOOK
+  chmod +x "${hook_dir}/deploy.sh"
+
+  cat > "${hook_dir}/health.sh" << 'HOOK'
+#!/usr/bin/env bash
+# Health check hook — exit 0 if healthy, exit 1 if not
+echo "TODO: Add health check"
+exit 0
+HOOK
+  chmod +x "${hook_dir}/health.sh"
+
+  cat > "${hook_dir}/rollback.sh" << 'HOOK'
+#!/usr/bin/env bash
+# Rollback hook — add your rollback commands here
+echo "TODO: Add rollback commands"
+exit 0
+HOOK
+  chmod +x "${hook_dir}/rollback.sh"
+
+  cat > "${hook_dir}/logs.sh" << 'HOOK'
+#!/usr/bin/env bash
+# Logs hook — stream logs for this service
+echo "TODO: Add log streaming"
+exit 0
+HOOK
+  chmod +x "${hook_dir}/logs.sh"
+
+  cat > "${hook_dir}/cleanup.sh" << 'HOOK'
+#!/usr/bin/env bash
+# Cleanup hook — remove stale resources
+echo "TODO: Add cleanup commands"
+exit 0
+HOOK
+  chmod +x "${hook_dir}/cleanup.sh"
+}
+
+# ══════════════════════════════════════════════════════════════
+# Main setup command
+# ══════════════════════════════════════════════════════════════
 cmd_setup() {
+
   # ── Step 1: Project root ──
-  # Build platform info lines for summary (so resize redraw can reproduce them)
   local _plat_tools=""
   [[ "$MUSTER_HAS_DOCKER" == "true" ]] && _plat_tools+="docker "
   [[ "$MUSTER_HAS_KUBECTL" == "true" ]] && _plat_tools+="kubectl "
@@ -196,97 +248,340 @@ cmd_setup() {
   _SETUP_CUR_PROMPT="false"
 
   project_path="${project_path:-..}"
-
   project_path="$(cd "$project_path" 2>/dev/null && pwd)" || {
     err "Path does not exist: $project_path"
-    exit 1
+    return 1
   }
 
-  # ── Step 2: Conversational questions ──
-  local has_db="no" db_type="" has_api="no" api_type=""
-  local has_workers="no" has_proxy="no" container_type="none"
+  # ── Step 2: Scan project ──
+  _SETUP_CUR_SUMMARY=("")
+  _setup_screen 2 "Scanning project"
+  echo ""
+  start_spinner "Scanning ${project_path}..."
+  scan_project "$project_path"
+  stop_spinner
 
-  _build_stack_summary
-  _setup_screen 2 "Your stack"
+  if (( ${#_SCAN_FILES[@]} > 0 )); then
+    # ────── Scan-first flow ──────
+    scan_print_results
+    echo ""
+    sleep 1
+
+    # ── Step 3: Confirm stack + select services ──
+    local stack="$_SCAN_STACK"
+
+    if [[ -n "$stack" ]]; then
+      local stack_label=""
+      case "$stack" in
+        k8s)     stack_label="Kubernetes" ;;
+        compose) stack_label="Docker Compose" ;;
+        docker)  stack_label="Docker" ;;
+        bare)    stack_label="Bare metal / Systemd" ;;
+      esac
+
+      _SETUP_CUR_SUMMARY=("")
+      _setup_screen 3 "Confirm stack"
+      menu_select "Detected ${stack_label}. Correct?" "Yes" "No, let me pick"
+
+      if [[ "$MENU_RESULT" == "No, let me pick" ]]; then
+        _SETUP_CUR_SUMMARY=("")
+        _setup_screen 3 "Select stack"
+        menu_select "What deploys your services?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd"
+        case "$MENU_RESULT" in
+          Kubernetes)              stack="k8s" ;;
+          "Docker Compose")        stack="compose" ;;
+          "Docker (standalone)")   stack="docker" ;;
+          "Bare metal / Systemd")  stack="bare" ;;
+        esac
+      fi
+    else
+      # Stack not detected, ask
+      _SETUP_CUR_SUMMARY=("")
+      _setup_screen 3 "Select stack"
+      menu_select "How do you deploy?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd"
+      case "$MENU_RESULT" in
+        Kubernetes)              stack="k8s" ;;
+        "Docker Compose")        stack="compose" ;;
+        "Docker (standalone)")   stack="docker" ;;
+        "Bare metal / Systemd")  stack="bare" ;;
+      esac
+    fi
+
+    # Select services from scan results
+    if (( ${#_SCAN_SERVICES[@]} > 0 )); then
+      _SETUP_CUR_SUMMARY=("")
+      _setup_screen 3 "Select services"
+      checklist_select "Manage these services?" "${_SCAN_SERVICES[@]}"
+
+      local selected_services=()
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && selected_services[${#selected_services[@]}]="$line"
+      done <<< "$CHECKLIST_RESULT"
+    else
+      # No services detected, ask for names
+      _SETUP_CUR_SUMMARY=(
+        ""
+        "  ${DIM}Enter service names separated by spaces${RESET}"
+        "  ${DIM}Example: api worker redis${RESET}"
+        ""
+        "  ${ACCENT}>${RESET} "
+      )
+      _SETUP_CUR_PROMPT="true"
+      _setup_screen 3 "Name your services"
+      read -r svc_input
+      _SETUP_CUR_PROMPT="false"
+
+      local selected_services=()
+      for s in $svc_input; do
+        selected_services[${#selected_services[@]}]="$s"
+      done
+    fi
+
+    if [[ ${#selected_services[@]} -eq 0 ]]; then
+      warn "No services selected."
+      return 1
+    fi
+
+    # ── Step 4: Deploy order ──
+    _SETUP_CUR_SUMMARY=("")
+    _setup_screen 4 "Deploy order"
+
+    if (( ${#selected_services[@]} > 1 )); then
+      order_select "What order should services deploy?" "${selected_services[@]}"
+      selected_services=("${ORDER_RESULT[@]}")
+    else
+      echo -e "\n  ${GREEN}1.${RESET} ${selected_services[0]}"
+    fi
+
+    # ── Step 5: Per-service config (health + credentials) ──
+    local services_json="{"
+    local deploy_order_json="["
+    local first=true
+    local svc_index=0
+
+    for svc in "${selected_services[@]}"; do
+      svc_index=$((svc_index + 1))
+      local key
+      key=$(_svc_to_key "$svc")
+
+      # Health check
+      _SETUP_CUR_SUMMARY=("")
+      _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
+      menu_select "Health check for ${svc}?" "HTTP" "TCP" "Command" "None"
+      local health_choice="$MENU_RESULT"
+
+      local health_json="{}"
+      case "$health_choice" in
+        HTTP)
+          printf "\n  ${ACCENT}>${RESET} Health endpoint [/health]: "
+          read -r endpoint
+          printf "  ${ACCENT}>${RESET} Port [8080]: "
+          read -r port_num
+          health_json="{\"type\":\"http\",\"endpoint\":\"${endpoint:-/health}\",\"port\":${port_num:-8080},\"timeout\":10,\"enabled\":true}"
+          ;;
+        TCP)
+          printf "\n  ${ACCENT}>${RESET} Port: "
+          read -r port_num
+          health_json="{\"type\":\"tcp\",\"port\":${port_num:-0},\"timeout\":5,\"enabled\":true}"
+          ;;
+        Command)
+          printf "\n  ${ACCENT}>${RESET} Health command: "
+          read -r health_cmd
+          health_json="{\"type\":\"command\",\"command\":\"${health_cmd}\",\"timeout\":10,\"enabled\":true}"
+          ;;
+        None)
+          health_json="{\"enabled\":false}"
+          ;;
+      esac
+
+      # Credentials
+      _SETUP_CUR_SUMMARY=(
+        ""
+        "  ${GREEN}*${RESET} Health: ${health_choice}"
+      )
+      _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
+      menu_select "Credentials for ${svc}?" "None" "Save always (keychain)" "Once per session" "Every time"
+      local cred_choice="$MENU_RESULT"
+
+      local cred_mode="off"
+      case "$cred_choice" in
+        "Save always (keychain)") cred_mode="save" ;;
+        "Once per session")       cred_mode="session" ;;
+        "Every time")             cred_mode="always" ;;
+      esac
+
+      [[ "$first" == "true" ]] && first=false || services_json+=","
+      services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}}"
+      deploy_order_json+="\"${key}\","
+    done
+
+    services_json+="}"
+    deploy_order_json="${deploy_order_json%,}]"
+
+    # ── Step 6: Project name ──
+    local project_name
+    project_name=$(basename "$project_path")
+    _SETUP_CUR_SUMMARY=(
+      ""
+      "  ${ACCENT}>${RESET} Project name [${project_name}]: "
+    )
+    _SETUP_CUR_PROMPT="true"
+    _setup_screen 6 "Project name"
+    read -r custom_name
+    _SETUP_CUR_PROMPT="false"
+    project_name="${custom_name:-$project_name}"
+
+    # ── Step 7: Generate ──
+    local config_path="${project_path}/deploy.json"
+    local muster_dir="${project_path}/.muster"
+
+    mkdir -p "${muster_dir}/hooks"
+    mkdir -p "${muster_dir}/logs"
+
+    # Copy template hooks for each service
+    local generated_hooks=()
+    for svc in "${selected_services[@]}"; do
+      local key
+      key=$(_svc_to_key "$svc")
+      local hook_dir="${muster_dir}/hooks/${key}"
+      mkdir -p "$hook_dir"
+      _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir"
+      generated_hooks[${#generated_hooks[@]}]=".muster/hooks/${key}/"
+    done
+
+    # Write deploy.json
+    if has_cmd jq; then
+      echo "{\"project\":\"${project_name}\",\"version\":\"1\",\"root\":\"${project_path}\",\"services\":${services_json},\"deploy_order\":${deploy_order_json},\"skills\":[]}" | jq '.' > "$config_path"
+    elif has_cmd python3; then
+      python3 -c "
+import json, sys
+data = json.loads(sys.argv[1])
+print(json.dumps(data, indent=2))
+" "{\"project\":\"${project_name}\",\"version\":\"1\",\"root\":\"${project_path}\",\"services\":${services_json},\"deploy_order\":${deploy_order_json},\"skills\":[]}" > "$config_path"
+    else
+      echo "{\"project\":\"${project_name}\",\"version\":\"1\",\"root\":\"${project_path}\",\"services\":${services_json},\"deploy_order\":${deploy_order_json},\"skills\":[]}" > "$config_path"
+    fi
+
+    # .gitignore
+    local gitignore="${project_path}/.gitignore"
+    if [[ -f "$gitignore" ]]; then
+      grep -q '.muster/logs' "$gitignore" || echo '.muster/logs/' >> "$gitignore"
+    else
+      echo '.muster/logs/' > "$gitignore"
+    fi
+
+    # Stack label for display
+    local stack_display=""
+    case "$stack" in
+      k8s)     stack_display="Kubernetes" ;;
+      compose) stack_display="Docker Compose" ;;
+      docker)  stack_display="Docker" ;;
+      bare)    stack_display="Bare metal" ;;
+    esac
+
+    # ── Done screen ──
+    _SETUP_CUR_SUMMARY=(
+      ""
+      "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET}"
+      "  ${GREEN}*${RESET} Root:    ${project_path}"
+      "  ${GREEN}*${RESET} Stack:   ${stack_display}"
+      "  ${GREEN}*${RESET} Config:  ${config_path}"
+      ""
+      "  ${BOLD}Generated:${RESET}"
+      "    deploy.json"
+    )
+
+    for h in "${generated_hooks[@]}"; do
+      local hook_path="${muster_dir}/hooks/${h##*.muster/hooks/}"
+      local hook_files=""
+      for hf in "${hook_path}"*.sh; do
+        [[ -f "$hf" ]] && hook_files="${hook_files} $(basename "$hf")"
+      done
+      _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${h}  ${DIM}${hook_files}${RESET}"
+    done
+
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${ACCENT}Next steps:${RESET}"
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}1. Review hooks in .muster/hooks/ (look for TODO comments)${RESET}"
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press enter to exit${RESET}"
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+
+    _SETUP_CUR_PROMPT="false"
+    _setup_screen 7 "Setup complete"
+    read -rs
+
+  else
+    # ────── Fallback: manual question flow ──────
+    _setup_manual_flow
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════
+# Manual fallback (no files detected)
+# ══════════════════════════════════════════════════════════════
+_setup_manual_flow() {
+  info "No project files detected. Let's set things up manually."
+  echo ""
+  sleep 1
+
+  # ── Step 3: Stack questions ──
+  local has_db="no" db_type="" has_api="no" api_type=""
+  local has_workers="no" has_proxy="no" stack="bare"
+
+  _SETUP_CUR_SUMMARY=("")
+  _setup_screen 3 "Your stack"
   menu_select "Do you manage a database here?" "Yes" "No"
   if [[ "$MENU_RESULT" == "Yes" ]]; then
     has_db="yes"
-    _build_stack_summary
-    _setup_screen 2 "Your stack"
+    _SETUP_CUR_SUMMARY=("")
+    _setup_screen 3 "Your stack"
     menu_select "What kind of database?" "PostgreSQL" "MySQL" "Redis" "MongoDB" "SQLite" "Other"
     db_type="$MENU_RESULT"
   fi
 
-  _build_stack_summary
-  _setup_screen 2 "Your stack"
+  _SETUP_CUR_SUMMARY=("")
+  _setup_screen 3 "Your stack"
   menu_select "Do you have a web server or API?" "Yes" "No"
   if [[ "$MENU_RESULT" == "Yes" ]]; then
     has_api="yes"
-    _build_stack_summary
-    _setup_screen 2 "Your stack"
+    _SETUP_CUR_SUMMARY=("")
+    _setup_screen 3 "Your stack"
     menu_select "What runs it?" "Docker" "Node.js" "Go" "Python" "Rust" "Other"
     api_type="$MENU_RESULT"
   fi
 
-  _build_stack_summary
-  _setup_screen 2 "Your stack"
+  _SETUP_CUR_SUMMARY=("")
+  _setup_screen 3 "Your stack"
   menu_select "Any background workers or jobs?" "Yes" "No"
   [[ "$MENU_RESULT" == "Yes" ]] && has_workers="yes"
 
-  _build_stack_summary
-  _setup_screen 2 "Your stack"
+  _SETUP_CUR_SUMMARY=("")
+  _setup_screen 3 "Your stack"
   menu_select "Any reverse proxy (nginx, caddy, etc)?" "Yes" "No"
   [[ "$MENU_RESULT" == "Yes" ]] && has_proxy="yes"
 
-  _build_stack_summary
-  _setup_screen 2 "Your stack"
-  menu_select "Do you use containers?" "Docker Compose" "Kubernetes" "Docker (standalone)" "None"
-  container_type="$MENU_RESULT"
-
-  # ── Step 3: Scan project directory ──
   _SETUP_CUR_SUMMARY=("")
-  _setup_screen 3 "Scanning project"
-  echo ""
-  start_spinner "Scanning ${project_path}..."
-  sleep 1
+  _setup_screen 3 "Your stack"
+  menu_select "Do you use containers?" "Docker Compose" "Kubernetes" "Docker (standalone)" "None"
+  case "$MENU_RESULT" in
+    "Docker Compose")        stack="compose" ;;
+    Kubernetes)              stack="k8s" ;;
+    "Docker (standalone)")   stack="docker" ;;
+    None)                    stack="bare" ;;
+  esac
 
-  local detected_files=()
-  local detected_labels=()
-
-  [[ -f "${project_path}/Dockerfile" ]] && detected_files[${#detected_files[@]}]="Dockerfile" && detected_labels[${#detected_labels[@]}]="Dockerfile found"
-  [[ -f "${project_path}/docker-compose.yml" || -f "${project_path}/docker-compose.yaml" || -f "${project_path}/compose.yml" ]] && detected_files[${#detected_files[@]}]="docker-compose" && detected_labels[${#detected_labels[@]}]="Docker Compose config"
-  [[ -f "${project_path}/package.json" ]] && detected_files[${#detected_files[@]}]="package.json" && detected_labels[${#detected_labels[@]}]="Node.js project"
-  [[ -f "${project_path}/go.mod" ]] && detected_files[${#detected_files[@]}]="go.mod" && detected_labels[${#detected_labels[@]}]="Go module"
-  [[ -f "${project_path}/Cargo.toml" ]] && detected_files[${#detected_files[@]}]="Cargo.toml" && detected_labels[${#detected_labels[@]}]="Rust project"
-  [[ -f "${project_path}/requirements.txt" || -f "${project_path}/pyproject.toml" ]] && detected_files[${#detected_files[@]}]="python" && detected_labels[${#detected_labels[@]}]="Python project"
-  [[ -d "${project_path}/k8s" || -d "${project_path}/kubernetes" ]] && detected_files[${#detected_files[@]}]="k8s" && detected_labels[${#detected_labels[@]}]="Kubernetes manifests"
-  [[ -f "${project_path}/nginx.conf" ]] && detected_files[${#detected_files[@]}]="nginx" && detected_labels[${#detected_labels[@]}]="Nginx config"
-  [[ -f "${project_path}/redis.conf" ]] && detected_files[${#detected_files[@]}]="redis" && detected_labels[${#detected_labels[@]}]="Redis config"
-
-  stop_spinner
-
-  if [[ ${#detected_files[@]} -gt 0 ]]; then
-    info "Found in ${project_path}:"
-    for label in "${detected_labels[@]}"; do
-      echo -e "    ${GREEN}*${RESET} ${label}"
-    done
-  else
-    info "No known project files detected. That's fine."
-  fi
-
-  sleep 1
-
-  # ── Step 4: Service checklist ──
+  # ── Step 4: Build service list + select ──
   local service_list=()
-
-  [[ "$has_api" == "yes" ]] && service_list[${#service_list[@]}]="API Server (${api_type})"
-  [[ "$has_db" == "yes" ]] && service_list[${#service_list[@]}]="${db_type}"
-  [[ "$has_workers" == "yes" ]] && service_list[${#service_list[@]}]="Background Worker"
-  [[ "$has_proxy" == "yes" ]] && service_list[${#service_list[@]}]="Reverse Proxy"
+  [[ "$has_api" == "yes" ]] && service_list[${#service_list[@]}]="api"
+  [[ "$has_db" == "yes" ]] && service_list[${#service_list[@]}]="$(_svc_to_key "$db_type")"
+  [[ "$has_workers" == "yes" ]] && service_list[${#service_list[@]}]="worker"
+  [[ "$has_proxy" == "yes" ]] && service_list[${#service_list[@]}]="proxy"
 
   if [[ ${#service_list[@]} -eq 0 ]]; then
     warn "No services defined. Add at least one service."
-    exit 1
+    return 1
   fi
 
   _SETUP_CUR_SUMMARY=("")
@@ -300,7 +595,15 @@ cmd_setup() {
 
   if [[ ${#selected_services[@]} -eq 0 ]]; then
     warn "No services selected."
-    exit 1
+    return 1
+  fi
+
+  # Deploy order
+  if (( ${#selected_services[@]} > 1 )); then
+    _SETUP_CUR_SUMMARY=("")
+    _setup_screen 4 "Deploy order"
+    order_select "What order should services deploy?" "${selected_services[@]}"
+    selected_services=("${ORDER_RESULT[@]}")
   fi
 
   # ── Step 5: Per-service config ──
@@ -312,35 +615,34 @@ cmd_setup() {
   for svc in "${selected_services[@]}"; do
     svc_index=$((svc_index + 1))
     local key
-    key=$(echo "$svc" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//')
+    key=$(_svc_to_key "$svc")
 
     _SETUP_CUR_SUMMARY=("")
     _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
-
     menu_select "Health check type for ${svc}?" "HTTP" "TCP" "Command" "None"
     local health_choice="$MENU_RESULT"
 
     local health_json="{}"
     case "$health_choice" in
       HTTP)
-        printf "\n  ${ACCENT}>${RESET} Health endpoint: "
+        printf "\n  ${ACCENT}>${RESET} Health endpoint [/health]: "
         read -r endpoint
-        printf "  ${ACCENT}>${RESET} Port: "
+        printf "  ${ACCENT}>${RESET} Port [8080]: "
         read -r port_num
-        health_json="{\"type\":\"http\",\"endpoint\":\"${endpoint:-/health}\",\"port\":${port_num:-8080},\"timeout\":10}"
+        health_json="{\"type\":\"http\",\"endpoint\":\"${endpoint:-/health}\",\"port\":${port_num:-8080},\"timeout\":10,\"enabled\":true}"
         ;;
       TCP)
         printf "\n  ${ACCENT}>${RESET} Port: "
         read -r port_num
-        health_json="{\"type\":\"tcp\",\"port\":${port_num:-0},\"timeout\":5}"
+        health_json="{\"type\":\"tcp\",\"port\":${port_num:-0},\"timeout\":5,\"enabled\":true}"
         ;;
       Command)
         printf "\n  ${ACCENT}>${RESET} Health command: "
         read -r health_cmd
-        health_json="{\"type\":\"command\",\"command\":\"${health_cmd}\",\"timeout\":10}"
+        health_json="{\"type\":\"command\",\"command\":\"${health_cmd}\",\"timeout\":10,\"enabled\":true}"
         ;;
       None)
-        health_json="null"
+        health_json="{\"enabled\":false}"
         ;;
     esac
 
@@ -348,22 +650,20 @@ cmd_setup() {
     _SETUP_CUR_SUMMARY=(
       ""
       "  ${GREEN}*${RESET} Health: ${health_choice}"
-      ""
-      "  ${YELLOW}! HIGH RISK${RESET}: Store superuser credentials for ${svc}?"
-      "  ${DIM}Credentials stored in system keychain or encrypted vault.${RESET}"
-      "  ${DIM}NEVER in deploy.json or committed to git.${RESET}"
     )
     _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
-    menu_select "Store credentials?" "No, prompt each time (recommended)" "Yes, store securely"
+    menu_select "Credentials for ${svc}?" "None" "Save always (keychain)" "Once per session" "Every time"
     local cred_choice="$MENU_RESULT"
 
-    local cred_json='{"enabled":false}'
-    if [[ "$cred_choice" == "Yes, store securely" ]]; then
-      cred_json='{"enabled":true,"risk_level":"high"}'
-    fi
+    local cred_mode="off"
+    case "$cred_choice" in
+      "Save always (keychain)") cred_mode="save" ;;
+      "Once per session")       cred_mode="session" ;;
+      "Every time")             cred_mode="always" ;;
+    esac
 
     [[ "$first" == "true" ]] && first=false || services_json+=","
-    services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":${cred_json}}"
+    services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}}"
     deploy_order_json+="\"${key}\","
   done
 
@@ -378,14 +678,12 @@ cmd_setup() {
     "  ${ACCENT}>${RESET} Project name [${project_name}]: "
   )
   _SETUP_CUR_PROMPT="true"
-
   _setup_screen 6 "Project name"
   read -r custom_name
   _SETUP_CUR_PROMPT="false"
-
   project_name="${custom_name:-$project_name}"
 
-  # ── Step 7: Write config ──
+  # ── Step 7: Generate ──
   local config_path="${project_path}/deploy.json"
   local muster_dir="${project_path}/.muster"
 
@@ -394,25 +692,10 @@ cmd_setup() {
 
   for svc in "${selected_services[@]}"; do
     local key
-    key=$(echo "$svc" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//')
+    key=$(_svc_to_key "$svc")
     local hook_dir="${muster_dir}/hooks/${key}"
     mkdir -p "$hook_dir"
-
-    cat > "${hook_dir}/deploy.sh" << 'HOOK'
-#!/usr/bin/env bash
-# Deploy hook — add your deploy commands here
-echo "TODO: Add deploy commands"
-exit 0
-HOOK
-    chmod +x "${hook_dir}/deploy.sh"
-
-    cat > "${hook_dir}/health.sh" << 'HOOK'
-#!/usr/bin/env bash
-# Health check hook — exit 0 if healthy, exit 1 if not
-echo "TODO: Add health check"
-exit 0
-HOOK
-    chmod +x "${hook_dir}/health.sh"
+    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir"
   done
 
   if has_cmd jq; then
@@ -434,7 +717,6 @@ print(json.dumps(data, indent=2))
     echo '.muster/logs/' > "$gitignore"
   fi
 
-  # ── Done screen ──
   _SETUP_CUR_SUMMARY=(
     ""
     "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET}"
@@ -442,25 +724,15 @@ print(json.dumps(data, indent=2))
     "  ${GREEN}*${RESET} Config:  ${config_path}"
     "  ${GREEN}*${RESET} Hooks:   ${muster_dir}/hooks/"
     ""
-    "  ${BOLD}Services:${RESET}"
+    "  ${ACCENT}Next steps:${RESET}"
+    "  ${DIM}1. Review hooks in .muster/hooks/ (look for TODO comments)${RESET}"
+    "  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
+    ""
+    "  ${DIM}Press enter to exit${RESET}"
+    ""
   )
-
-  for svc in "${selected_services[@]}"; do
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${GREEN}*${RESET} ${svc}"
-  done
-
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${ACCENT}Next steps:${RESET}"
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}1. Edit hook scripts in .muster/hooks/${RESET}"
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press enter to exit${RESET}"
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
 
   _SETUP_CUR_PROMPT="false"
   _setup_screen 7 "Setup complete"
-
-  # Wait for Enter — read -rs (no -n) consumes buffered chars until newline,
-  # which avoids the bash 3.2 fractional-timeout issue with -t 0.1
   read -rs
 }
