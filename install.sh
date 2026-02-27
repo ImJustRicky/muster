@@ -19,8 +19,9 @@ else
   git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo"
 fi
 
-# Create bin symlinks
 mkdir -p "$BIN_DIR"
+
+# Link binaries
 chmod +x "${INSTALL_DIR}/repo/bin/muster" "${INSTALL_DIR}/repo/bin/muster-mcp"
 ln -sf "${INSTALL_DIR}/repo/bin/muster" "${BIN_DIR}/muster"
 ln -sf "${INSTALL_DIR}/repo/bin/muster-mcp" "${BIN_DIR}/muster-mcp"
@@ -31,8 +32,8 @@ if ! echo "$PATH" | tr ':' '\n' | grep -q "^${BIN_DIR}$"; then
   echo "  Add this to your shell profile:"
   echo ""
   echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-  echo ""
 fi
 
+echo ""
 echo "  Done! Run 'muster --version' to verify."
 echo ""
