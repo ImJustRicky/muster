@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# muster — Universal deploy framework
+# https://github.com/ImJustRicky/muster
+set -uo pipefail
+
+MUSTER_VERSION="0.1.0"
+MUSTER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ── Load core libraries ──
+source "$MUSTER_ROOT/lib/core/colors.sh"
+source "$MUSTER_ROOT/lib/core/logger.sh"
+source "$MUSTER_ROOT/lib/core/utils.sh"
+source "$MUSTER_ROOT/lib/core/config.sh"
+
+# ── Route commands ──
+case "${1:-}" in
+  setup)
+    source "$MUSTER_ROOT/lib/commands/setup.sh"
+    cmd_setup
+    ;;
+  deploy)
+    shift
+    source "$MUSTER_ROOT/lib/commands/deploy.sh"
+    cmd_deploy "$@"
+    ;;
+  status)
+    source "$MUSTER_ROOT/lib/commands/status.sh"
+    cmd_status
+    ;;
+  logs)
+    shift
+    source "$MUSTER_ROOT/lib/commands/logs.sh"
+    cmd_logs "$@"
+    ;;
+  rollback)
+    shift
+    source "$MUSTER_ROOT/lib/commands/rollback.sh"
+    cmd_rollback "$@"
+    ;;
+  cleanup)
+    source "$MUSTER_ROOT/lib/commands/cleanup.sh"
+    cmd_cleanup
+    ;;
+  skill)
+    shift
+    source "$MUSTER_ROOT/lib/skills/manager.sh"
+    cmd_skill "$@"
+    ;;
+  --version|-v)
+    echo "muster v${MUSTER_VERSION}"
+    ;;
+  --help|-h)
+    echo -e "${BOLD}muster${RESET} — Universal deploy framework"
+    echo ""
+    echo "Usage: muster [command]"
+    echo ""
+    echo "Commands:"
+    echo "  (none)      Open the dashboard"
+    echo "  setup       Guided setup wizard"
+    echo "  deploy      Deploy services"
+    echo "  status      Check service health"
+    echo "  logs        Stream service logs"
+    echo "  rollback    Revert last deploy"
+    echo "  cleanup     Clean up stuck processes"
+    echo "  skill       Manage addon skills"
+    echo ""
+    echo "Options:"
+    echo "  -v, --version   Show version"
+    echo "  -h, --help      Show this help"
+    ;;
+  "")
+    # Default: open dashboard
+    source "$MUSTER_ROOT/lib/tui/dashboard.sh"
+    cmd_dashboard
+    ;;
+  *)
+    err "Unknown command: $1"
+    echo "Run 'muster --help' for usage."
+    exit 1
+    ;;
+esac
