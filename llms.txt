@@ -23,7 +23,7 @@ Muster is a CLI tool (`bin/muster`) that gives any project a polished deploy exp
 
 ## Commands
 
-- [lib/commands/setup.sh](lib/commands/setup.sh): Scan-first setup wizard. Scans project, detects stack/services, user confirms and configures. Generates real hook scripts from stack templates (`templates/hooks/{k8s,compose,docker,bare}/`). Falls back to manual question flow if nothing detected.
+- [lib/commands/setup.sh](lib/commands/setup.sh): Setup wizard with two modes. **Interactive (no flags):** scan-first TUI wizard. **Non-interactive (flags):** `--scan`, `--services`, `--stack`, `--health`, `--creds`, `--order`, `--name`, `--path`. Generates real hook scripts from stack templates (`templates/hooks/{k8s,compose,docker,bare}/`). Falls back to manual question flow if nothing detected in interactive mode.
 - [lib/commands/deploy.sh](lib/commands/deploy.sh): Deploy orchestration. Iterates `deploy_order`, runs each service's `deploy.sh` hook inside `stream_in_box` (live log), then runs `health.sh`. On health failure: menu offers continue/rollback/abort. Injects credential env vars.
 - [lib/commands/status.sh](lib/commands/status.sh): Runs `health.sh` for each service (respects `health.enabled`), shows green/red dot per service.
 - [lib/commands/logs.sh](lib/commands/logs.sh): Runs `logs.sh` hook for a service, or falls back to `tail -f` on latest deploy log.

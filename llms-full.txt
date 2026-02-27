@@ -81,7 +81,7 @@ your-project/
 | Command | Description |
 |---------|-------------|
 | `muster` | Dashboard — live health/status view with action menu (loops) |
-| `muster setup` | Scan-first guided setup wizard |
+| `muster setup` | Interactive setup wizard, or non-interactive with flags (`--help`) |
 | `muster deploy` | Deploy all services (respects deploy order) |
 | `muster deploy <svc>` | Deploy a specific service |
 | `muster status` | Check health of all services |
@@ -139,7 +139,7 @@ Service keys (e.g. `api`, `redis`) map to hook directories at `.muster/hooks/<ke
 
 ## Entry Point: bin/muster
 
-Routes commands via `case` statement. Loads core libs at startup: colors.sh, logger.sh, utils.sh, config.sh, platform.sh. Each command sources its module on demand. Exit trap runs `cleanup_term` (restores cursor, resets ANSI, restores stty echo).
+Resolves symlinks at startup (installer symlinks `~/.local/bin/muster` → `~/.muster/repo/bin/muster`). Routes commands via `case` statement. Loads core libs at startup: colors.sh, logger.sh, utils.sh, config.sh, platform.sh. Each command sources its module on demand. Exit trap runs `cleanup_term` (restores cursor, resets ANSI, restores stty echo).
 
 Key globals set at startup:
 - `MUSTER_VERSION="0.1.0"`
@@ -284,7 +284,11 @@ Uses pipe-separated option strings for cycling. Saves changes to deploy.json via
 
 ## Setup Wizard (setup.sh)
 
-Scan-first 7-step interactive flow:
+Two modes: interactive TUI wizard or non-interactive flag-based.
+
+### Interactive (no flags)
+
+Scan-first 7-step TUI flow:
 
 1. **Project location** — path input with platform info display
 2. **Scan project** — runs `scanner.sh` on the project directory, displays detected files/services/stack
@@ -295,6 +299,26 @@ Scan-first 7-step interactive flow:
 7. **Generate** — copies stack-specific hook templates from `templates/hooks/{k8s,compose,docker,bare}/`, replaces `{{SERVICE_NAME}}`, `{{NAMESPACE}}`, `{{PORT}}`, `{{COMPOSE_FILE}}` placeholders, writes deploy.json, updates .gitignore, shows completion summary
 
 Falls back to manual conversational flow (database? API? workers? proxy? containers?) if scanner detects nothing.
+
+### Non-interactive (flags)
+
+Any flag triggers non-interactive mode — no TUI, plain text output only. Flags:
+
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--path <dir>` | `-p` | Project directory | `.` (cwd) |
+| `--scan` | | Auto-detect stack, services from project files | off |
+| `--stack <type>` | `-s` | Stack: `k8s`, `compose`, `docker`, `bare` | auto-detect if `--scan`, else `bare` |
+| `--services <list>` | | Comma-separated service names | from scan, or required |
+| `--order <list>` | | Comma-separated deploy order | same as `--services` order |
+| `--health <spec>` | | Per-service: `svc=type[:endpoint:port]` (repeatable) | `none` for all |
+| `--creds <spec>` | | Per-service: `svc=mode` (repeatable) | `off` for all |
+| `--name <name>` | `-n` | Project name | directory basename |
+| `--help` | `-h` | Show usage and examples | |
+
+Health spec format: `api=http:/health:8080`, `redis=tcp:6379`, `worker=command:./check.sh`, `api=none`. Credential modes: `off`, `save`, `session`, `always`.
+
+`--scan` can combine with explicit flags — explicit values override scan results. Without `--scan`, `--services` is required.
 
 Banner box: drawn with `printf '%b'` (not `echo -e`) to handle ANSI codes correctly. Progress bar in banner uses `#`/`-` chars. Phrase/tagline set once per session via `_SETUP_SESSION_PHRASE`. WINCH redraw only during `read` prompts (not during menus — `read -rsn1` not interrupted by SIGWINCH on bash 3.2).
 

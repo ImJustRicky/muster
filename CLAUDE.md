@@ -6,6 +6,9 @@
 
 ```bash
 muster setup       # interactive setup wizard (creates deploy.json + hooks)
+muster setup --scan                  # non-interactive: auto-detect everything
+muster setup --services api,redis    # non-interactive: explicit services
+muster setup --help                  # show all setup flags
 muster             # dashboard (live health + action menu)
 muster deploy      # deploy all services
 muster deploy api  # deploy one service
@@ -51,7 +54,11 @@ Service keys map to hook directories. Health types: `http`, `tcp`, `command`; di
 
 ## Setup Wizard
 
-Scan-first: detects project files (k8s manifests, docker-compose, Dockerfiles, language files), identifies stack and services automatically. User confirms/overrides stack, selects services, sets deploy order, configures health + credentials per service. Generates real working hooks from stack templates (`templates/hooks/{k8s,compose,docker,bare}/`). Falls back to manual question flow if nothing detected.
+**Interactive (no flags):** Scan-first TUI wizard. Detects project files, identifies stack and services. User confirms/overrides, sets deploy order, configures health + credentials per service. Falls back to manual questions if nothing detected.
+
+**Non-interactive (flags):** `muster setup --scan` or `muster setup --services api,redis --stack k8s`. Flags: `--path/-p`, `--scan`, `--stack/-s`, `--services`, `--order`, `--health` (repeatable, e.g. `api=http:/health:8080`), `--creds` (repeatable, e.g. `db=save`), `--name/-n`. See `muster setup --help`.
+
+Both modes generate real hooks from stack templates (`templates/hooks/{k8s,compose,docker,bare}/`).
 
 ## Bash 3.2 Rules
 
@@ -61,6 +68,7 @@ Scan-first: detects project files (k8s manifests, docker-compose, Dockerfiles, l
 - Use `#`/`-` for progress bars (not `█`/`░`)
 - `tput cuu1` + `tput ed` for redraws (no `tput sc/rc`)
 - SIGWINCH does not interrupt `read -rsn1` on macOS bash 3.2
+- Resolve symlinks in entry points (no `readlink -f` on macOS — use a while loop)
 
 ## Editing Guidelines
 

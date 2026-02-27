@@ -34,8 +34,17 @@ export PATH="$PATH:/path/to/muster/bin"
 
 ```bash
 cd your-project
-muster setup      # guided wizard — scans project, creates deploy.json + hook scripts
+muster setup       # guided wizard — scans project, creates deploy.json + hook scripts
 muster             # open the dashboard
+```
+
+Or skip the wizard entirely with flags:
+
+```bash
+muster setup --scan                                     # auto-detect everything
+muster setup --stack k8s --services api,redis,worker    # explicit
+muster setup --scan --health api=http:/health:3000      # scan + custom health
+muster setup --help                                     # see all flags
 ```
 
 ## Commands
@@ -43,7 +52,7 @@ muster             # open the dashboard
 | Command | Description |
 |---------|-------------|
 | `muster` | Dashboard — live health/status view with action menu |
-| `muster setup` | Guided setup wizard (scans project, generates hooks) |
+| `muster setup` | Guided setup wizard, or use flags for non-interactive (`--help`) |
 | `muster deploy` | Deploy all services (respects deploy order) |
 | `muster deploy api` | Deploy a specific service |
 | `muster status` | Check health of all services |

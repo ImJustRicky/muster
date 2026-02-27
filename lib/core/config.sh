@@ -11,11 +11,17 @@ load_config() {
   }
 }
 
+# Quote path segments containing hyphens for jq
+# .services.my-svc.name → .services["my-svc"].name
+_jq_quote() {
+  printf '%s' "$1" | sed -E 's/\.([a-zA-Z0-9_]*-[a-zA-Z0-9_-]*)/["\1"]/g'
+}
+
 # Read a value from deploy.json using jq or python fallback
 config_get() {
   local query="$1"
   if has_cmd jq; then
-    jq -r "$query" "$CONFIG_FILE"
+    jq -r "$(_jq_quote "$query")" "$CONFIG_FILE"
   elif has_cmd python3; then
     python3 -c "
 import json, sys
@@ -55,7 +61,8 @@ config_write() {
 
 # Set a value in deploy.json (requires jq)
 config_set() {
-  local path="$1" value="$2"
+  local path value="$2"
+  path=$(_jq_quote "$1")
   if has_cmd jq; then
     local tmp="${CONFIG_FILE}.tmp"
     jq "$path = $value" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
