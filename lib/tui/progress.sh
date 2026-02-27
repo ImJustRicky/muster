@@ -16,8 +16,8 @@ progress_bar() {
 
   local bar_filled=""
   local bar_empty=""
-  for ((i=0; i<filled; i++)); do bar_filled+="█"; done
-  for ((i=0; i<empty; i++)); do bar_empty+="░"; done
+  for ((i=0; i<filled; i++)); do bar_filled+="#"; done
+  for ((i=0; i<empty; i++)); do bar_empty+="-"; done
 
   local color="$RED"
   (( pct > 33 )) && color="$YELLOW"

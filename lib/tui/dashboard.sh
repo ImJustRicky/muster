@@ -19,14 +19,19 @@ cmd_dashboard() {
   local services
   services=$(config_services)
 
-  local w=$(( TERM_COLS - 6 ))
+  # Box width: total line = 2 (margin) + 1 (border) + w (inner) + 1 (border) = w + 4
+  local w=$(( TERM_COLS - 4 ))
   (( w > 50 )) && w=50
-  (( w < 30 )) && w=30
+  (( w < 10 )) && w=10
   local inner=$(( w - 2 ))
-  local border
-  border=$(printf '─%.0s' $(seq 1 "$w"))
 
-  echo -e "  ${ACCENT}┌─${BOLD}Services${RESET}${ACCENT}─$(printf '─%.0s' $(seq 1 $((w - 11))))┐${RESET}"
+  # Top border with "Services" label
+  local label="Services"
+  local label_pad_len=$(( w - ${#label} - 3 ))
+  (( label_pad_len < 1 )) && label_pad_len=1
+  local label_pad
+  label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
+  printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
@@ -54,12 +59,39 @@ cmd_dashboard() {
     fi
 
     local cred_warn=""
-    [[ "$cred_enabled" == "true" ]] && cred_warn=" ${YELLOW}! KEY${RESET}"
+    local cred_extra=0
+    if [[ "$cred_enabled" == "true" ]]; then
+      cred_warn="! KEY"
+      cred_extra=${#cred_warn}
+      cred_extra=$((cred_extra + 1))  # space before
+    fi
 
-    printf "  ${ACCENT}│${RESET}  ${status_color}${status_icon}${RESET} %-$((inner - 10))s${cred_warn} ${ACCENT}│${RESET}\n" "$name"
+    # Truncate name to fit: "  " + icon + " " + name + cred_warn + pad = inner
+    local max_name=$(( inner - 4 - cred_extra ))
+    (( max_name < 5 )) && max_name=5
+    local display_name="$name"
+    if (( ${#display_name} > max_name )); then
+      display_name="${display_name:0:$((max_name - 3))}..."
+    fi
+
+    local content_len=$(( 4 + ${#display_name} + cred_extra ))
+    local pad_len=$(( inner - content_len ))
+    (( pad_len < 0 )) && pad_len=0
+    local pad
+    pad=$(printf '%*s' "$pad_len" "")
+
+    if [[ -n "$cred_warn" ]]; then
+      printf '  %b│%b  %b%s%b %s%s %b%s%b%b│%b\n' \
+        "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" "$display_name" "$pad" "${YELLOW}" "$cred_warn" "${RESET}" "${ACCENT}" "${RESET}"
+    else
+      printf '  %b│%b  %b%s%b %s%s%b│%b\n' \
+        "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" "$display_name" "$pad" "${ACCENT}" "${RESET}"
+    fi
   done <<< "$services"
 
-  echo -e "  ${ACCENT}└${border}┘${RESET}"
+  local bottom
+  bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+  printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
   echo ""
 
   # Collect available actions

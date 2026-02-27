@@ -17,23 +17,27 @@ checklist_select() {
 
   tput civis
 
-  echo ""
-  echo -e "  ${BOLD}${title}${RESET}"
-  echo -e "  ${DIM}↑/↓ navigate  ␣ toggle  ⏎ confirm${RESET}"
-  echo ""
+  _cl_draw_header() {
+    echo ""
+    echo -e "  ${BOLD}${title}${RESET}"
+    echo -e "  ${DIM}↑/↓ navigate  ␣ toggle  ⏎ confirm${RESET}"
+    echo ""
+  }
 
-  local w=$(( TERM_COLS - 6 ))
-  (( w > 50 )) && w=50
-  (( w < 30 )) && w=30
-  local inner=$(( w - 2 ))
-  local border
-  border=$(printf '─%.0s' $(seq 1 "$w"))
+  _cl_calc_width() {
+    _cl_w=$(( TERM_COLS - 4 ))
+    (( _cl_w > 50 )) && _cl_w=50
+    (( _cl_w < 10 )) && _cl_w=10
+    _cl_inner=$(( _cl_w - 2 ))
+    _cl_border=$(printf '%*s' "$_cl_w" "" | sed 's/ /─/g')
+  }
 
-  # total drawn lines = top border + items + bottom border
+  _cl_calc_width
   local total_lines=$((count + 2))
 
   _cl_draw() {
-    echo -e "  ${ACCENT}┌${border}┐${RESET}"
+    _cl_calc_width
+    printf '  %b┌%s┐%b\n' "${ACCENT}" "$_cl_border" "${RESET}"
     local i=0
     while (( i < count )); do
       local mark="✓"
@@ -42,14 +46,37 @@ checklist_select() {
         mark=" "
         mcolor="${DIM}"
       fi
+
+      local label="${items[$i]}"
+      local prefix
       if (( i == selected )); then
-        printf "  ${ACCENT}│ > [${mcolor}${mark}${RESET}${ACCENT}]${RESET} %-$((inner - 9))s ${ACCENT}│${RESET}\n" "${items[$i]}"
+        prefix="> "
       else
-        printf "  ${ACCENT}│${RESET}   [${mcolor}${mark}${RESET}] %-$((inner - 9))s ${ACCENT}│${RESET}\n" "${items[$i]}"
+        prefix="  "
+      fi
+
+      local max_label=$(( _cl_inner - 6 ))
+      (( max_label < 3 )) && max_label=3
+      if (( ${#label} > max_label )); then
+        label="${label:0:$((max_label - 3))}..."
+      fi
+
+      local content_len=$(( 6 + ${#label} ))
+      local pad_len=$(( _cl_inner - content_len ))
+      (( pad_len < 0 )) && pad_len=0
+      local pad
+      pad=$(printf '%*s' "$pad_len" "")
+
+      if (( i == selected )); then
+        printf '  %b│%b %b%s[%b%s%b%b] %s%b%s%b│%b\n' \
+          "${ACCENT}" "${RESET}" "${ACCENT}" "$prefix" "$mcolor" "$mark" "${RESET}" "${ACCENT}" "$label" "${RESET}" "$pad" "${ACCENT}" "${RESET}"
+      else
+        printf '  %b│%b %s[%b%s%b] %s%s%b│%b\n' \
+          "${ACCENT}" "${RESET}" "$prefix" "$mcolor" "$mark" "${RESET}" "$label" "$pad" "${ACCENT}" "${RESET}"
       fi
       i=$((i + 1))
     done
-    echo -e "  ${ACCENT}└${border}┘${RESET}"
+    printf '  %b└%s┘%b\n' "${ACCENT}" "$_cl_border" "${RESET}"
   }
 
   _cl_clear() {
@@ -73,10 +100,19 @@ checklist_select() {
     REPLY="$key"
   }
 
+  _cl_draw_header
   _cl_draw
 
   while true; do
     _cl_read_key
+
+    # If screen was cleared by resize, redraw everything immediately
+    if [[ "$_MUSTER_INPUT_DIRTY" == "true" ]]; then
+      _MUSTER_INPUT_DIRTY="false"
+      _cl_draw_header
+      _cl_draw
+      continue
+    fi
 
     case "$REPLY" in
       $'\x1b[A')
@@ -93,7 +129,6 @@ checklist_select() {
         fi
         ;;
       '')
-        # Enter — collapse to summary
         _cl_clear
         i=0
         while (( i < count )); do

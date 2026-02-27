@@ -14,6 +14,9 @@ update_term_size
 # Global redraw callback — set this to a function name to auto-redraw on resize
 MUSTER_REDRAW_FN=""
 
+# Flag: set to "true" by WINCH redraw to tell menu/checklist to do a full redraw
+_MUSTER_INPUT_DIRTY="false"
+
 _on_resize() {
   update_term_size
   if [[ -n "$MUSTER_REDRAW_FN" ]]; then

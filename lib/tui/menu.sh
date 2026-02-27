@@ -13,9 +13,11 @@ menu_select() {
 
   tput civis
 
-  echo ""
-  echo -e "  ${BOLD}${title}${RESET}"
-  echo ""
+  _menu_draw_header() {
+    echo ""
+    echo -e "  ${BOLD}${title}${RESET}"
+    echo ""
+  }
 
   _menu_draw() {
     local i=0
@@ -50,10 +52,19 @@ menu_select() {
     REPLY="$key"
   }
 
+  _menu_draw_header
   _menu_draw
 
   while true; do
     _menu_read_key
+
+    # If screen was cleared by resize, redraw everything immediately
+    if [[ "$_MUSTER_INPUT_DIRTY" == "true" ]]; then
+      _MUSTER_INPUT_DIRTY="false"
+      _menu_draw_header
+      _menu_draw
+      continue
+    fi
 
     case "$REPLY" in
       $'\x1b[A')
@@ -71,7 +82,6 @@ menu_select() {
         return 0
         ;;
       *)
-        # Ignore other keys, no redraw
         continue
         ;;
     esac

@@ -36,29 +36,27 @@ _SETUP_CUR_STEP=1
 _SETUP_CUR_LABEL=""
 _SETUP_CUR_PHRASE=""
 _SETUP_CUR_SUMMARY=()
-_SETUP_CUR_PROMPT="false"  # if true, last summary line is a prompt (no trailing newline)
+_SETUP_CUR_PROMPT="false"    # if true, last summary line is a prompt (no trailing newline)
 
 # Called by WINCH trap to redraw on resize
+# Only redraws when at a read prompt (safe). During menus/checklists,
+# the next step transition will adapt to the new size.
 _setup_redraw() {
-  _setup_screen_inner
+  if [[ "$_SETUP_CUR_PROMPT" == "true" ]]; then
+    _setup_screen_inner
+  fi
 }
 
-# Number of lines the banner box occupies (blank + 8 box lines)
-_SETUP_BANNER_LINES=9
-
-# Build banner lines into an array (no output)
-_setup_build_banner() {
+# Draw the banner + label + summary (full screen, used on step transitions)
+_setup_screen_inner() {
+  clear
   update_term_size
 
-  local W=$(( TERM_COLS - 6 ))
+  # W = inner width between │ borders. Total line = 2 (margin) + 1 (│) + W + 1 (│) = W + 4
+  # Must fit within TERM_COLS to avoid wrapping
+  local W=$(( TERM_COLS - 4 ))
   (( W > 56 )) && W=56
-  (( W < 30 )) && W=30
-
-  local C="${ACCENT_BRIGHT}"
-  local B="${BOLD}"
-  local D="${DIM}"
-  local G="${GRAY}"
-  local R="${RESET}"
+  (( W < 10 )) && W=10
 
   # Progress bar
   local bar_w=$(( W - 4 ))
@@ -68,15 +66,11 @@ _setup_build_banner() {
   local bar_filled=""
   local bar_empty=""
   local i=0
-  while (( i < filled )); do bar_filled="${bar_filled}█"; i=$((i + 1)); done
+  while (( i < filled )); do bar_filled="${bar_filled}#"; i=$((i + 1)); done
   i=0
-  while (( i < empty_count )); do bar_empty="${bar_empty}░"; i=$((i + 1)); done
+  while (( i < empty_count )); do bar_empty="${bar_empty}-"; i=$((i + 1)); done
 
   local step_text="step ${_SETUP_CUR_STEP}/${SETUP_TOTAL_STEPS}"
-
-  # Build border
-  local hline=""
-  i=0; while (( i < W )); do hline="${hline}─"; i=$((i + 1)); done
 
   # Truncate phrase to fit box
   local max_phrase_len=$(( W - 2 ))
@@ -91,49 +85,40 @@ _setup_build_banner() {
     display_step="${display_step:0:$((max_phrase_len - 3))}..."
   fi
 
-  # Padding
-  local p_empty=$(printf '%*s' "$W" "")
+  # Build horizontal border using printf repeat
+  local hline
+  hline=$(printf '%*s' "$W" "" | sed 's/ /─/g')
+
+  # Build padding strings (plain spaces, no ANSI)
+  local p_empty
+  p_empty=$(printf '%*s' "$W" "")
+  local p_title
   local p_title_pad=$(( W - 13 ))
   (( p_title_pad < 0 )) && p_title_pad=0
-  local p_title=$(printf '%*s' "$p_title_pad" "")
+  p_title=$(printf '%*s' "$p_title_pad" "")
+  local p_phrase
   local p_phrase_pad=$(( W - ${#display_phrase} - 2 ))
   (( p_phrase_pad < 0 )) && p_phrase_pad=0
-  local p_phrase=$(printf '%*s' "$p_phrase_pad" "")
+  p_phrase=$(printf '%*s' "$p_phrase_pad" "")
+  local p_bar
+  local p_bar_pad=$(( W - bar_w - 4 ))
+  (( p_bar_pad < 0 )) && p_bar_pad=0
+  p_bar=$(printf '%*s' "$p_bar_pad" "")
+  local p_step
   local p_step_pad=$(( W - ${#display_step} - 2 ))
   (( p_step_pad < 0 )) && p_step_pad=0
-  local p_step=$(printf '%*s' "$p_step_pad" "")
+  p_step=$(printf '%*s' "$p_step_pad" "")
 
-  # Clear-to-end-of-line escape for overwriting old wider content
-  local clr
-  clr=$(tput el 2>/dev/null || printf '\033[K')
-
-  _SETUP_BANNER_BUF=(
-    "${clr}"
-    "  ${C}┌${hline}┐${R}${clr}"
-    "  ${C}│${R}${p_empty}${C}│${R}${clr}"
-    "  ${C}│${R}  ${B}${C}m u s t e r${R}${p_title}${C}│${R}${clr}"
-    "  ${C}│${R}  ${D}${display_phrase}${R}${p_phrase}${C}│${R}${clr}"
-    "  ${C}│${R}${p_empty}${C}│${R}${clr}"
-    "  ${C}│${R}  ${C}${bar_filled}${G}${bar_empty}${R}  ${C}│${R}${clr}"
-    "  ${C}│${R}  ${D}${display_step}${R}${p_step}${C}│${R}${clr}"
-    "  ${C}└${hline}┘${R}${clr}"
-  )
-  _SETUP_BANNER_LINES=${#_SETUP_BANNER_BUF[@]}
-}
-
-# Print the banner buffer
-_setup_print_banner() {
-  local line
-  for line in "${_SETUP_BANNER_BUF[@]}"; do
-    echo -e "$line"
-  done
-}
-
-# Draw the banner + label + summary (full screen, used on step transitions)
-_setup_screen_inner() {
-  clear
-  _setup_build_banner
-  _setup_print_banner
+  # Draw box using printf (no echo -e on mixed content)
+  echo ""
+  printf '  %b┌%s┐%b\n' "${ACCENT_BRIGHT}" "$hline" "${RESET}"
+  printf '  %b│%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "$p_empty" "${ACCENT_BRIGHT}" "${RESET}"
+  printf '  %b│%b  %b%bm u s t e r%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" "$p_title" "${ACCENT_BRIGHT}" "${RESET}"
+  printf '  %b│%b  %b%s%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${DIM}" "$display_phrase" "${RESET}" "$p_phrase" "${ACCENT_BRIGHT}" "${RESET}"
+  printf '  %b│%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "$p_empty" "${ACCENT_BRIGHT}" "${RESET}"
+  printf '  %b│%b  %b%s%b%s%b  %s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${ACCENT_BRIGHT}" "$bar_filled" "${GRAY}" "$bar_empty" "${RESET}" "$p_bar" "${ACCENT_BRIGHT}" "${RESET}"
+  printf '  %b│%b  %b%s%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${DIM}" "$display_step" "${RESET}" "$p_step" "${ACCENT_BRIGHT}" "${RESET}"
+  printf '  %b└%s┘%b\n' "${ACCENT_BRIGHT}" "$hline" "${RESET}"
 
   if [[ -n "$_SETUP_CUR_LABEL" ]]; then
     echo ""
@@ -155,10 +140,16 @@ _setup_screen_inner() {
 }
 
 # Public: set state and draw
+# Pick phrase once per session (on first call)
+_SETUP_SESSION_PHRASE=""
+
 _setup_screen() {
   _SETUP_CUR_STEP="${1:-1}"
   _SETUP_CUR_LABEL="${2:-}"
-  _SETUP_CUR_PHRASE=$(_setup_pick_phrase)
+  if [[ -z "$_SETUP_SESSION_PHRASE" ]]; then
+    _SETUP_SESSION_PHRASE=$(_setup_pick_phrase)
+  fi
+  _SETUP_CUR_PHRASE="$_SETUP_SESSION_PHRASE"
   MUSTER_REDRAW_FN="_setup_redraw"
   _setup_screen_inner
 }
@@ -199,9 +190,11 @@ cmd_setup() {
     "  ${ACCENT}>${RESET} "
   )
   _SETUP_CUR_PROMPT="true"
+
   _setup_screen 1 "Project location"
   read -r project_path
   _SETUP_CUR_PROMPT="false"
+
   project_path="${project_path:-..}"
 
   project_path="$(cd "$project_path" 2>/dev/null && pwd)" || {
@@ -385,17 +378,14 @@ cmd_setup() {
     "  ${ACCENT}>${RESET} Project name [${project_name}]: "
   )
   _SETUP_CUR_PROMPT="true"
+
   _setup_screen 6 "Project name"
   read -r custom_name
   _SETUP_CUR_PROMPT="false"
+
   project_name="${custom_name:-$project_name}"
 
   # ── Step 7: Write config ──
-  _SETUP_CUR_SUMMARY=("")
-  _setup_screen 7 "Writing config"
-  echo ""
-  start_spinner "Writing configuration..."
-
   local config_path="${project_path}/deploy.json"
   local muster_dir="${project_path}/.muster"
 
@@ -444,13 +434,33 @@ print(json.dumps(data, indent=2))
     echo '.muster/logs/' > "$gitignore"
   fi
 
-  stop_spinner
+  # ── Done screen ──
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET}"
+    "  ${GREEN}*${RESET} Root:    ${project_path}"
+    "  ${GREEN}*${RESET} Config:  ${config_path}"
+    "  ${GREEN}*${RESET} Hooks:   ${muster_dir}/hooks/"
+    ""
+    "  ${BOLD}Services:${RESET}"
+  )
 
-  ok "Created deploy.json"
-  ok "Created .muster/hooks/ with scaffold scripts"
-  ok "Added .muster/logs to .gitignore"
-  echo ""
-  info "Edit the hook scripts in .muster/hooks/ to add your deploy logic."
-  info "Run ${BOLD}muster${RESET} to open the dashboard."
-  echo ""
+  for svc in "${selected_services[@]}"; do
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${GREEN}*${RESET} ${svc}"
+  done
+
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${ACCENT}Next steps:${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}1. Edit hook scripts in .muster/hooks/${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press any key to exit${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+
+  _SETUP_CUR_PROMPT="false"
+  _setup_screen 7 "Setup complete"
+
+  # Flush any leftover input, then wait for a real keypress
+  while read -rsn1 -t 0.1 2>/dev/null; do :; done 2>/dev/null || true
+  read -rsn1
 }
