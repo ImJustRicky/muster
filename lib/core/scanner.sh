@@ -10,6 +10,7 @@ _SCAN_HEALTH=()      # "service|type|endpoint|port" entries from live k8s
 _SCAN_K8S_NAMES=()   # "stripped_name|original_deploy_name" entries
 _SCAN_K8S_NS=""      # resolved namespace
 _SCAN_K8S_PREFIX=""   # common deployment name prefix
+_SCAN_DEV_CMDS=()    # "service|start_cmd|default_port" entries for dev stack
 
 # Subdirectories to check in addition to project root
 _SCAN_SUBDIRS="docker deploy infra .github"
@@ -106,6 +107,7 @@ scan_project() {
   _SCAN_K8S_NAMES=()
   _SCAN_K8S_NS=""
   _SCAN_K8S_PREFIX=""
+  _SCAN_DEV_CMDS=()
 
   local has_k8s=false has_compose=false has_docker=false has_systemd=false
 
@@ -436,6 +438,7 @@ scan_print_results() {
       compose) stack_label="Docker Compose" ;;
       docker)  stack_label="Docker" ;;
       bare)    stack_label="Bare metal / Systemd" ;;
+      dev)     stack_label="Local dev" ;;
     esac
     printf '%b\n' "  Stack: ${ACCENT_BRIGHT}${stack_label}${RESET}"
   fi
@@ -810,4 +813,153 @@ scan_get_k8s_name() {
     i=$((i + 1))
   done
   echo "$svc"
+}
+
+# ══════════════════════════════════════════════════════════════
+# Dev stack: detect start commands for local development
+# ══════════════════════════════════════════════════════════════
+
+# Detect dev start commands from language/framework files
+# Populates _SCAN_DEV_CMDS with "service|start_cmd|default_port"
+# Usage: _scan_detect_dev_cmds "/path/to/project"
+_scan_detect_dev_cmds() {
+  local dir="$1"
+  _SCAN_DEV_CMDS=()
+
+  # Node.js
+  if [[ -f "${dir}/package.json" ]]; then
+    local dev_cmd="npm run dev" dev_port="3000"
+
+    # Check for dev script, fallback to start
+    local has_dev=""
+    has_dev=$(grep -c '"dev"' "${dir}/package.json" 2>/dev/null || echo "0")
+    if [[ "$has_dev" == "0" ]]; then
+      local has_start=""
+      has_start=$(grep -c '"start"' "${dir}/package.json" 2>/dev/null || echo "0")
+      if [[ "$has_start" != "0" ]]; then
+        dev_cmd="npm start"
+      fi
+    fi
+
+    # Detect port from scripts
+    local port_match=""
+    port_match=$(grep -oE '[-]-port[= ]+[0-9]+' "${dir}/package.json" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)
+    [[ -n "$port_match" ]] && dev_port="$port_match"
+
+    # Framework port defaults
+    if grep -q '"vite"' "${dir}/package.json" 2>/dev/null; then
+      [[ -z "$port_match" ]] && dev_port="5173"
+    fi
+    if grep -q '"next"' "${dir}/package.json" 2>/dev/null; then
+      [[ -z "$port_match" ]] && dev_port="3000"
+    fi
+
+    local svc_name
+    svc_name=$(basename "$dir")
+    _SCAN_DEV_CMDS[${#_SCAN_DEV_CMDS[@]}]="${svc_name}|${dev_cmd}|${dev_port}"
+  fi
+
+  # Go
+  if [[ -f "${dir}/go.mod" ]]; then
+    local dev_cmd="go run ." dev_port="8080"
+
+    # Check for cmd/*/main.go pattern
+    local cmd_main=""
+    cmd_main=$(ls "${dir}"/cmd/*/main.go 2>/dev/null | head -1 || true)
+    if [[ -n "$cmd_main" ]]; then
+      local cmd_dir
+      cmd_dir=$(dirname "$cmd_main")
+      cmd_dir="${cmd_dir#${dir}/}"
+      dev_cmd="go run ./${cmd_dir}"
+    fi
+
+    local svc_name
+    svc_name=$(basename "$dir")
+    _SCAN_DEV_CMDS[${#_SCAN_DEV_CMDS[@]}]="${svc_name}|${dev_cmd}|${dev_port}"
+  fi
+
+  # Python
+  if [[ -f "${dir}/requirements.txt" || -f "${dir}/pyproject.toml" ]]; then
+    local dev_cmd="" dev_port="8000"
+
+    if [[ -f "${dir}/manage.py" ]]; then
+      # Django
+      dev_cmd="python manage.py runserver 0.0.0.0:${dev_port}"
+    elif grep -q 'uvicorn' "${dir}/requirements.txt" 2>/dev/null || \
+         grep -q 'uvicorn' "${dir}/pyproject.toml" 2>/dev/null; then
+      # FastAPI / uvicorn
+      local app_module="main:app"
+      [[ -f "${dir}/app/main.py" ]] && app_module="app.main:app"
+      dev_cmd="uvicorn ${app_module} --reload --host 0.0.0.0 --port ${dev_port}"
+    elif grep -q 'flask' "${dir}/requirements.txt" 2>/dev/null || \
+         grep -q 'flask' "${dir}/pyproject.toml" 2>/dev/null; then
+      # Flask
+      dev_port="5000"
+      dev_cmd="flask run --host 0.0.0.0 --port ${dev_port} --reload"
+    else
+      dev_cmd="python -m http.server ${dev_port}"
+    fi
+
+    local svc_name
+    svc_name=$(basename "$dir")
+    _SCAN_DEV_CMDS[${#_SCAN_DEV_CMDS[@]}]="${svc_name}|${dev_cmd}|${dev_port}"
+  fi
+
+  # Rust
+  if [[ -f "${dir}/Cargo.toml" ]]; then
+    _SCAN_DEV_CMDS[${#_SCAN_DEV_CMDS[@]}]="$(basename "$dir")|cargo run|8080"
+  fi
+
+  # Ruby
+  if [[ -f "${dir}/Gemfile" ]]; then
+    local dev_cmd="bundle exec rails server -b 0.0.0.0" dev_port="3000"
+    if grep -q 'sinatra' "${dir}/Gemfile" 2>/dev/null; then
+      dev_cmd="bundle exec ruby app.rb"
+      dev_port="4567"
+    fi
+    _SCAN_DEV_CMDS[${#_SCAN_DEV_CMDS[@]}]="$(basename "$dir")|${dev_cmd}|${dev_port}"
+  fi
+
+  # Java
+  if [[ -f "${dir}/pom.xml" ]]; then
+    _SCAN_DEV_CMDS[${#_SCAN_DEV_CMDS[@]}]="$(basename "$dir")|mvn spring-boot:run|8080"
+  fi
+}
+
+# Look up dev start command for a service
+# Usage: scan_get_dev_cmd "api" → "npm run dev"
+scan_get_dev_cmd() {
+  local svc="$1"
+  local i=0
+  while (( i < ${#_SCAN_DEV_CMDS[@]} )); do
+    local entry="${_SCAN_DEV_CMDS[$i]}"
+    local d_svc="${entry%%|*}"
+    local rest="${entry#*|}"
+    local d_cmd="${rest%%|*}"
+    if [[ "$d_svc" == "$svc" ]]; then
+      echo "$d_cmd"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  echo ""
+}
+
+# Look up dev port for a service
+# Usage: scan_get_dev_port "api" → "3000"
+scan_get_dev_port() {
+  local svc="$1"
+  local i=0
+  while (( i < ${#_SCAN_DEV_CMDS[@]} )); do
+    local entry="${_SCAN_DEV_CMDS[$i]}"
+    local d_svc="${entry%%|*}"
+    local rest="${entry#*|}"
+    local d_port="${rest#*|}"
+    if [[ "$d_svc" == "$svc" ]]; then
+      echo "$d_port"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  echo ""
 }

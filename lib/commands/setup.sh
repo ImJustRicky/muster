@@ -240,6 +240,7 @@ _setup_copy_hooks() {
   local namespace="${8:-default}"
   local port="${9:-8080}"
   local k8s_deploy_name="${10:-${svc_name}}"
+  local start_cmd="${11:-}"
   local template_dir="${MUSTER_ROOT}/templates/hooks/${stack}"
 
   # Use infrastructure templates for known infra services (skip build steps)
@@ -269,6 +270,7 @@ _setup_copy_hooks() {
       -e "s|{{COMPOSE_FILE}}|${compose_path}|g" \
       -e "s|{{DOCKERFILE}}|${dockerfile_path}|g" \
       -e "s|{{K8S_DIR}}|${k8s_path}|g" \
+      -e "s|{{START_CMD}}|${start_cmd}|g" \
       "$f" > "${hook_dir}/${basename}"
     chmod +x "${hook_dir}/${basename}"
   done
@@ -368,6 +370,12 @@ _setup_noninteractive() {
     fi
   fi
 
+  # ── Dev stack: detect start commands ──
+  if [[ "${stack:-}" == "dev" ]]; then
+    _scan_detect_dev_cmds "$project_path"
+    mkdir -p "${project_path}/.muster/pids"
+  fi
+
   # ── Parse explicit services ──
   if [[ -n "$flag_services" ]]; then
     selected_services=()
@@ -388,9 +396,9 @@ _setup_noninteractive() {
 
   # Validate stack value
   case "$stack" in
-    k8s|compose|docker|bare) ;;
+    k8s|compose|docker|bare|dev) ;;
     *)
-      err "Invalid stack: $stack (must be k8s, compose, docker, or bare)"
+      err "Invalid stack: $stack (must be k8s, compose, docker, bare, or dev)"
       return 1
       ;;
   esac
@@ -695,11 +703,22 @@ _setup_noninteractive() {
     [[ -z "$_k8s_deploy_name" ]] && _k8s_deploy_name=$(scan_get_k8s_name "$key")
     [[ -z "$_k8s_deploy_name" || "$_k8s_deploy_name" == "$svc" ]] && _k8s_deploy_name="$svc"
 
+    # Resolve dev start command + port
+    local _start_cmd=""
+    if [[ "$stack" == "dev" ]]; then
+      _start_cmd=$(scan_get_dev_cmd "$svc")
+      [[ -z "$_start_cmd" ]] && _start_cmd=$(scan_get_dev_cmd "$key")
+      local _dev_port
+      _dev_port=$(scan_get_dev_port "$svc")
+      [[ -z "$_dev_port" ]] && _dev_port=$(scan_get_dev_port "$key")
+      [[ -n "$_dev_port" ]] && _svc_port="$_dev_port"
+    fi
+
     _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
       "${_detected_compose:-docker-compose.yml}" \
       "${_detected_dockerfile:-Dockerfile}" \
       "${_detected_k8s:-k8s/${svc}/}" \
-      "$_ns" "$_svc_port" "$_k8s_deploy_name"
+      "$_ns" "$_svc_port" "$_k8s_deploy_name" "$_start_cmd"
   done
 
   # Write deploy.json
@@ -719,8 +738,9 @@ print(json.dumps(data, indent=2))
   local gitignore="${project_path}/.gitignore"
   if [[ -f "$gitignore" ]]; then
     grep -q '.muster/logs' "$gitignore" || echo '.muster/logs/' >> "$gitignore"
+    grep -q '.muster/pids' "$gitignore" || echo '.muster/pids/' >> "$gitignore"
   else
-    echo '.muster/logs/' > "$gitignore"
+    printf '%s\n%s\n' '.muster/logs/' '.muster/pids/' > "$gitignore"
   fi
 
   # ── Print summary (plain text, no TUI) ──
@@ -730,6 +750,7 @@ print(json.dumps(data, indent=2))
     compose) stack_display="Docker Compose" ;;
     docker)  stack_display="Docker" ;;
     bare)    stack_display="Bare metal" ;;
+    dev)     stack_display="Local dev" ;;
   esac
 
   ok "Setup complete"
@@ -798,7 +819,7 @@ cmd_setup() {
         echo "Flags:"
         echo "  --path, -p <dir>      Project directory (default: .)"
         echo "  --scan                Auto-detect stack and services from project files"
-        echo "  --stack, -s <type>    Stack: k8s, compose, docker, bare"
+        echo "  --stack, -s <type>    Stack: k8s, compose, docker, bare, dev"
         echo "  --services <list>     Comma-separated service names"
         echo "  --order <list>        Comma-separated deploy order (default: services order)"
         echo "  --health <spec>       Per-service health: svc=type[:arg:arg] (repeatable)"
@@ -922,6 +943,7 @@ cmd_setup() {
         compose) stack_label="Docker Compose" ;;
         docker)  stack_label="Docker" ;;
         bare)    stack_label="Bare metal / Systemd" ;;
+        dev)     stack_label="Local dev" ;;
       esac
 
       _SETUP_CUR_SUMMARY=("")
@@ -931,24 +953,26 @@ cmd_setup() {
       if [[ "$MENU_RESULT" == "No, let me pick" ]]; then
         _SETUP_CUR_SUMMARY=("")
         _setup_screen 3 "Select stack"
-        menu_select "What deploys your services?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd"
+        menu_select "What deploys your services?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd" "Local dev"
         case "$MENU_RESULT" in
           Kubernetes)              stack="k8s" ;;
           "Docker Compose")        stack="compose" ;;
           "Docker (standalone)")   stack="docker" ;;
           "Bare metal / Systemd")  stack="bare" ;;
+          "Local dev")             stack="dev" ;;
         esac
       fi
     else
       # Stack not detected, ask
       _SETUP_CUR_SUMMARY=("")
       _setup_screen 3 "Select stack"
-      menu_select "How do you deploy?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd"
+      menu_select "How do you deploy?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd" "Local dev"
       case "$MENU_RESULT" in
         Kubernetes)              stack="k8s" ;;
         "Docker Compose")        stack="compose" ;;
         "Docker (standalone)")   stack="docker" ;;
         "Bare metal / Systemd")  stack="bare" ;;
+        "Local dev")             stack="dev" ;;
       esac
     fi
 
@@ -1085,6 +1109,12 @@ cmd_setup() {
 
     mkdir -p "${muster_dir}/hooks"
     mkdir -p "${muster_dir}/logs"
+    [[ "$stack" == "dev" ]] && mkdir -p "${muster_dir}/pids"
+
+    # Dev stack: detect start commands
+    if [[ "$stack" == "dev" ]]; then
+      _scan_detect_dev_cmds "$project_path"
+    fi
 
     # Copy template hooks for each service, using real detected paths
     local generated_hooks=()
@@ -1098,12 +1128,17 @@ cmd_setup() {
       mkdir -p "$hook_dir"
       _detected_dockerfile=$(scan_get_path "$svc" "dockerfile")
       _detected_k8s=$(scan_get_path "$svc" "k8s_dir")
+      local _start_cmd_i=""
+      if [[ "$stack" == "dev" ]]; then
+        _start_cmd_i=$(scan_get_dev_cmd "$svc")
+        [[ -z "$_start_cmd_i" ]] && _start_cmd_i=$(scan_get_dev_cmd "$key")
+      fi
       _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
         "${_detected_compose:-docker-compose.yml}" \
         "${_detected_dockerfile:-Dockerfile}" \
         "${_detected_k8s:-k8s/${svc}/}" \
         "default" "${_svc_ports[$_si]:-8080}" \
-        "$(scan_get_k8s_name "$svc")"
+        "$(scan_get_k8s_name "$svc")" "$_start_cmd_i"
       generated_hooks[${#generated_hooks[@]}]=".muster/hooks/${key}/"
       _si=$((_si + 1))
     done
@@ -1125,8 +1160,9 @@ print(json.dumps(data, indent=2))
     local gitignore="${project_path}/.gitignore"
     if [[ -f "$gitignore" ]]; then
       grep -q '.muster/logs' "$gitignore" || echo '.muster/logs/' >> "$gitignore"
+      grep -q '.muster/pids' "$gitignore" || echo '.muster/pids/' >> "$gitignore"
     else
-      echo '.muster/logs/' > "$gitignore"
+      printf '%s\n%s\n' '.muster/logs/' '.muster/pids/' > "$gitignore"
     fi
 
     # Stack label for display
@@ -1136,6 +1172,7 @@ print(json.dumps(data, indent=2))
       compose) stack_display="Docker Compose" ;;
       docker)  stack_display="Docker" ;;
       bare)    stack_display="Bare metal" ;;
+      dev)     stack_display="Local dev" ;;
     esac
 
     # ── Done screen ──
@@ -1223,11 +1260,12 @@ _setup_manual_flow() {
 
   _SETUP_CUR_SUMMARY=("")
   _setup_screen 3 "Your stack"
-  menu_select "Do you use containers?" "Docker Compose" "Kubernetes" "Docker (standalone)" "None"
+  menu_select "Do you use containers?" "Docker Compose" "Kubernetes" "Docker (standalone)" "Local dev" "None"
   case "$MENU_RESULT" in
     "Docker Compose")        stack="compose" ;;
     Kubernetes)              stack="k8s" ;;
     "Docker (standalone)")   stack="docker" ;;
+    "Local dev")             stack="dev" ;;
     None)                    stack="bare" ;;
   esac
 
@@ -1351,6 +1389,12 @@ _setup_manual_flow() {
 
   mkdir -p "${muster_dir}/hooks"
   mkdir -p "${muster_dir}/logs"
+  [[ "$stack" == "dev" ]] && mkdir -p "${muster_dir}/pids"
+
+  # Dev stack: detect start commands
+  if [[ "$stack" == "dev" ]]; then
+    _scan_detect_dev_cmds "$project_path"
+  fi
 
   local _si=0
   for svc in "${selected_services[@]}"; do
@@ -1358,10 +1402,15 @@ _setup_manual_flow() {
     key=$(_svc_to_key "$svc")
     local hook_dir="${muster_dir}/hooks/${key}"
     mkdir -p "$hook_dir"
+    local _start_cmd_m=""
+    if [[ "$stack" == "dev" ]]; then
+      _start_cmd_m=$(scan_get_dev_cmd "$svc")
+      [[ -z "$_start_cmd_m" ]] && _start_cmd_m=$(scan_get_dev_cmd "$key")
+    fi
     _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
       "docker-compose.yml" "Dockerfile" "k8s/${svc}/" \
       "default" "${_svc_ports[$_si]:-8080}" \
-      "$(scan_get_k8s_name "$svc")"
+      "$(scan_get_k8s_name "$svc")" "$_start_cmd_m"
     _si=$((_si + 1))
   done
 
@@ -1380,8 +1429,9 @@ print(json.dumps(data, indent=2))
   local gitignore="${project_path}/.gitignore"
   if [[ -f "$gitignore" ]]; then
     grep -q '.muster/logs' "$gitignore" || echo '.muster/logs/' >> "$gitignore"
+    grep -q '.muster/pids' "$gitignore" || echo '.muster/pids/' >> "$gitignore"
   else
-    echo '.muster/logs/' > "$gitignore"
+    printf '%s\n%s\n' '.muster/logs/' '.muster/pids/' > "$gitignore"
   fi
 
   _SETUP_CUR_SUMMARY=(
