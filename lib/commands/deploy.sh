@@ -8,6 +8,7 @@ source "$MUSTER_ROOT/lib/tui/streambox.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
+source "$MUSTER_ROOT/lib/commands/history.sh"
 
 cmd_deploy() {
   local dry_run=false
@@ -19,6 +20,7 @@ cmd_deploy() {
   done
 
   load_config
+  _load_env_file
 
   local target="${1:-all}"
   local project_dir
@@ -191,6 +193,7 @@ ${_k8s_env_lines}"
 
       if (( rc == 0 )); then
         ok "${name} deployed"
+        _history_log_event "$svc" "deploy" "ok"
         run_skill_hooks "post-deploy" "$svc"
 
         # Run health check
@@ -241,6 +244,7 @@ ${_k8s_env_lines}"
       else
         err "${name} deploy failed (exit code ${rc})"
         err "Log: ${log_file}"
+        _history_log_event "$svc" "deploy" "failed"
         return 1
       fi
 
@@ -257,4 +261,6 @@ ${_k8s_env_lines}"
     ok "Deploy complete"
   fi
   echo ""
+
+  _unload_env_file
 }

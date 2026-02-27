@@ -224,9 +224,12 @@ skill_run() {
     export MUSTER_CONFIG_FILE="$CONFIG_FILE"
   fi
 
+  _load_env_file
+
   "$run_script" "$@"
   local rc=$?
 
+  _unload_env_file
   unset MUSTER_PROJECT_DIR MUSTER_CONFIG_FILE 2>/dev/null
   return $rc
 }

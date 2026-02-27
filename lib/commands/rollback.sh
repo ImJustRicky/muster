@@ -6,9 +6,11 @@ source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
+source "$MUSTER_ROOT/lib/commands/history.sh"
 
 cmd_rollback() {
   load_config
+  _load_env_file
 
   local target="${1:-}"
   local project_dir
@@ -105,10 +107,14 @@ ${_k8s_env_lines}"
 
   if (( rc == 0 )); then
     ok "${name} rolled back successfully"
+    _history_log_event "$target" "rollback" "ok"
     run_skill_hooks "post-rollback" "$target"
   else
     err "${name} rollback failed (exit code ${rc})"
     err "Log: ${log_file}"
+    _history_log_event "$target" "rollback" "failed"
   fi
   echo ""
+
+  _unload_env_file
 }

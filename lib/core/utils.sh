@@ -69,6 +69,59 @@ has_cmd() {
   command -v "$1" &>/dev/null
 }
 
+# ── .env file loading ──
+
+# Tracks variable names loaded from .env for cleanup
+_MUSTER_ENV_VARS=()
+
+# Load a .env file, exporting KEY=VALUE pairs without overriding existing env vars.
+# Usage: _load_env_file [path]   (defaults to $(dirname "$CONFIG_FILE")/.env)
+_load_env_file() {
+  local env_file="${1:-}"
+  if [[ -z "$env_file" ]]; then
+    [[ -z "${CONFIG_FILE:-}" ]] && return 0
+    env_file="$(dirname "$CONFIG_FILE")/.env"
+  fi
+  [[ -f "$env_file" ]] || return 0
+
+  _MUSTER_ENV_VARS=()
+  local line key val
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip blank lines and comments
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+    # Strip inline comments only outside quotes, but keep it simple:
+    # Match KEY=VALUE (value may be quoted)
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*) ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="${BASH_REMATCH[2]}"
+
+      # Strip surrounding quotes
+      if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+        val="${BASH_REMATCH[1]}"
+      elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+        val="${BASH_REMATCH[1]}"
+      fi
+
+      # Do NOT override existing env vars
+      if [[ -z "${!key+set}" ]]; then
+        export "$key=$val"
+        _MUSTER_ENV_VARS[${#_MUSTER_ENV_VARS[@]}]="$key"
+      fi
+    fi
+  done < "$env_file"
+}
+
+# Unset all variables loaded by _load_env_file
+_unload_env_file() {
+  local k
+  for k in "${_MUSTER_ENV_VARS[@]}"; do
+    unset "$k"
+  done
+  _MUSTER_ENV_VARS=()
+}
+
 # Find the project deploy.json by walking up from cwd
 find_config() {
   local dir="$PWD"
