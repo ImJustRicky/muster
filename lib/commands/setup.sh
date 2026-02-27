@@ -217,9 +217,316 @@ HOOK
 }
 
 # ══════════════════════════════════════════════════════════════
+# Non-interactive setup via flags
+# ══════════════════════════════════════════════════════════════
+_setup_noninteractive() {
+  local flag_path="$1" flag_scan="$2" flag_stack="$3" flag_services="$4"
+  local flag_order="$5" flag_name="$6"
+  # flag_health and flag_creds are in global arrays _FLAG_HEALTH[] and _FLAG_CREDS[]
+
+  # ── Resolve project path ──
+  local project_path
+  project_path="$(cd "$flag_path" 2>/dev/null && pwd)" || {
+    err "Path does not exist: $flag_path"
+    return 1
+  }
+
+  local stack="$flag_stack"
+  local selected_services=()
+
+  # ── Scan if requested ──
+  if [[ "$flag_scan" == "true" ]]; then
+    scan_project "$project_path"
+
+    # Use scanned stack if not explicitly provided
+    if [[ -z "$stack" && -n "$_SCAN_STACK" ]]; then
+      stack="$_SCAN_STACK"
+    fi
+
+    # Use scanned services if not explicitly provided
+    if [[ -z "$flag_services" && ${#_SCAN_SERVICES[@]} -gt 0 ]]; then
+      selected_services=("${_SCAN_SERVICES[@]}")
+    fi
+  fi
+
+  # ── Parse explicit services ──
+  if [[ -n "$flag_services" ]]; then
+    selected_services=()
+    local IFS=','
+    for s in $flag_services; do
+      selected_services[${#selected_services[@]}]="$s"
+    done
+  fi
+
+  # Default stack
+  [[ -z "$stack" ]] && stack="bare"
+
+  # Validate
+  if [[ ${#selected_services[@]} -eq 0 ]]; then
+    err "No services specified. Use --services or --scan to detect them."
+    return 1
+  fi
+
+  # Validate stack value
+  case "$stack" in
+    k8s|compose|docker|bare) ;;
+    *)
+      err "Invalid stack: $stack (must be k8s, compose, docker, or bare)"
+      return 1
+      ;;
+  esac
+
+  # ── Deploy order ──
+  local ordered_services=()
+  if [[ -n "$flag_order" ]]; then
+    local IFS=','
+    for s in $flag_order; do
+      ordered_services[${#ordered_services[@]}]="$s"
+    done
+  else
+    ordered_services=("${selected_services[@]}")
+  fi
+
+  # ── Project name ──
+  local project_name="${flag_name:-$(basename "$project_path")}"
+
+  # ── Build health map from --health flags ──
+  # _FLAG_HEALTH[] contains "svc=type:arg:arg" entries
+  # Build parallel arrays for lookup
+  local _h_keys=()
+  local _h_vals=()
+  local hi=0
+  while (( hi < ${#_FLAG_HEALTH[@]} )); do
+    local spec="${_FLAG_HEALTH[$hi]}"
+    local h_svc="${spec%%=*}"
+    local h_rest="${spec#*=}"
+    _h_keys[${#_h_keys[@]}]="$h_svc"
+    _h_vals[${#_h_vals[@]}]="$h_rest"
+    hi=$((hi + 1))
+  done
+
+  # ── Build creds map from --creds flags ──
+  local _c_keys=()
+  local _c_vals=()
+  local ci=0
+  while (( ci < ${#_FLAG_CREDS[@]} )); do
+    local spec="${_FLAG_CREDS[$ci]}"
+    local c_svc="${spec%%=*}"
+    local c_rest="${spec#*=}"
+    _c_keys[${#_c_keys[@]}]="$c_svc"
+    _c_vals[${#_c_vals[@]}]="$c_rest"
+    ci=$((ci + 1))
+  done
+
+  # ── Build services JSON ──
+  local services_json="{"
+  local deploy_order_json="["
+  local first=true
+
+  for svc in "${ordered_services[@]}"; do
+    local key
+    key=$(_svc_to_key "$svc")
+
+    # Look up health for this service
+    local health_json="{\"enabled\":false}"
+    local li=0
+    while (( li < ${#_h_keys[@]} )); do
+      if [[ "${_h_keys[$li]}" == "$svc" || "${_h_keys[$li]}" == "$key" ]]; then
+        local h_spec="${_h_vals[$li]}"
+        local h_type="${h_spec%%:*}"
+        local h_args="${h_spec#*:}"
+
+        case "$h_type" in
+          http)
+            local h_endpoint="${h_args%%:*}"
+            local h_port="${h_args#*:}"
+            [[ -z "$h_endpoint" ]] && h_endpoint="/health"
+            [[ -z "$h_port" || "$h_port" == "$h_endpoint" ]] && h_port="8080"
+            health_json="{\"type\":\"http\",\"endpoint\":\"${h_endpoint}\",\"port\":${h_port},\"timeout\":10,\"enabled\":true}"
+            ;;
+          tcp)
+            local h_port="${h_args}"
+            [[ -z "$h_port" ]] && h_port="0"
+            health_json="{\"type\":\"tcp\",\"port\":${h_port},\"timeout\":5,\"enabled\":true}"
+            ;;
+          command)
+            local h_cmd="${h_args}"
+            health_json="{\"type\":\"command\",\"command\":\"${h_cmd}\",\"timeout\":10,\"enabled\":true}"
+            ;;
+          none)
+            health_json="{\"enabled\":false}"
+            ;;
+        esac
+        break
+      fi
+      li=$((li + 1))
+    done
+
+    # Look up creds for this service
+    local cred_mode="off"
+    li=0
+    while (( li < ${#_c_keys[@]} )); do
+      if [[ "${_c_keys[$li]}" == "$svc" || "${_c_keys[$li]}" == "$key" ]]; then
+        cred_mode="${_c_vals[$li]}"
+        break
+      fi
+      li=$((li + 1))
+    done
+
+    # Validate cred mode
+    case "$cred_mode" in
+      off|save|session|always) ;;
+      *) cred_mode="off" ;;
+    esac
+
+    [[ "$first" == "true" ]] && first=false || services_json+=","
+    services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}}"
+    deploy_order_json+="\"${key}\","
+  done
+
+  services_json+="}"
+  deploy_order_json="${deploy_order_json%,}]"
+
+  # ── Generate files ──
+  local config_path="${project_path}/deploy.json"
+  local muster_dir="${project_path}/.muster"
+
+  mkdir -p "${muster_dir}/hooks"
+  mkdir -p "${muster_dir}/logs"
+
+  for svc in "${ordered_services[@]}"; do
+    local key
+    key=$(_svc_to_key "$svc")
+    local hook_dir="${muster_dir}/hooks/${key}"
+    mkdir -p "$hook_dir"
+    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir"
+  done
+
+  # Write deploy.json
+  if has_cmd jq; then
+    echo "{\"project\":\"${project_name}\",\"version\":\"1\",\"root\":\"${project_path}\",\"services\":${services_json},\"deploy_order\":${deploy_order_json},\"skills\":[]}" | jq '.' > "$config_path"
+  elif has_cmd python3; then
+    python3 -c "
+import json, sys
+data = json.loads(sys.argv[1])
+print(json.dumps(data, indent=2))
+" "{\"project\":\"${project_name}\",\"version\":\"1\",\"root\":\"${project_path}\",\"services\":${services_json},\"deploy_order\":${deploy_order_json},\"skills\":[]}" > "$config_path"
+  else
+    echo "{\"project\":\"${project_name}\",\"version\":\"1\",\"root\":\"${project_path}\",\"services\":${services_json},\"deploy_order\":${deploy_order_json},\"skills\":[]}" > "$config_path"
+  fi
+
+  # .gitignore
+  local gitignore="${project_path}/.gitignore"
+  if [[ -f "$gitignore" ]]; then
+    grep -q '.muster/logs' "$gitignore" || echo '.muster/logs/' >> "$gitignore"
+  else
+    echo '.muster/logs/' > "$gitignore"
+  fi
+
+  # ── Print summary (plain text, no TUI) ──
+  local stack_display=""
+  case "$stack" in
+    k8s)     stack_display="Kubernetes" ;;
+    compose) stack_display="Docker Compose" ;;
+    docker)  stack_display="Docker" ;;
+    bare)    stack_display="Bare metal" ;;
+  esac
+
+  ok "Setup complete"
+  echo ""
+  echo "  Project:  ${project_name}"
+  echo "  Root:     ${project_path}"
+  echo "  Stack:    ${stack_display}"
+  echo "  Config:   ${config_path}"
+  echo ""
+  echo "  Services:"
+  for svc in "${ordered_services[@]}"; do
+    local key
+    key=$(_svc_to_key "$svc")
+    echo "    ${svc}  →  .muster/hooks/${key}/"
+  done
+  echo ""
+  echo "  Next: review hooks in .muster/hooks/ then run 'muster'"
+}
+
+# ══════════════════════════════════════════════════════════════
 # Main setup command
 # ══════════════════════════════════════════════════════════════
+_FLAG_HEALTH=()
+_FLAG_CREDS=()
+
 cmd_setup() {
+  # ── Parse flags ──
+  local flag_path="" flag_scan="false" flag_stack="" flag_services=""
+  local flag_order="" flag_name=""
+  _FLAG_HEALTH=()
+  _FLAG_CREDS=()
+  local has_flags=false
+
+  while [[ $# -gt 0 ]]; do
+    has_flags=true
+    case "$1" in
+      --path|-p)
+        flag_path="$2"; shift 2 ;;
+      --scan)
+        flag_scan="true"; shift ;;
+      --stack|-s)
+        flag_stack="$2"; shift 2 ;;
+      --services)
+        flag_services="$2"; shift 2 ;;
+      --order)
+        flag_order="$2"; shift 2 ;;
+      --health)
+        _FLAG_HEALTH[${#_FLAG_HEALTH[@]}]="$2"; shift 2 ;;
+      --creds)
+        _FLAG_CREDS[${#_FLAG_CREDS[@]}]="$2"; shift 2 ;;
+      --name|-n)
+        flag_name="$2"; shift 2 ;;
+      --help|-h)
+        echo "Usage: muster setup [flags]"
+        echo ""
+        echo "Without flags, runs the interactive setup wizard."
+        echo ""
+        echo "Flags:"
+        echo "  --path, -p <dir>      Project directory (default: .)"
+        echo "  --scan                Auto-detect stack and services from project files"
+        echo "  --stack, -s <type>    Stack: k8s, compose, docker, bare"
+        echo "  --services <list>     Comma-separated service names"
+        echo "  --order <list>        Comma-separated deploy order (default: services order)"
+        echo "  --health <spec>       Per-service health: svc=type[:arg:arg] (repeatable)"
+        echo "  --creds <spec>        Per-service credentials: svc=mode (repeatable)"
+        echo "  --name, -n <name>     Project name (default: directory basename)"
+        echo ""
+        echo "Health spec examples:"
+        echo "  --health api=http:/health:8080"
+        echo "  --health redis=tcp:6379"
+        echo "  --health worker=command:./check.sh"
+        echo "  --health api=none"
+        echo ""
+        echo "Credential modes: off, save, session, always"
+        echo ""
+        echo "Examples:"
+        echo "  muster setup --path /app --scan"
+        echo "  muster setup --stack k8s --services api,redis --name myapp"
+        echo "  muster setup --scan --health api=http:/health:3000 --name myapp"
+        return 0
+        ;;
+      *)
+        err "Unknown flag: $1"
+        echo "Run 'muster setup --help' for usage."
+        return 1
+        ;;
+    esac
+  done
+
+  # If flags were provided, run non-interactive
+  if [[ "$has_flags" == "true" ]]; then
+    [[ -z "$flag_path" ]] && flag_path="."
+    _setup_noninteractive "$flag_path" "$flag_scan" "$flag_stack" "$flag_services" "$flag_order" "$flag_name"
+    return $?
+  fi
+
+  # ── Interactive TUI wizard ──
 
   # ── Step 1: Project root ──
   local _plat_tools=""

@@ -30,7 +30,9 @@ scan_project() {
       local svc_name
       svc_name=$(basename "$sub")
       # Only count as service if it has a deployment or service yaml
-      if ls "${sub}"*.yaml "${sub}"*.yml 2>/dev/null | grep -qi 'deploy\|service' 2>/dev/null; then
+      local _svc_files
+      _svc_files=$(ls "${sub}"*.yaml "${sub}"*.yml 2>/dev/null || true)
+      if echo "$_svc_files" | grep -qiE 'deploy|service' 2>/dev/null; then
         _SCAN_SERVICES[${#_SCAN_SERVICES[@]}]="$svc_name"
         _SCAN_FILES[${#_SCAN_FILES[@]}]="$(basename "$k8s_dir")/${svc_name}/|Kubernetes service"
       fi
@@ -113,15 +115,15 @@ scan_project() {
 
   if [[ -n "$hint_files" ]]; then
     _scan_hint "$hint_files" "redis" "redis"
-    _scan_hint "$hint_files" "postgres\|postgresql" "postgres"
-    _scan_hint "$hint_files" "mysql\|mariadb" "mysql"
-    _scan_hint "$hint_files" "mongo\|mongodb" "mongo"
+    _scan_hint "$hint_files" "postgres|postgresql" "postgres"
+    _scan_hint "$hint_files" "mysql|mariadb" "mysql"
+    _scan_hint "$hint_files" "mongo|mongodb" "mongo"
     _scan_hint "$hint_files" "meilisearch" "meilisearch"
     _scan_hint "$hint_files" "minio" "minio"
     _scan_hint "$hint_files" "nginx" "nginx"
     _scan_hint "$hint_files" "rabbitmq" "rabbitmq"
     _scan_hint "$hint_files" "kafka" "kafka"
-    _scan_hint "$hint_files" "elasticsearch\|opensearch" "elasticsearch"
+    _scan_hint "$hint_files" "elasticsearch|opensearch" "elasticsearch"
   fi
 
   # ── Determine stack ──
@@ -150,7 +152,7 @@ _scan_hint() {
   done
 
   # Grep for pattern
-  if grep -qil "$pattern" $files 2>/dev/null; then
+  if grep -qilE "$pattern" $files 2>/dev/null; then
     _SCAN_SERVICES[${#_SCAN_SERVICES[@]}]="$name"
   fi
 }

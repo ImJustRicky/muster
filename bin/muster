@@ -4,7 +4,16 @@
 set -uo pipefail
 
 MUSTER_VERSION="0.1.0"
-MUSTER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Resolve symlinks (macOS bash 3.2 has no readlink -f)
+_muster_self="${BASH_SOURCE[0]}"
+while [[ -L "$_muster_self" ]]; do
+  _muster_dir="$(cd "$(dirname "$_muster_self")" && pwd)"
+  _muster_self="$(readlink "$_muster_self")"
+  [[ "$_muster_self" != /* ]] && _muster_self="${_muster_dir}/${_muster_self}"
+done
+MUSTER_ROOT="$(cd "$(dirname "$_muster_self")/.." && pwd)"
+unset _muster_self _muster_dir
 
 # ── Load core libraries ──
 source "$MUSTER_ROOT/lib/core/colors.sh"
@@ -16,8 +25,9 @@ source "$MUSTER_ROOT/lib/core/platform.sh"
 # ── Route commands ──
 case "${1:-}" in
   setup)
+    shift
     source "$MUSTER_ROOT/lib/commands/setup.sh"
-    cmd_setup
+    cmd_setup "$@"
     ;;
   deploy)
     shift
@@ -65,7 +75,7 @@ case "${1:-}" in
     echo ""
     echo "Commands:"
     echo "  (none)      Open the dashboard"
-    echo "  setup       Guided setup wizard"
+    echo "  setup       Guided setup wizard (or setup --help for flags)"
     echo "  deploy      Deploy services"
     echo "  status      Check service health"
     echo "  logs        Stream service logs"
