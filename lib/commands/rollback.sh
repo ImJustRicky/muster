@@ -3,6 +3,7 @@
 
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
+source "$MUSTER_ROOT/lib/core/credentials.sh"
 
 cmd_rollback() {
   load_config
@@ -24,7 +25,7 @@ cmd_rollback() {
 
     if [[ ${#rollback_services[@]} -eq 0 ]]; then
       err "No services have rollback hooks configured"
-      exit 1
+      return 1
     fi
 
     menu_select target "Rollback which service?" "${rollback_services[@]}"
@@ -34,7 +35,7 @@ cmd_rollback() {
 
   if [[ ! -x "$hook" ]]; then
     err "No rollback hook for ${target}"
-    exit 1
+    return 1
   fi
 
   local name
@@ -47,10 +48,28 @@ cmd_rollback() {
   mkdir -p "$log_dir"
   local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
+  # Gather credentials if configured
+  local _cred_env_lines=""
+  _cred_env_lines=$(cred_env_for_service "$target")
+  if [[ -n "$_cred_env_lines" ]]; then
+    while IFS='=' read -r _ck _cv; do
+      [[ -z "$_ck" ]] && continue
+      export "$_ck=$_cv"
+    done <<< "$_cred_env_lines"
+  fi
+
   start_spinner "Rolling back ${name}..."
   "$hook" >> "$log_file" 2>&1
   local rc=$?
   stop_spinner
+
+  # Clean up exported cred vars
+  if [[ -n "$_cred_env_lines" ]]; then
+    while IFS='=' read -r _ck _cv; do
+      [[ -z "$_ck" ]] && continue
+      unset "$_ck"
+    done <<< "$_cred_env_lines"
+  fi
 
   if (( rc == 0 )); then
     ok "${name} rolled back successfully"

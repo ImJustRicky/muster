@@ -4,7 +4,13 @@
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 
-cmd_dashboard() {
+_dashboard_pause() {
+  echo ""
+  echo -e "  ${DIM}Press any key to continue...${RESET}"
+  IFS= read -rsn1 || true
+}
+
+_dashboard_header() {
   load_config
 
   local project
@@ -19,7 +25,6 @@ cmd_dashboard() {
   local services
   services=$(config_services)
 
-  # Box width: total line = 2 (margin) + 1 (border) + w (inner) + 1 (border) = w + 4
   local w=$(( TERM_COLS - 4 ))
   (( w > 50 )) && w=50
   (( w < 10 )) && w=10
@@ -41,11 +46,16 @@ cmd_dashboard() {
     local cred_enabled
     cred_enabled=$(config_get ".services.${svc}.credentials.enabled")
 
-    # Run health check
     local hook_dir
     hook_dir="$(dirname "$CONFIG_FILE")/.muster/hooks/${svc}"
 
-    if [[ -x "${hook_dir}/health.sh" ]]; then
+    local health_enabled
+    health_enabled=$(config_get ".services.${svc}.health.enabled")
+
+    if [[ "$health_enabled" == "false" ]]; then
+      status_icon="○"
+      status_color="$GRAY"
+    elif [[ -x "${hook_dir}/health.sh" ]]; then
       if "${hook_dir}/health.sh" &>/dev/null; then
         status_icon="●"
         status_color="$GREEN"
@@ -63,10 +73,9 @@ cmd_dashboard() {
     if [[ "$cred_enabled" == "true" ]]; then
       cred_warn="! KEY"
       cred_extra=${#cred_warn}
-      cred_extra=$((cred_extra + 1))  # space before
+      cred_extra=$((cred_extra + 1))
     fi
 
-    # Truncate name to fit: "  " + icon + " " + name + cred_warn + pad = inner
     local max_name=$(( inner - 4 - cred_extra ))
     (( max_name < 5 )) && max_name=5
     local display_name="$name"
@@ -93,51 +102,71 @@ cmd_dashboard() {
   bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
   echo ""
+}
 
-  # Collect available actions
-  local actions=()
-  local project_dir
-  project_dir="$(dirname "$CONFIG_FILE")"
+cmd_dashboard() {
+  while true; do
+    _dashboard_header
 
-  actions[${#actions[@]}]="Deploy"
+    # Collect available actions
+    local actions=()
+    local project_dir
+    project_dir="$(dirname "$CONFIG_FILE")"
+    local services
+    services=$(config_services)
 
-  local has_rollback=false has_logs=false
-  while IFS= read -r svc; do
-    [[ -z "$svc" ]] && continue
-    local hook_dir="${project_dir}/.muster/hooks/${svc}"
-    [[ -x "${hook_dir}/rollback.sh" ]] && has_rollback=true
-    [[ -x "${hook_dir}/logs.sh" ]] && has_logs=true
-  done <<< "$services"
+    actions[${#actions[@]}]="Deploy"
 
-  actions[${#actions[@]}]="Status"
-  [[ "$has_logs" == "true" ]] && actions[${#actions[@]}]="Logs"
-  [[ "$has_rollback" == "true" ]] && actions[${#actions[@]}]="Rollback"
-  actions[${#actions[@]}]="Cleanup"
-  actions[${#actions[@]}]="Quit"
+    local has_rollback=false has_logs=false
+    while IFS= read -r svc; do
+      [[ -z "$svc" ]] && continue
+      local hook_dir="${project_dir}/.muster/hooks/${svc}"
+      [[ -x "${hook_dir}/rollback.sh" ]] && has_rollback=true
+      [[ -x "${hook_dir}/logs.sh" ]] && has_logs=true
+    done <<< "$services"
 
-  menu_select "Actions" "${actions[@]}"
+    actions[${#actions[@]}]="Status"
+    [[ "$has_logs" == "true" ]] && actions[${#actions[@]}]="Logs"
+    [[ "$has_rollback" == "true" ]] && actions[${#actions[@]}]="Rollback"
+    actions[${#actions[@]}]="Cleanup"
+    actions[${#actions[@]}]="Settings"
+    actions[${#actions[@]}]="Quit"
 
-  case "$MENU_RESULT" in
-    Deploy)
-      source "$MUSTER_ROOT/lib/commands/deploy.sh"
-      cmd_deploy
-      ;;
-    Status)
-      source "$MUSTER_ROOT/lib/commands/status.sh"
-      cmd_status
-      ;;
-    Logs)
-      source "$MUSTER_ROOT/lib/commands/logs.sh"
-      cmd_logs
-      ;;
-    Rollback)
-      source "$MUSTER_ROOT/lib/commands/rollback.sh"
-      cmd_rollback
-      ;;
-    Cleanup)
-      source "$MUSTER_ROOT/lib/commands/cleanup.sh"
-      cmd_cleanup
-      ;;
-    Quit) exit 0 ;;
-  esac
+    menu_select "Actions" "${actions[@]}"
+
+    case "$MENU_RESULT" in
+      Deploy)
+        source "$MUSTER_ROOT/lib/commands/deploy.sh"
+        cmd_deploy
+        _dashboard_pause
+        ;;
+      Status)
+        source "$MUSTER_ROOT/lib/commands/status.sh"
+        cmd_status
+        _dashboard_pause
+        ;;
+      Logs)
+        source "$MUSTER_ROOT/lib/commands/logs.sh"
+        cmd_logs
+        ;;
+      Rollback)
+        source "$MUSTER_ROOT/lib/commands/rollback.sh"
+        cmd_rollback
+        _dashboard_pause
+        ;;
+      Cleanup)
+        source "$MUSTER_ROOT/lib/commands/cleanup.sh"
+        cmd_cleanup
+        _dashboard_pause
+        ;;
+      Settings)
+        source "$MUSTER_ROOT/lib/commands/settings.sh"
+        cmd_settings
+        ;;
+      Quit)
+        echo ""
+        exit 0
+        ;;
+    esac
+  done
 }

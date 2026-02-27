@@ -35,6 +35,25 @@ cleanup_term() {
 }
 trap cleanup_term EXIT
 
+# Double Ctrl+C to quit — first press warns, second within 5s exits
+_SIGINT_LAST=0
+
+_on_sigint() {
+  local now
+  now=$(date +%s)
+  local diff=$(( now - _SIGINT_LAST ))
+  if (( diff <= 5 )); then
+    echo ""
+    cleanup_term
+    exit 0
+  fi
+  _SIGINT_LAST=$now
+  # Move to a new line, show warning
+  echo ""
+  printf '  \033[38;5;221m!\033[0m Press Ctrl+C again to quit\n'
+}
+trap '_on_sigint' INT
+
 # Check if a command exists
 has_cmd() {
   command -v "$1" &>/dev/null

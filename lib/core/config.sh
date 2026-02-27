@@ -52,3 +52,15 @@ config_write() {
   local target="$1"
   cat > "$target"
 }
+
+# Set a value in deploy.json (requires jq)
+config_set() {
+  local path="$1" value="$2"
+  if has_cmd jq; then
+    local tmp="${CONFIG_FILE}.tmp"
+    jq "$path = $value" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+  else
+    err "jq required to modify config"
+    return 1
+  fi
+}

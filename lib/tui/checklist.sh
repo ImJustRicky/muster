@@ -90,11 +90,11 @@ checklist_select() {
 
   _cl_read_key() {
     local key
-    IFS= read -rsn1 key
+    IFS= read -rsn1 key || true
     if [[ "$key" == $'\x1b' ]]; then
       local seq1 seq2
-      IFS= read -rsn1 -t 1 seq1
-      IFS= read -rsn1 -t 1 seq2
+      IFS= read -rsn1 -t 1 seq1 || true
+      IFS= read -rsn1 -t 1 seq2 || true
       key="${key}${seq1}${seq2}"
     fi
     REPLY="$key"

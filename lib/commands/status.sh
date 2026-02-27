@@ -25,7 +25,12 @@ cmd_status() {
 
     local hook="${project_dir}/.muster/hooks/${svc}/health.sh"
 
-    if [[ -x "$hook" ]]; then
+    local health_enabled
+    health_enabled=$(config_get ".services.${svc}.health.enabled")
+
+    if [[ "$health_enabled" == "false" ]]; then
+      echo -e "  ${GRAY}○${RESET} ${name} ${DIM}(disabled)${RESET}"
+    elif [[ -x "$hook" ]]; then
       start_spinner "Checking ${name}..."
       if "$hook" &>/dev/null; then
         stop_spinner

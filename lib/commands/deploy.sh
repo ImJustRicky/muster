@@ -5,6 +5,7 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/tui/progress.sh"
 source "$MUSTER_ROOT/lib/tui/streambox.sh"
+source "$MUSTER_ROOT/lib/core/credentials.sh"
 
 cmd_deploy() {
   load_config
@@ -50,6 +51,16 @@ cmd_deploy() {
       continue
     fi
 
+    # Gather credentials if configured
+    local _cred_env_lines=""
+    _cred_env_lines=$(cred_env_for_service "$svc")
+    if [[ -n "$_cred_env_lines" ]]; then
+      while IFS='=' read -r _ck _cv; do
+        [[ -z "$_ck" ]] && continue
+        export "$_ck=$_cv"
+      done <<< "$_cred_env_lines"
+    fi
+
     progress_bar "$current" "$total" "Deploying ${name}..."
     echo ""
 
@@ -57,12 +68,22 @@ cmd_deploy() {
     stream_in_box "$name" "$log_file" "$hook"
     local rc=$?
 
+    # Clean up exported cred vars
+    if [[ -n "$_cred_env_lines" ]]; then
+      while IFS='=' read -r _ck _cv; do
+        [[ -z "$_ck" ]] && continue
+        unset "$_ck"
+      done <<< "$_cred_env_lines"
+    fi
+
     if (( rc == 0 )); then
       ok "${name} deployed"
 
       # Run health check
       local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"
-      if [[ -x "$health_hook" ]]; then
+      local health_enabled
+      health_enabled=$(config_get ".services.${svc}.health.enabled")
+      if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
         start_spinner "Health check: ${name}"
         if "$health_hook" &>/dev/null; then
           stop_spinner
@@ -84,7 +105,7 @@ cmd_deploy() {
               ;;
             "Abort")
               err "Deploy aborted"
-              exit 1
+              return 1
               ;;
           esac
         fi
@@ -92,7 +113,7 @@ cmd_deploy() {
     else
       err "${name} deploy failed (exit code ${rc})"
       err "Log: ${log_file}"
-      exit 1
+      return 1
     fi
 
     echo ""
