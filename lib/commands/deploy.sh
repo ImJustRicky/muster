@@ -276,11 +276,34 @@ ${_k8s_env_lines}"
 
           k8s_diagnose_failure "$svc"
 
-          menu_select "Deploy failed. What do you want to do?" "Retry" "Rollback ${name}" "Skip and continue" "Abort"
+          # Build menu options (add "Rollback & restart" for k8s update deploys)
+          local _fail_opts=()
+          _fail_opts[0]="Retry"
+          if [[ "${MUSTER_DEPLOY_MODE:-}" == "update" && -n "${MUSTER_K8S_DEPLOYMENT:-}" ]]; then
+            _fail_opts[${#_fail_opts[@]}]="Rollback & restart"
+          fi
+          _fail_opts[${#_fail_opts[@]}]="Rollback ${name}"
+          _fail_opts[${#_fail_opts[@]}]="Skip and continue"
+          _fail_opts[${#_fail_opts[@]}]="Abort"
+
+          menu_select "Deploy failed. What do you want to do?" "${_fail_opts[@]}"
 
           case "$MENU_RESULT" in
             "Retry")
               ;; # loop continues
+            "Rollback & restart")
+              local _rb_ns="${MUSTER_K8S_NAMESPACE:-default}"
+              local _rb_dep="${MUSTER_K8S_DEPLOYMENT}"
+              start_spinner "Rolling back & restarting ${name}..."
+              _diag_run_kubectl "$svc" "kubectl rollout undo deployment/${_rb_dep} -n ${_rb_ns}" \
+                >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              _diag_run_kubectl "$svc" "kubectl rollout restart deployment/${_rb_dep} -n ${_rb_ns}" \
+                >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              stop_spinner
+              ok "${name} rolled back & restarted"
+              _history_log_event "$svc" "rollback" "ok"
+              break
+              ;;
             "Rollback ${name}")
               local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
               if [[ -x "$rb_hook" ]]; then

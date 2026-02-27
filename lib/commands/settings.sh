@@ -692,6 +692,36 @@ _settings_service_toggles() {
     *)       _TOG_STATES[${#_TOG_STATES[@]}]=0 ;;
   esac
 
+  # Deploy mode — Restart / Update image (k8s services only)
+  local _k8s_dep
+  _k8s_dep=$(config_get ".services.${svc}.k8s.deployment")
+  if [[ -n "$_k8s_dep" && "$_k8s_dep" != "null" ]]; then
+    local deploy_mode
+    deploy_mode=$(config_get ".services.${svc}.deploy_mode")
+    _tog_keys[${#_tog_keys[@]}]="deploy_mode"
+    _TOG_LABELS[${#_TOG_LABELS[@]}]="Deploy mode"
+    _TOG_OPTIONS[${#_TOG_OPTIONS[@]}]="Restart|Update image"
+    case "$deploy_mode" in
+      update) _TOG_STATES[${#_TOG_STATES[@]}]=1 ;;
+      *)      _TOG_STATES[${#_TOG_STATES[@]}]=0 ;;
+    esac
+
+    # Deploy timeout
+    local deploy_timeout
+    deploy_timeout=$(config_get ".services.${svc}.deploy_timeout")
+    [[ "$deploy_timeout" == "null" || -z "$deploy_timeout" ]] && deploy_timeout="120"
+    _tog_keys[${#_tog_keys[@]}]="deploy_timeout"
+    _TOG_LABELS[${#_TOG_LABELS[@]}]="Deploy timeout"
+    _TOG_OPTIONS[${#_TOG_OPTIONS[@]}]="120s|60s|180s|300s|600s"
+    case "$deploy_timeout" in
+      60)  _TOG_STATES[${#_TOG_STATES[@]}]=1 ;;
+      180) _TOG_STATES[${#_TOG_STATES[@]}]=2 ;;
+      300) _TOG_STATES[${#_TOG_STATES[@]}]=3 ;;
+      600) _TOG_STATES[${#_TOG_STATES[@]}]=4 ;;
+      *)   _TOG_STATES[${#_TOG_STATES[@]}]=0 ;;
+    esac
+  fi
+
   # Remote — ON/OFF toggle
   local remote_label="Remote: Off"
   if remote_is_enabled "$svc"; then
@@ -734,6 +764,23 @@ _settings_service_toggles() {
           2) config_set ".services.${svc}.credentials" '{"enabled":true,"mode":"session"}' ;;
           3) config_set ".services.${svc}.credentials" '{"enabled":true,"mode":"always"}' ;;
         esac
+        ;;
+      deploy_mode)
+        case $(( _TOG_STATES[i] )) in
+          1) config_set ".services.${svc}.deploy_mode" '"update"' ;;
+          *) config_set ".services.${svc}.deploy_mode" '"restart"' ;;
+        esac
+        ;;
+      deploy_timeout)
+        local _timeout_val
+        case $(( _TOG_STATES[i] )) in
+          1) _timeout_val=60 ;;
+          2) _timeout_val=180 ;;
+          3) _timeout_val=300 ;;
+          4) _timeout_val=600 ;;
+          *) _timeout_val=120 ;;
+        esac
+        config_set ".services.${svc}.deploy_timeout" "$_timeout_val"
         ;;
       remote)
         if (( _TOG_STATES[i] >= 1 )); then

@@ -171,4 +171,9 @@ k8s_env_for_service() {
   if [[ -n "$deploy_timeout" && "$deploy_timeout" != "null" ]]; then
     echo "MUSTER_DEPLOY_TIMEOUT=${deploy_timeout}"
   fi
+  local deploy_mode
+  deploy_mode=$(config_get ".services.${svc}.deploy_mode")
+  if [[ -n "$deploy_mode" && "$deploy_mode" != "null" ]]; then
+    echo "MUSTER_DEPLOY_MODE=${deploy_mode}"
+  fi
 }
