@@ -32,11 +32,10 @@ if ! echo "$PATH" | tr ':' '\n' | grep -q "^${BIN_DIR}$"; then
   _path_has_bin_dir=false
 fi
 
-echo ""
 if "${BIN_DIR}/muster" --version >/dev/null 2>&1; then
   _ver="$("${BIN_DIR}/muster" --version 2>/dev/null || true)"
   if [[ -n "$_ver" ]]; then
-    echo "  Done! muster ${_ver} installed."
+    echo "  Done! ${_ver} installed."
   else
     echo "  Done! muster installed."
   fi
