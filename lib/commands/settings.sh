@@ -412,6 +412,7 @@ _settings_muster_global() {
 _settings_muster_extras() {
   local cur_retention="$1" cur_timeout="$2" cur_excludes="$3"
 
+  clear
   echo ""
 
   # Log retention
