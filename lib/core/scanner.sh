@@ -10,6 +10,87 @@ _SCAN_PATHS=()       # "service|type|relative_path" entries for template generat
 # Subdirectories to check in addition to project root
 _SCAN_SUBDIRS="docker deploy infra .github"
 
+# Exclude patterns — external callers can set this before calling scan_project()
+# Space-separated list of directory/file prefixes to skip
+: "${_SCAN_EXCLUDES:=}"
+
+# Prepend global scanner_exclude patterns from ~/.muster/settings.json
+_scan_load_global_excludes() {
+  local global_excludes=""
+  if [[ -f "$HOME/.muster/settings.json" ]]; then
+    if command -v jq &>/dev/null; then
+      global_excludes=$(jq -r '.scanner_exclude // [] | .[]' "$HOME/.muster/settings.json" 2>/dev/null)
+    elif command -v python3 &>/dev/null; then
+      global_excludes=$(python3 -c "
+import json
+with open('$HOME/.muster/settings.json') as f:
+    for p in json.load(f).get('scanner_exclude', []):
+        print(p)
+" 2>/dev/null)
+    fi
+  fi
+  if [[ -n "$global_excludes" ]]; then
+    local _line
+    while IFS= read -r _line; do
+      [[ -z "$_line" ]] && continue
+      if [[ -n "$_SCAN_EXCLUDES" ]]; then
+        _SCAN_EXCLUDES="$_line $_SCAN_EXCLUDES"
+      else
+        _SCAN_EXCLUDES="$_line"
+      fi
+    done <<< "$global_excludes"
+  fi
+}
+_scan_load_global_excludes
+
+# Auto-exclude directory names (exact matches only)
+_SCAN_AUTO_EXCLUDES="archived deprecated old backup"
+
+# Check if a path should be excluded based on _SCAN_EXCLUDES, .musterignore, and auto-excludes
+# Usage: _scan_is_excluded "/abs/project/dir" "relative/path"
+_scan_is_excluded() {
+  local dir="$1" rel_path="$2"
+
+  # Check auto-excludes: skip directories whose basename is in the auto-exclude list
+  local _ae
+  for _ae in $_SCAN_AUTO_EXCLUDES; do
+    case "$rel_path" in
+      "${_ae}"|"${_ae}/"*) return 0 ;;
+      */"${_ae}"|*/"${_ae}/"*) return 0 ;;
+    esac
+  done
+
+  # Check _SCAN_EXCLUDES
+  local _ex
+  for _ex in $_SCAN_EXCLUDES; do
+    [[ -z "$_ex" ]] && continue
+    case "$rel_path" in
+      "${_ex}"|"${_ex}/"*) return 0 ;;
+      */"${_ex}"|*/"${_ex}/"*) return 0 ;;
+    esac
+  done
+
+  # Check .musterignore
+  if [[ -f "${dir}/.musterignore" ]]; then
+    local _line
+    while IFS= read -r _line; do
+      # Skip comments and empty lines
+      case "$_line" in
+        "#"*|"") continue ;;
+      esac
+      # Trim leading/trailing whitespace
+      _line=$(printf '%s' "$_line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [[ -z "$_line" ]] && continue
+      case "$rel_path" in
+        "${_line}"|"${_line}/"*) return 0 ;;
+        */"${_line}"|*/"${_line}/"*) return 0 ;;
+      esac
+    done < "${dir}/.musterignore"
+  fi
+
+  return 1
+}
+
 # Scan a project directory for deploy-relevant files and services
 scan_project() {
   local dir="$1"
@@ -32,6 +113,7 @@ scan_project() {
     # Check subdirectories for k8s manifests
     local _subdir
     for _subdir in $_SCAN_SUBDIRS; do
+      _scan_is_excluded "$dir" "$_subdir" && continue
       if [[ -d "${dir}/${_subdir}/k8s" ]]; then
         k8s_dir="${dir}/${_subdir}/k8s"
         break
@@ -52,6 +134,8 @@ scan_project() {
       [[ ! -d "$sub" ]] && continue
       local svc_name
       svc_name=$(basename "$sub")
+      # Skip excluded directories
+      _scan_is_excluded "$dir" "${k8s_rel}/${svc_name}" && continue
       # Only count as service if it has a deployment or service yaml
       local _svc_files
       _svc_files=$(ls "${sub}"*.yaml "${sub}"*.yml 2>/dev/null || true)
@@ -80,6 +164,7 @@ scan_project() {
     local _subdir
     for _subdir in $_SCAN_SUBDIRS; do
       [[ ! -d "${dir}/${_subdir}" ]] && continue
+      _scan_is_excluded "$dir" "$_subdir" && continue
       for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
         if [[ -f "${dir}/${_subdir}/${f}" ]]; then
           has_compose=true
@@ -151,6 +236,7 @@ scan_project() {
   local _subdir
   for _subdir in $_SCAN_SUBDIRS; do
     [[ ! -d "${dir}/${_subdir}" ]] && continue
+    _scan_is_excluded "$dir" "$_subdir" && continue
 
     # Plain Dockerfile in subdir
     if [[ -f "${dir}/${_subdir}/Dockerfile" ]]; then
@@ -181,6 +267,7 @@ scan_project() {
   done
   local _subdir
   for _subdir in $_SCAN_SUBDIRS; do
+    _scan_is_excluded "$dir" "$_subdir" && continue
     for f in "${dir}/${_subdir}"/*.service; do
       if [[ -f "$f" ]]; then
         has_systemd=true
@@ -209,6 +296,7 @@ scan_project() {
   done
   for _subdir in $_SCAN_SUBDIRS; do
     [[ ! -d "${dir}/${_subdir}" ]] && continue
+    _scan_is_excluded "$dir" "$_subdir" && continue
     for pattern in "*.json" "*.yml" "*.yaml" "*.env" "*.env.*"; do
       hint_files="${hint_files} $(ls ${dir}/${_subdir}/${pattern} 2>/dev/null || true)"
     done
@@ -308,8 +396,8 @@ _scan_hint() {
     i=$((i + 1))
   done
 
-  # Grep for pattern
-  if grep -qilE "$pattern" $files 2>/dev/null; then
+  # Grep for pattern (-w = whole word matching to avoid false positives)
+  if grep -qwilE "$pattern" $files 2>/dev/null; then
     _SCAN_SERVICES[${#_SCAN_SERVICES[@]}]="$name"
   fi
 }

@@ -65,6 +65,27 @@ skill_add() {
     # Local path
     local skill_name
     skill_name=$(basename "$source")
+    skill_name="${skill_name#muster-skill-}"  # strip common prefix
+
+    # Read name from skill.json if available
+    local source_dir="$source"
+    if [[ -f "${source_dir}/skill.json" ]]; then
+      local json_name=""
+      if has_cmd jq; then
+        json_name=$(jq -r '.name // ""' "${source_dir}/skill.json")
+      elif has_cmd python3; then
+        json_name=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name',''))" "${source_dir}/skill.json" 2>/dev/null)
+      fi
+      if [[ -n "$json_name" ]]; then
+        skill_name="$json_name"
+      fi
+    fi
+
+    if [[ -d "${SKILLS_DIR}/${skill_name}" ]]; then
+      warn "Skill '${skill_name}' already installed. Updating..."
+      rm -rf "${SKILLS_DIR}/${skill_name}"
+    fi
+
     cp -r "$source" "${SKILLS_DIR}/${skill_name}"
     ok "Skill '${skill_name}' installed from local path"
   fi

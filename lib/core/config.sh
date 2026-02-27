@@ -1,7 +1,88 @@
 #!/usr/bin/env bash
-# muster/lib/core/config.sh — Read and write deploy.json
+# muster/lib/core/config.sh — Read and write deploy.json + global settings
 
 CONFIG_FILE=""
+
+# ── Global settings (~/.muster/settings.json) ──
+
+GLOBAL_CONFIG_DIR="$HOME/.muster"
+GLOBAL_CONFIG_FILE="$HOME/.muster/settings.json"
+
+_GLOBAL_DEFAULTS='{
+  "color_mode": "auto",
+  "log_retention_days": 7,
+  "default_stack": "bare",
+  "default_health_timeout": 10,
+  "scanner_exclude": [],
+  "update_check": "on"
+}'
+
+# Ensure global config exists with defaults
+_ensure_global_config() {
+  if [[ ! -d "$GLOBAL_CONFIG_DIR" ]]; then
+    mkdir -p "$GLOBAL_CONFIG_DIR"
+  fi
+  if [[ ! -f "$GLOBAL_CONFIG_FILE" ]]; then
+    printf '%s\n' "$_GLOBAL_DEFAULTS" > "$GLOBAL_CONFIG_FILE"
+  fi
+}
+
+# Read a value from global settings
+# Usage: global_config_get "color_mode"
+global_config_get() {
+  local key="$1"
+  _ensure_global_config
+  if has_cmd jq; then
+    jq -r "$(_jq_quote ".$key")" "$GLOBAL_CONFIG_FILE"
+  elif has_cmd python3; then
+    python3 -c "
+import json
+with open('$GLOBAL_CONFIG_FILE') as f:
+    data = json.load(f)
+val = data.get('$key', '')
+if isinstance(val, list):
+    print(json.dumps(val))
+elif isinstance(val, str):
+    print(val)
+else:
+    print(val)
+"
+  else
+    err "jq or python3 required to read global config"
+    return 1
+  fi
+}
+
+# Set a value in global settings (requires jq)
+# Usage: global_config_set "color_mode" '"never"'   (string values need inner quotes)
+#        global_config_set "log_retention_days" '14'  (numbers are bare)
+global_config_set() {
+  local key="$1" value="$2"
+  _ensure_global_config
+  if has_cmd jq; then
+    local tmp="${GLOBAL_CONFIG_FILE}.tmp"
+    jq "$(_jq_quote ".$key") = $value" "$GLOBAL_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GLOBAL_CONFIG_FILE"
+  else
+    err "jq required to modify global config"
+    return 1
+  fi
+}
+
+# Get all global settings as JSON
+global_config_dump() {
+  _ensure_global_config
+  if has_cmd jq; then
+    jq '.' "$GLOBAL_CONFIG_FILE"
+  elif has_cmd python3; then
+    python3 -c "
+import json
+with open('$GLOBAL_CONFIG_FILE') as f:
+    print(json.dumps(json.load(f), indent=2))
+"
+  else
+    cat "$GLOBAL_CONFIG_FILE"
+  fi
+}
 
 # Load config from deploy.json
 load_config() {

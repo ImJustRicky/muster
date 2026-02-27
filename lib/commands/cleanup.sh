@@ -31,14 +31,20 @@ cmd_cleanup() {
     fi
   done <<< "$services"
 
-  # Clean old logs (older than 7 days)
+  # Clean old logs (use global log_retention_days, default 7)
+  local retention_days
+  retention_days=$(global_config_get "log_retention_days" 2>/dev/null)
+  case "$retention_days" in
+    ''|*[!0-9]*) retention_days=7 ;;
+  esac
+
   local log_dir="${project_dir}/.muster/logs"
   if [[ -d "$log_dir" ]]; then
     local old_logs
-    old_logs=$(find "$log_dir" -name "*.log" -mtime +7 2>/dev/null | wc -l | tr -d ' ')
+    old_logs=$(find "$log_dir" -name "*.log" -mtime +"$retention_days" 2>/dev/null | wc -l | tr -d ' ')
     if (( old_logs > 0 )); then
-      find "$log_dir" -name "*.log" -mtime +7 -delete 2>/dev/null
-      ok "Removed ${old_logs} old log files"
+      find "$log_dir" -name "*.log" -mtime +"$retention_days" -delete 2>/dev/null
+      ok "Removed ${old_logs} old log files (>${retention_days} days)"
       ran_any=true
     fi
   fi

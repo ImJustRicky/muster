@@ -201,9 +201,322 @@ _settings_open_config() {
   IFS= read -rsn1 || true
 }
 
+# ── Non-interactive global settings ──
+
+_settings_global_cli() {
+  local key="$1"
+  shift
+
+  # No key: dump all global settings
+  if [[ -z "$key" ]]; then
+    global_config_dump
+    return 0
+  fi
+
+  # Validate key
+  case "$key" in
+    color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check) ;;
+    *)
+      err "Unknown global setting: ${key}"
+      echo "  Valid keys: color_mode, log_retention_days, default_stack,"
+      echo "              default_health_timeout, scanner_exclude, update_check"
+      return 1
+      ;;
+  esac
+
+  # scanner_exclude has sub-commands: add/remove
+  if [[ "$key" == "scanner_exclude" ]]; then
+    local action="${1:-}"
+    shift 2>/dev/null || true
+    case "$action" in
+      add)
+        local patterns="$*"
+        if [[ -z "$patterns" ]]; then
+          err "Usage: muster settings --global scanner_exclude add <patterns>"
+          return 1
+        fi
+        # Split on comma and add each
+        local IFS=','
+        local p
+        for p in $patterns; do
+          # Trim whitespace
+          p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          [[ -z "$p" ]] && continue
+          local quoted
+          quoted=$(printf '%s' "$p" | sed 's/\\/\\\\/g;s/"/\\"/g')
+          global_config_set "scanner_exclude" "(.scanner_exclude + [\"${quoted}\"] | unique)"
+        done
+        ok "Updated scanner_exclude"
+        global_config_get "scanner_exclude"
+        return 0
+        ;;
+      remove)
+        local patterns="$*"
+        if [[ -z "$patterns" ]]; then
+          err "Usage: muster settings --global scanner_exclude remove <patterns>"
+          return 1
+        fi
+        local IFS=','
+        local p
+        for p in $patterns; do
+          p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          [[ -z "$p" ]] && continue
+          local quoted
+          quoted=$(printf '%s' "$p" | sed 's/\\/\\\\/g;s/"/\\"/g')
+          global_config_set "scanner_exclude" "([.scanner_exclude[] | select(. != \"${quoted}\")])"
+        done
+        ok "Updated scanner_exclude"
+        global_config_get "scanner_exclude"
+        return 0
+        ;;
+      *)
+        # Just print current value
+        global_config_get "scanner_exclude"
+        return 0
+        ;;
+    esac
+  fi
+
+  local value="${1:-}"
+
+  # No value: print current
+  if [[ -z "$value" ]]; then
+    global_config_get "$key"
+    return 0
+  fi
+
+  # Validate and set
+  case "$key" in
+    color_mode)
+      case "$value" in
+        auto|always|never) ;;
+        *) err "color_mode must be auto, always, or never"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
+      ;;
+    log_retention_days|default_health_timeout)
+      case "$value" in
+        *[!0-9]*) err "${key} must be a number"; return 1 ;;
+      esac
+      global_config_set "$key" "$value"
+      ;;
+    default_stack)
+      case "$value" in
+        bare|docker|compose|k8s) ;;
+        *) err "default_stack must be bare, docker, compose, or k8s"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
+      ;;
+    update_check)
+      case "$value" in
+        on|off) ;;
+        *) err "update_check must be on or off"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
+      ;;
+  esac
+
+  ok "${key} = ${value}"
+  return 0
+}
+
+# ── Interactive global settings ──
+
+_settings_muster_global() {
+  while true; do
+    local color_mode log_retention default_stack health_timeout update_check scanner_ex
+
+    color_mode=$(global_config_get "color_mode" 2>/dev/null)
+    : "${color_mode:=auto}"
+    log_retention=$(global_config_get "log_retention_days" 2>/dev/null)
+    : "${log_retention:=7}"
+    default_stack=$(global_config_get "default_stack" 2>/dev/null)
+    : "${default_stack:=bare}"
+    health_timeout=$(global_config_get "default_health_timeout" 2>/dev/null)
+    : "${health_timeout:=10}"
+    update_check=$(global_config_get "update_check" 2>/dev/null)
+    : "${update_check:=on}"
+    scanner_ex=$(global_config_get "scanner_exclude" 2>/dev/null)
+    if [[ "$scanner_ex" == "[]" || -z "$scanner_ex" ]]; then
+      scanner_ex="(none)"
+    fi
+
+    # Build toggle data
+    _TOG_LABELS=()
+    _TOG_OPTIONS=()
+    _TOG_STATES=()
+
+    # Color mode: auto / always / never
+    _TOG_LABELS[0]="Color mode"
+    _TOG_OPTIONS[0]="auto|always|never"
+    case "$color_mode" in
+      always) _TOG_STATES[0]=1 ;;
+      never)  _TOG_STATES[0]=2 ;;
+      *)      _TOG_STATES[0]=0 ;;
+    esac
+
+    # Update check: on / off
+    _TOG_LABELS[1]="Update check"
+    _TOG_OPTIONS[1]="on|off"
+    case "$update_check" in
+      off) _TOG_STATES[1]=1 ;;
+      *)   _TOG_STATES[1]=0 ;;
+    esac
+
+    # Default stack: bare / docker / compose / k8s
+    _TOG_LABELS[2]="Default stack"
+    _TOG_OPTIONS[2]="bare|docker|compose|k8s"
+    case "$default_stack" in
+      docker)  _TOG_STATES[2]=1 ;;
+      compose) _TOG_STATES[2]=2 ;;
+      k8s)     _TOG_STATES[2]=3 ;;
+      *)       _TOG_STATES[2]=0 ;;
+    esac
+
+    echo ""
+    _toggle_select "Muster Settings"
+
+    # Read back chosen values
+    local new_color new_update new_stack
+    case $(( _TOG_STATES[0] )) in
+      1) new_color="always" ;;
+      2) new_color="never" ;;
+      *) new_color="auto" ;;
+    esac
+    case $(( _TOG_STATES[1] )) in
+      1) new_update="off" ;;
+      *) new_update="on" ;;
+    esac
+    case $(( _TOG_STATES[2] )) in
+      1) new_stack="docker" ;;
+      2) new_stack="compose" ;;
+      3) new_stack="k8s" ;;
+      *) new_stack="bare" ;;
+    esac
+
+    # Save toggleable settings
+    global_config_set "color_mode" "\"$new_color\""
+    global_config_set "update_check" "\"$new_update\""
+    global_config_set "default_stack" "\"$new_stack\""
+
+    # Now prompt for numeric settings and scanner excludes
+    _settings_muster_extras "$log_retention" "$health_timeout" "$scanner_ex"
+
+    ok "Muster settings saved"
+    echo ""
+    return 0
+  done
+}
+
+_settings_muster_extras() {
+  local cur_retention="$1" cur_timeout="$2" cur_excludes="$3"
+
+  echo ""
+
+  # Log retention
+  printf '%b' "  ${BOLD}Log retention days${RESET} ${DIM}[${cur_retention}]:${RESET} "
+  local new_retention
+  IFS= read -r new_retention
+  new_retention=$(printf '%s' "$new_retention" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [[ -n "$new_retention" ]]; then
+    case "$new_retention" in
+      *[!0-9]*)
+        warn "Invalid number, keeping ${cur_retention}"
+        ;;
+      *)
+        global_config_set "log_retention_days" "$new_retention"
+        ;;
+    esac
+  fi
+
+  # Health timeout
+  printf '%b' "  ${BOLD}Default health timeout (s)${RESET} ${DIM}[${cur_timeout}]:${RESET} "
+  local new_timeout
+  IFS= read -r new_timeout
+  new_timeout=$(printf '%s' "$new_timeout" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [[ -n "$new_timeout" ]]; then
+    case "$new_timeout" in
+      *[!0-9]*)
+        warn "Invalid number, keeping ${cur_timeout}"
+        ;;
+      *)
+        global_config_set "default_health_timeout" "$new_timeout"
+        ;;
+    esac
+  fi
+
+  # Scanner excludes
+  echo ""
+  printf '%b\n' "  ${BOLD}Scanner excludes:${RESET} ${DIM}${cur_excludes}${RESET}"
+  printf '%b' "  ${DIM}Add patterns (comma-sep, empty to skip):${RESET} "
+  local add_patterns
+  IFS= read -r add_patterns
+  add_patterns=$(printf '%s' "$add_patterns" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [[ -n "$add_patterns" ]]; then
+    local IFS=','
+    local p
+    for p in $add_patterns; do
+      p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [[ -z "$p" ]] && continue
+      local quoted
+      quoted=$(printf '%s' "$p" | sed 's/\\/\\\\/g;s/"/\\"/g')
+      global_config_set "scanner_exclude" "(.scanner_exclude + [\"${quoted}\"] | unique)"
+    done
+  fi
+
+  printf '%b' "  ${DIM}Remove patterns (comma-sep, empty to skip):${RESET} "
+  local rm_patterns
+  IFS= read -r rm_patterns
+  rm_patterns=$(printf '%s' "$rm_patterns" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [[ -n "$rm_patterns" ]]; then
+    local IFS=','
+    local p
+    for p in $rm_patterns; do
+      p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [[ -z "$p" ]] && continue
+      local quoted
+      quoted=$(printf '%s' "$p" | sed 's/\\/\\\\/g;s/"/\\"/g')
+      global_config_set "scanner_exclude" "([.scanner_exclude[] | select(. != \"${quoted}\")])"
+    done
+  fi
+}
+
 cmd_settings() {
+  # Handle --global flag for non-interactive use
+  if [[ "${1:-}" == "--global" ]]; then
+    shift
+    _settings_global_cli "$@"
+    return $?
+  fi
+
   load_config
 
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+
+  while true; do
+    clear
+    echo ""
+    echo -e "  ${BOLD}${ACCENT_BRIGHT}Settings${RESET}"
+    echo ""
+
+    menu_select "Settings" "Project Settings" "Muster Settings" "Back"
+
+    case "$MENU_RESULT" in
+      "Project Settings")
+        _settings_project
+        ;;
+      "Muster Settings")
+        _settings_muster_global
+        ;;
+      Back)
+        return 0
+        ;;
+    esac
+  done
+}
+
+_settings_project() {
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
 
@@ -215,7 +528,7 @@ cmd_settings() {
 
     clear
     echo ""
-    echo -e "  ${BOLD}${ACCENT_BRIGHT}Settings${RESET}  ${WHITE}${project}${RESET}"
+    echo -e "  ${BOLD}${ACCENT_BRIGHT}Project Settings${RESET}  ${WHITE}${project}${RESET}"
     echo ""
 
     local w=$(( TERM_COLS - 4 ))
@@ -266,7 +579,7 @@ cmd_settings() {
     echo -e "  ${DIM}D=deploy H=health R=rollback L=logs C=cleanup${RESET}"
     echo ""
 
-    menu_select "Settings" "Services" "Open config" "Back"
+    menu_select "Project Settings" "Services" "Open config" "Back"
 
     case "$MENU_RESULT" in
       Services)

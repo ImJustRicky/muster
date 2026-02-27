@@ -20,6 +20,7 @@ unset _muster_self _muster_dir
 source "$MUSTER_ROOT/lib/core/utils.sh"
 source "$MUSTER_ROOT/lib/core/config.sh"
 source "$MUSTER_ROOT/lib/core/platform.sh"
+source "$MUSTER_ROOT/lib/core/scanner.sh"
 
 # ── Override EXIT trap — utils.sh writes ANSI to stdout which corrupts protocol ──
 trap 'true' EXIT
@@ -522,51 +523,71 @@ tool_scan_project() {
     return 1
   fi
 
-  local output="Project scan: ${dir}\n\n"
+  # Use shared scanner
+  scan_project "$dir"
 
-  # Check for common project files
-  [[ -f "${dir}/Dockerfile" ]] && output="${output}Found: Dockerfile\n"
-  [[ -f "${dir}/docker-compose.yml" ]] || [[ -f "${dir}/docker-compose.yaml" ]] && output="${output}Found: docker-compose.yml\n"
-  [[ -f "${dir}/package.json" ]] && output="${output}Found: package.json\n"
-  [[ -f "${dir}/go.mod" ]] && output="${output}Found: go.mod\n"
-  [[ -f "${dir}/Cargo.toml" ]] && output="${output}Found: Cargo.toml\n"
-  [[ -f "${dir}/requirements.txt" ]] || [[ -f "${dir}/Pipfile" ]] && output="${output}Found: Python project (requirements.txt or Pipfile)\n"
-  [[ -f "${dir}/Gemfile" ]] && output="${output}Found: Gemfile (Ruby)\n"
-  [[ -f "${dir}/pom.xml" ]] && output="${output}Found: pom.xml (Java/Maven)\n"
-  [[ -f "${dir}/build.gradle" ]] || [[ -f "${dir}/build.gradle.kts" ]] && output="${output}Found: Gradle build file\n"
-  [[ -f "${dir}/Makefile" ]] && output="${output}Found: Makefile\n"
-  [[ -f "${dir}/nginx.conf" ]] && output="${output}Found: nginx.conf\n"
-  [[ -f "${dir}/Procfile" ]] && output="${output}Found: Procfile\n"
-  [[ -f "${dir}/.env" ]] || [[ -f "${dir}/.env.example" ]] && output="${output}Found: .env file\n"
-  [[ -f "${dir}/deploy.json" ]] && output="${output}Found: deploy.json (muster already configured)\n"
-  [[ -d "${dir}/.muster" ]] && output="${output}Found: .muster/ directory (hooks already exist)\n"
+  # Build files JSON array
+  local files_json="["
+  local i=0
+  while (( i < ${#_SCAN_FILES[@]} )); do
+    local entry="${_SCAN_FILES[$i]}"
+    local file="${entry%%|*}"
+    local desc="${entry#*|}"
+    if (( i > 0 )); then
+      files_json="${files_json},"
+    fi
+    files_json="${files_json}{\"file\":$(json_str "$file"),\"description\":$(json_str "$desc")}"
+    i=$((i + 1))
+  done
+  files_json="${files_json}]"
 
-  # Check for common service indicators
-  output="${output}\nService hints:\n"
-  local found_hints=false
-  if grep -rql "redis\|Redis\|REDIS" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
-    output="${output}- Redis likely used\n"
-    found_hints=true
-  fi
-  if grep -rql "postgres\|postgresql\|POSTGRES" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
-    output="${output}- PostgreSQL likely used\n"
-    found_hints=true
-  fi
-  if grep -rql "mysql\|MySQL\|MYSQL" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
-    output="${output}- MySQL likely used\n"
-    found_hints=true
-  fi
-  if grep -rql "mongo\|MongoDB\|MONGO" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
-    output="${output}- MongoDB likely used\n"
-    found_hints=true
-  fi
-  if grep -rql "nginx\|NGINX" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.conf 2>/dev/null; then
-    output="${output}- Nginx likely used\n"
-    found_hints=true
-  fi
-  [[ "$found_hints" == "false" ]] && output="${output}- No specific services detected from config files\n"
+  # Build services JSON array
+  local services_json="["
+  i=0
+  while (( i < ${#_SCAN_SERVICES[@]} )); do
+    if (( i > 0 )); then
+      services_json="${services_json},"
+    fi
+    services_json="${services_json}$(json_str "${_SCAN_SERVICES[$i]}")"
+    i=$((i + 1))
+  done
+  services_json="${services_json}]"
 
-  printf '%b' "$output"
+  # Build paths JSON object: { "service": { "type": "path", ... }, ... }
+  local paths_json="{"
+  local first_path=true
+  i=0
+  while (( i < ${#_SCAN_PATHS[@]} )); do
+    local entry="${_SCAN_PATHS[$i]}"
+    local p_svc="${entry%%|*}"
+    local rest="${entry#*|}"
+    local p_type="${rest%%|*}"
+    local p_path="${rest#*|}"
+    if [[ "$first_path" == "true" ]]; then
+      first_path=false
+    else
+      paths_json="${paths_json},"
+    fi
+    paths_json="${paths_json}$(json_str "$p_svc"):{$(json_str "$p_type"):$(json_str "$p_path")}"
+    i=$((i + 1))
+  done
+  paths_json="${paths_json}}"
+
+  # Stack string
+  local stack_json
+  if [[ -n "$_SCAN_STACK" ]]; then
+    stack_json=$(json_str "$_SCAN_STACK")
+  else
+    stack_json="null"
+  fi
+
+  # Compose final JSON via jq for correctness (merges duplicate service keys in paths)
+  printf '%s\n' "{\"files\":${files_json},\"services\":${services_json},\"stack\":${stack_json},\"paths\":${paths_json}}" | jq -c '
+    # Merge paths: group entries by service key, combine type objects
+    .paths as $p |
+    .paths = (reduce ($p | to_entries[]) as $e ({}; .[$e.key] = ((.[$e.key] // {}) + $e.value))) |
+    .
+  '
 }
 
 tool_init_project() {

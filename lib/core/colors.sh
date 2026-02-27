@@ -21,3 +21,59 @@ MAGENTA='\033[38;5;176m'
 # Accent alias — used throughout the TUI
 ACCENT="$MUSTARD"
 ACCENT_BRIGHT="$MUSTARD_BRIGHT"
+
+# ── Apply color_mode from global settings ──
+# Read directly (config.sh may not be sourced yet, and we must avoid circular deps)
+_muster_color_mode=""
+if [[ -f "$HOME/.muster/settings.json" ]]; then
+  if command -v jq &>/dev/null; then
+    _muster_color_mode=$(jq -r '.color_mode // "auto"' "$HOME/.muster/settings.json" 2>/dev/null)
+  elif command -v python3 &>/dev/null; then
+    _muster_color_mode=$(python3 -c "
+import json
+with open('$HOME/.muster/settings.json') as f:
+    print(json.load(f).get('color_mode', 'auto'))
+" 2>/dev/null)
+  fi
+fi
+
+_muster_apply_color_mode() {
+  local mode="$1"
+  local want_color=true
+
+  case "$mode" in
+    never)
+      want_color=false
+      ;;
+    always)
+      want_color=true
+      ;;
+    *)
+      # auto: disable if not a TTY
+      if [[ ! -t 1 ]]; then
+        want_color=false
+      fi
+      ;;
+  esac
+
+  if [[ "$want_color" == "false" ]]; then
+    BOLD=""
+    DIM=""
+    RESET=""
+    MUSTARD=""
+    MUSTARD_BRIGHT=""
+    MUSTARD_DIM=""
+    GREEN=""
+    RED=""
+    YELLOW=""
+    GRAY=""
+    WHITE=""
+    BLUE=""
+    MAGENTA=""
+    ACCENT=""
+    ACCENT_BRIGHT=""
+  fi
+}
+
+_muster_apply_color_mode "${_muster_color_mode:-auto}"
+unset _muster_color_mode

@@ -5,6 +5,12 @@
 MENU_RESULT=""
 
 menu_select() {
+  if [[ ! -t 0 ]]; then
+    printf '%b\n' "${RED}Error: interactive terminal required${RESET}" >&2
+    printf '%b\n' "Use flag-based setup instead: muster setup --help" >&2
+    return 1
+  fi
+
   local title="$1"
   shift
   local options=("$@")

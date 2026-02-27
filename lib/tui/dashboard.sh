@@ -105,6 +105,12 @@ _dashboard_header() {
 }
 
 cmd_dashboard() {
+  if [[ ! -t 0 ]]; then
+    printf '%b\n' "${RED}Error: interactive terminal required${RESET}" >&2
+    printf '%b\n' "Use flag-based setup instead: muster setup --help" >&2
+    return 1
+  fi
+
   while true; do
     _dashboard_header
 
@@ -130,6 +136,30 @@ cmd_dashboard() {
     [[ "$has_rollback" == "true" ]] && actions[${#actions[@]}]="Rollback"
     actions[${#actions[@]}]="Cleanup"
     actions[${#actions[@]}]="Settings"
+
+    # Add installed skills
+    local _skills_dir="${HOME}/.muster/skills"
+    if [[ -d "$_skills_dir" ]]; then
+      for _skill_dir in "${_skills_dir}"/*/; do
+        [[ ! -d "$_skill_dir" ]] && continue
+        local _sname _sdisplay
+        _sname=$(basename "$_skill_dir")
+        _sdisplay="$_sname"
+        if [[ -f "${_skill_dir}/skill.json" ]]; then
+          local _jname=""
+          if has_cmd jq; then
+            _jname=$(jq -r '.name // ""' "${_skill_dir}/skill.json")
+          elif has_cmd python3; then
+            _jname=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name',''))" "${_skill_dir}/skill.json" 2>/dev/null)
+          fi
+          if [[ -n "$_jname" ]]; then
+            _sdisplay="$_jname"
+          fi
+        fi
+        actions[${#actions[@]}]="Skill: ${_sdisplay}"
+      done
+    fi
+
     actions[${#actions[@]}]="Quit"
 
     menu_select "Actions" "${actions[@]}"
@@ -162,6 +192,38 @@ cmd_dashboard() {
       Settings)
         source "$MUSTER_ROOT/lib/commands/settings.sh"
         cmd_settings
+        ;;
+      Skill:\ *)
+        local _selected_display="${MENU_RESULT#Skill: }"
+        local _run_name=""
+        local _si=0
+        for _skill_dir in "${_skills_dir}"/*/; do
+          [[ ! -d "$_skill_dir" ]] && continue
+          local _cname _cdisplay
+          _cname=$(basename "$_skill_dir")
+          _cdisplay="$_cname"
+          if [[ -f "${_skill_dir}/skill.json" ]]; then
+            local _cjname=""
+            if has_cmd jq; then
+              _cjname=$(jq -r '.name // ""' "${_skill_dir}/skill.json")
+            elif has_cmd python3; then
+              _cjname=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name',''))" "${_skill_dir}/skill.json" 2>/dev/null)
+            fi
+            if [[ -n "$_cjname" ]]; then
+              _cdisplay="$_cjname"
+            fi
+          fi
+          if [[ "$_cdisplay" == "$_selected_display" ]]; then
+            _run_name="$_cname"
+            break
+          fi
+          _si=$(( _si + 1 ))
+        done
+        if [[ -n "$_run_name" ]]; then
+          source "$MUSTER_ROOT/lib/skills/manager.sh"
+          skill_run "$_run_name"
+          _dashboard_pause
+        fi
         ;;
       Quit)
         echo ""
