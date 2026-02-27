@@ -37,14 +37,16 @@ _SETUP_CUR_LABEL=""
 _SETUP_CUR_PHRASE=""
 _SETUP_CUR_SUMMARY=()
 
-# Called by WINCH trap to redraw on resize
+# Called by WINCH trap to redraw on resize (in-place, preserves step content)
 _setup_redraw() {
-  _setup_screen_inner
+  _setup_redraw_banner
 }
 
-# Draw the banner + label + summary using global state
-_setup_screen_inner() {
-  clear
+# Number of lines the banner box occupies (blank + 8 box lines)
+_SETUP_BANNER_LINES=9
+
+# Build banner lines into an array (no output)
+_setup_build_banner() {
   update_term_size
 
   local W=$(( TERM_COLS - 6 ))
@@ -100,15 +102,37 @@ _setup_screen_inner() {
   (( p_step_pad < 0 )) && p_step_pad=0
   local p_step=$(printf '%*s' "$p_step_pad" "")
 
-  echo ""
-  echo -e "  ${C}┌${hline}┐${R}"
-  echo -e "  ${C}│${R}${p_empty}${C}│${R}"
-  echo -e "  ${C}│${R}  ${B}${C}m u s t e r${R}${p_title}${C}│${R}"
-  echo -e "  ${C}│${R}  ${D}${display_phrase}${R}${p_phrase}${C}│${R}"
-  echo -e "  ${C}│${R}${p_empty}${C}│${R}"
-  echo -e "  ${C}│${R}  ${C}${bar_filled}${G}${bar_empty}${R}  ${C}│${R}"
-  echo -e "  ${C}│${R}  ${D}${display_step}${R}${p_step}${C}│${R}"
-  echo -e "  ${C}└${hline}┘${R}"
+  # Clear-to-end-of-line escape for overwriting old wider content
+  local clr
+  clr=$(tput el 2>/dev/null || printf '\033[K')
+
+  _SETUP_BANNER_BUF=(
+    "${clr}"
+    "  ${C}┌${hline}┐${R}${clr}"
+    "  ${C}│${R}${p_empty}${C}│${R}${clr}"
+    "  ${C}│${R}  ${B}${C}m u s t e r${R}${p_title}${C}│${R}${clr}"
+    "  ${C}│${R}  ${D}${display_phrase}${R}${p_phrase}${C}│${R}${clr}"
+    "  ${C}│${R}${p_empty}${C}│${R}${clr}"
+    "  ${C}│${R}  ${C}${bar_filled}${G}${bar_empty}${R}  ${C}│${R}${clr}"
+    "  ${C}│${R}  ${D}${display_step}${R}${p_step}${C}│${R}${clr}"
+    "  ${C}└${hline}┘${R}${clr}"
+  )
+  _SETUP_BANNER_LINES=${#_SETUP_BANNER_BUF[@]}
+}
+
+# Print the banner buffer
+_setup_print_banner() {
+  local line
+  for line in "${_SETUP_BANNER_BUF[@]}"; do
+    echo -e "$line"
+  done
+}
+
+# Draw the banner + label + summary (full screen, used on step transitions)
+_setup_screen_inner() {
+  clear
+  _setup_build_banner
+  _setup_print_banner
 
   if [[ -n "$_SETUP_CUR_LABEL" ]]; then
     echo ""
@@ -120,6 +144,18 @@ _setup_screen_inner() {
   for s in "${_SETUP_CUR_SUMMARY[@]}"; do
     echo -e "$s"
   done
+}
+
+# Redraw ONLY the banner in-place (preserves content below)
+_setup_redraw_banner() {
+  _setup_build_banner
+
+  # Jump to top of screen, overwrite banner lines, then jump back down
+  # Use ANSI escapes directly (reliable on macOS Terminal + bash 3.2)
+  printf '\033[s'          # save cursor
+  printf '\033[H'          # move to top-left
+  _setup_print_banner
+  printf '\033[u'          # restore cursor
 }
 
 # Public: set state and draw
