@@ -9,7 +9,7 @@ start_spinner() {
   (
     i=0
     while true; do
-      printf "\r  ${CYAN}${frames[$i]}${RESET} ${DIM}%s${RESET}  " "$msg"
+      printf "\r  ${ACCENT}${frames[$i]}${RESET} ${DIM}%s${RESET}  " "$msg"
       i=$(( (i + 1) % ${#frames[@]} ))
       sleep 0.1
     done

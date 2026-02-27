@@ -10,7 +10,17 @@ update_term_size() {
   TERM_ROWS=$(tput lines 2>/dev/null || echo 24)
 }
 update_term_size
-trap 'update_term_size' WINCH
+
+# Global redraw callback — set this to a function name to auto-redraw on resize
+MUSTER_REDRAW_FN=""
+
+_on_resize() {
+  update_term_size
+  if [[ -n "$MUSTER_REDRAW_FN" ]]; then
+    $MUSTER_REDRAW_FN
+  fi
+}
+trap '_on_resize' WINCH
 
 # Cleanup terminal state on exit
 cleanup_term() {

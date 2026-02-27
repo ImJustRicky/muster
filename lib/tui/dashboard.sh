@@ -11,7 +11,9 @@ cmd_dashboard() {
   project=$(config_get '.project')
 
   clear
-  echo -e "\n  ${BOLD}${AMBER}muster${RESET} ${DIM}v${MUSTER_VERSION}${RESET}  ${WHITE}${project}${RESET}\n"
+  echo -e "\n  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}v${MUSTER_VERSION}${RESET}  ${WHITE}${project}${RESET}"
+  print_platform
+  echo ""
 
   # Health check all services
   local services
@@ -24,14 +26,13 @@ cmd_dashboard() {
   local border
   border=$(printf '─%.0s' $(seq 1 "$w"))
 
-  echo -e "  ${CYAN}┌─${BOLD}Services${RESET}${CYAN}─$(printf '─%.0s' $(seq 1 $((w - 11))))┐${RESET}"
+  echo -e "  ${ACCENT}┌─${BOLD}Services${RESET}${ACCENT}─$(printf '─%.0s' $(seq 1 $((w - 11))))┐${RESET}"
 
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
-    local name health_type status_icon status_color
+    local name status_icon status_color
 
     name=$(config_get ".services.${svc}.name")
-    health_type=$(config_get ".services.${svc}.health.type")
     local cred_enabled
     cred_enabled=$(config_get ".services.${svc}.credentials.enabled")
 
@@ -55,21 +56,19 @@ cmd_dashboard() {
     local cred_warn=""
     [[ "$cred_enabled" == "true" ]] && cred_warn=" ${YELLOW}! KEY${RESET}"
 
-    printf "  ${CYAN}│${RESET}  ${status_color}${status_icon}${RESET} %-$((inner - 10))s${cred_warn} ${CYAN}│${RESET}\n" "$name"
+    printf "  ${ACCENT}│${RESET}  ${status_color}${status_icon}${RESET} %-$((inner - 10))s${cred_warn} ${ACCENT}│${RESET}\n" "$name"
   done <<< "$services"
 
-  echo -e "  ${CYAN}└${border}┘${RESET}"
+  echo -e "  ${ACCENT}└${border}┘${RESET}"
   echo ""
 
   # Collect available actions
-  local -a actions=()
+  local actions=()
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
 
-  # Deploy is always available
-  actions+=("Deploy")
+  actions[${#actions[@]}]="Deploy"
 
-  # Only show operations that have at least one hook
   local has_rollback=false has_logs=false
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
@@ -78,16 +77,15 @@ cmd_dashboard() {
     [[ -x "${hook_dir}/logs.sh" ]] && has_logs=true
   done <<< "$services"
 
-  actions+=("Status")
-  [[ "$has_logs" == "true" ]] && actions+=("Logs")
-  [[ "$has_rollback" == "true" ]] && actions+=("Rollback")
-  actions+=("Cleanup")
-  actions+=("Quit")
+  actions[${#actions[@]}]="Status"
+  [[ "$has_logs" == "true" ]] && actions[${#actions[@]}]="Logs"
+  [[ "$has_rollback" == "true" ]] && actions[${#actions[@]}]="Rollback"
+  actions[${#actions[@]}]="Cleanup"
+  actions[${#actions[@]}]="Quit"
 
-  local choice
-  menu_select choice "Actions" "${actions[@]}"
+  menu_select "Actions" "${actions[@]}"
 
-  case "$choice" in
+  case "$MENU_RESULT" in
     Deploy)
       source "$MUSTER_ROOT/lib/commands/deploy.sh"
       cmd_deploy

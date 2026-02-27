@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # muster/lib/commands/deploy.sh — Deploy orchestration
 
+source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/tui/progress.sh"
 source "$MUSTER_ROOT/lib/tui/streambox.sh"
@@ -18,21 +19,21 @@ cmd_deploy() {
   project=$(config_get '.project')
 
   echo ""
-  echo -e "  ${BOLD}${AMBER}Deploying${RESET} ${WHITE}${project}${RESET}"
+  echo -e "  ${BOLD}${ACCENT_BRIGHT}Deploying${RESET} ${WHITE}${project}${RESET}"
   echo ""
 
   # Get deploy order
-  local -a services=()
+  local services=()
   if [[ "$target" == "all" ]]; then
     while IFS= read -r svc; do
       [[ -z "$svc" ]] && continue
       local skip
       skip=$(config_get ".services.${svc}.skip_deploy")
       [[ "$skip" == "true" ]] && continue
-      services+=("$svc")
+      services[${#services[@]}]="$svc"
     done < <(config_get '.deploy_order[]' 2>/dev/null || config_services)
   else
-    services+=("$target")
+    services[0]="$target"
   fi
 
   local total=${#services[@]}
@@ -70,8 +71,8 @@ cmd_deploy() {
           stop_spinner
           err "${name} health check failed"
           echo ""
-          menu_select choice "Health check failed. What do you want to do?" "Continue anyway" "Rollback ${name}" "Abort"
-          case "$choice" in
+          menu_select "Health check failed. What do you want to do?" "Continue anyway" "Rollback ${name}" "Abort"
+          case "$MENU_RESULT" in
             "Rollback ${name}")
               local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
               if [[ -x "$rb_hook" ]]; then

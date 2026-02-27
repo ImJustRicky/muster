@@ -11,6 +11,7 @@ source "$MUSTER_ROOT/lib/core/colors.sh"
 source "$MUSTER_ROOT/lib/core/logger.sh"
 source "$MUSTER_ROOT/lib/core/utils.sh"
 source "$MUSTER_ROOT/lib/core/config.sh"
+source "$MUSTER_ROOT/lib/core/platform.sh"
 
 # ── Route commands ──
 case "${1:-}" in

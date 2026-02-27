@@ -111,7 +111,7 @@ skill_list() {
       fi
     fi
 
-    echo -e "  ${CYAN}*${RESET} ${BOLD}${name}${RESET}  ${DIM}${desc}${RESET}"
+    echo -e "  ${ACCENT}*${RESET} ${BOLD}${name}${RESET}  ${DIM}${desc}${RESET}"
   done
   echo ""
 }

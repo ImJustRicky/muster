@@ -26,11 +26,11 @@ stream_in_box() {
   local pad
   pad=$(printf '─%.0s' $(seq 1 "$pad_len"))
 
-  echo -e "  ${CYAN}┌─${BOLD}${tcut}${RESET}${CYAN}─${pad}┐${RESET}"
+  echo -e "  ${ACCENT}┌─${BOLD}${tcut}${RESET}${ACCENT}─${pad}┐${RESET}"
   for ((r=0; r<box_lines; r++)); do
-    printf "  ${CYAN}│${RESET} %-$((inner - 1))s ${CYAN}│${RESET}\n" ""
+    printf "  ${ACCENT}│${RESET} %-$((inner - 1))s ${ACCENT}│${RESET}\n" ""
   done
-  echo -e "  ${CYAN}└${bottom}┘${RESET}"
+  echo -e "  ${ACCENT}└${bottom}┘${RESET}"
 
   # Run command in background
   "$@" >> "$log_file" 2>&1 &
@@ -48,9 +48,9 @@ stream_in_box() {
     for ((r=0; r<box_lines; r++)); do
       local line="${tl[$r]:-}"
       [[ ${#line} -gt $((inner - 1)) ]] && line="${line:0:$((inner - 4))}..."
-      printf "  ${CYAN}│${RESET} %-$((inner - 1))s ${CYAN}│${RESET}\n" "$line"
+      printf "  ${ACCENT}│${RESET} %-$((inner - 1))s ${ACCENT}│${RESET}\n" "$line"
     done
-    echo -e "  ${CYAN}└${bottom}┘${RESET}"
+    echo -e "  ${ACCENT}└${bottom}┘${RESET}"
     sleep 0.3
   done
 
