@@ -36,17 +36,17 @@ update_check_start() {
     return 0
   fi
 
-  # Not stale — load cached result
-  if ! _update_check_stale; then
+  # Load cached result for instant display (fetch still runs to refresh)
+  if [[ -f "$_MUSTER_UPDATE_CACHE" ]]; then
     local cached_result
     cached_result=$(tail -1 "$_MUSTER_UPDATE_CACHE" 2>/dev/null || echo "current")
     if [[ "$cached_result" == "behind" ]]; then
       MUSTER_UPDATE_AVAILABLE="true"
     fi
-    return 0
   fi
 
-  # Run git fetch in background
+  # Always run background fetch (non-blocking, <1s)
+  # Cache provides instant display; fetch refreshes the result
   (
     cd "$MUSTER_ROOT" || exit 1
     git fetch --quiet origin main 2>/dev/null || exit 1
