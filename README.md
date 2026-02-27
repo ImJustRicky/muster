@@ -165,6 +165,10 @@ Add to `.claude/settings.json`:
 
 | Tool | Description |
 |------|-------------|
+| `muster_scan_project` | Detect project files and suggest services |
+| `muster_init_project` | Create deploy.json and hook directories |
+| `muster_write_hook` | Write a hook script (deploy, health, rollback, etc.) |
+| `muster_read_hook` | Read an existing hook script |
 | `muster_status` | Health check all services |
 | `muster_deploy` | Deploy all or a specific service |
 | `muster_rollback` | Rollback a service |
@@ -173,7 +177,7 @@ Add to `.claude/settings.json`:
 | `muster_list_services` | List services with hook availability |
 | `muster_config` | Get the full deploy.json |
 
-Requires `jq` for JSON handling.
+An LLM can scan your project, create the config, write all the hook scripts, then deploy — all through conversation. Requires `jq`.
 
 ## LLM Documentation
 

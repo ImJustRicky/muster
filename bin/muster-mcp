@@ -46,6 +46,11 @@ json_tool_result() {
   printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":%s}]}}\n' "$id" "$escaped"
 }
 
+# ── In-memory credential storage (session-scoped, never written to disk) ──
+# Parallel arrays since bash 3.2 has no associative arrays
+_CRED_KEYS=()   # "service:KEY_NAME"
+_CRED_VALS=()   # "the_value"
+
 # ── Strip ANSI escape codes ──
 strip_ansi() {
   sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b\[[0-9;]*m//g; s/\x1b(B//g'
@@ -166,6 +171,140 @@ TOOLS_JSON='[
       },
       "required": ["project_dir"]
     }
+  },
+  {
+    "name": "muster_scan_project",
+    "description": "Scan a project directory and detect what services might be needed based on files found (Dockerfile, docker-compose.yml, package.json, go.mod, Cargo.toml, requirements.txt, etc). Use this to help users figure out what services to configure.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory to scan"
+        }
+      },
+      "required": ["project_dir"]
+    }
+  },
+  {
+    "name": "muster_init_project",
+    "description": "Create or update deploy.json for a project. Provide the full JSON config as a string. Also creates .muster/hooks/<service>/ directories and .muster/logs/. Updates .gitignore to exclude .muster/logs/.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory"
+        },
+        "config": {
+          "type": "string",
+          "description": "The full deploy.json content as a JSON string"
+        }
+      },
+      "required": ["project_dir", "config"]
+    }
+  },
+  {
+    "name": "muster_write_hook",
+    "description": "Write a hook script for a service. Creates the hook directory if needed and makes the script executable. Hook types: deploy.sh, health.sh, rollback.sh, logs.sh, cleanup.sh.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        },
+        "service": {
+          "type": "string",
+          "description": "Service key (e.g. api, redis, postgres)"
+        },
+        "hook": {
+          "type": "string",
+          "description": "Hook filename: deploy.sh, health.sh, rollback.sh, logs.sh, or cleanup.sh"
+        },
+        "content": {
+          "type": "string",
+          "description": "The bash script content for the hook"
+        }
+      },
+      "required": ["project_dir", "service", "hook", "content"]
+    }
+  },
+  {
+    "name": "muster_read_hook",
+    "description": "Read the contents of a hook script for a service. Returns the script content or indicates the hook does not exist.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        },
+        "service": {
+          "type": "string",
+          "description": "Service key (e.g. api, redis, postgres)"
+        },
+        "hook": {
+          "type": "string",
+          "description": "Hook filename: deploy.sh, health.sh, rollback.sh, logs.sh, or cleanup.sh"
+        }
+      },
+      "required": ["project_dir", "service", "hook"]
+    }
+  },
+  {
+    "name": "muster_set_credential",
+    "description": "Store a credential for a service in memory for this session. Credentials are passed to hook scripts as MUSTER_CRED_<KEY> environment variables during deploy and rollback. Never written to disk or logged. Use for passwords, API keys, tokens, etc.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory"
+        },
+        "service": {
+          "type": "string",
+          "description": "Service key (e.g. api, redis, postgres)"
+        },
+        "key": {
+          "type": "string",
+          "description": "Credential key name (e.g. SSH_PASSWORD, DB_PASSWORD, API_KEY). Will be available as MUSTER_CRED_<KEY> in hooks."
+        },
+        "value": {
+          "type": "string",
+          "description": "The credential value (password, token, etc.)"
+        }
+      },
+      "required": ["project_dir", "service", "key", "value"]
+    }
+  },
+  {
+    "name": "muster_list_credentials",
+    "description": "List what credential keys are stored for each service. Shows key names only, never values.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory"
+        }
+      },
+      "required": ["project_dir"]
+    }
+  },
+  {
+    "name": "muster_clear_credentials",
+    "description": "Wipe all stored credentials from memory.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory"
+        }
+      },
+      "required": ["project_dir"]
+    }
   }
 ]'
 
@@ -264,6 +403,7 @@ tool_deploy() {
     fi
 
     local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
+    _export_creds_for_service "$svc"
     if "$hook" >> "$log_file" 2>&1; then
       output="${output}${svc} (${name}): DEPLOYED"
       # Health check
@@ -280,6 +420,7 @@ tool_deploy() {
     else
       output="${output}${svc} (${name}): DEPLOY FAILED (exit code $?)\n"
     fi
+    _unexport_creds_for_service "$svc"
   done
 
   printf '%b' "$output"
@@ -301,11 +442,13 @@ tool_rollback() {
   mkdir -p "$log_dir"
   local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
+  _export_creds_for_service "$target"
   if "$hook" >> "$log_file" 2>&1; then
     echo "${target} (${name}): ROLLED BACK"
   else
     echo "${target} (${name}): ROLLBACK FAILED (exit code $?)"
   fi
+  _unexport_creds_for_service "$target"
 }
 
 tool_logs() {
@@ -363,6 +506,244 @@ tool_config() {
   cat "$CONFIG_FILE"
 }
 
+tool_scan_project() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then
+    echo "Directory not found: ${dir}"
+    return 1
+  fi
+
+  local output="Project scan: ${dir}\n\n"
+
+  # Check for common project files
+  [[ -f "${dir}/Dockerfile" ]] && output="${output}Found: Dockerfile\n"
+  [[ -f "${dir}/docker-compose.yml" ]] || [[ -f "${dir}/docker-compose.yaml" ]] && output="${output}Found: docker-compose.yml\n"
+  [[ -f "${dir}/package.json" ]] && output="${output}Found: package.json\n"
+  [[ -f "${dir}/go.mod" ]] && output="${output}Found: go.mod\n"
+  [[ -f "${dir}/Cargo.toml" ]] && output="${output}Found: Cargo.toml\n"
+  [[ -f "${dir}/requirements.txt" ]] || [[ -f "${dir}/Pipfile" ]] && output="${output}Found: Python project (requirements.txt or Pipfile)\n"
+  [[ -f "${dir}/Gemfile" ]] && output="${output}Found: Gemfile (Ruby)\n"
+  [[ -f "${dir}/pom.xml" ]] && output="${output}Found: pom.xml (Java/Maven)\n"
+  [[ -f "${dir}/build.gradle" ]] || [[ -f "${dir}/build.gradle.kts" ]] && output="${output}Found: Gradle build file\n"
+  [[ -f "${dir}/Makefile" ]] && output="${output}Found: Makefile\n"
+  [[ -f "${dir}/nginx.conf" ]] && output="${output}Found: nginx.conf\n"
+  [[ -f "${dir}/Procfile" ]] && output="${output}Found: Procfile\n"
+  [[ -f "${dir}/.env" ]] || [[ -f "${dir}/.env.example" ]] && output="${output}Found: .env file\n"
+  [[ -f "${dir}/deploy.json" ]] && output="${output}Found: deploy.json (muster already configured)\n"
+  [[ -d "${dir}/.muster" ]] && output="${output}Found: .muster/ directory (hooks already exist)\n"
+
+  # Check for common service indicators
+  output="${output}\nService hints:\n"
+  local found_hints=false
+  if grep -rql "redis\|Redis\|REDIS" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
+    output="${output}- Redis likely used\n"
+    found_hints=true
+  fi
+  if grep -rql "postgres\|postgresql\|POSTGRES" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
+    output="${output}- PostgreSQL likely used\n"
+    found_hints=true
+  fi
+  if grep -rql "mysql\|MySQL\|MYSQL" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
+    output="${output}- MySQL likely used\n"
+    found_hints=true
+  fi
+  if grep -rql "mongo\|MongoDB\|MONGO" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.env* 2>/dev/null; then
+    output="${output}- MongoDB likely used\n"
+    found_hints=true
+  fi
+  if grep -rql "nginx\|NGINX" "${dir}/"*.json "${dir}/"*.yml "${dir}/"*.yaml "${dir}/"*.conf 2>/dev/null; then
+    output="${output}- Nginx likely used\n"
+    found_hints=true
+  fi
+  [[ "$found_hints" == "false" ]] && output="${output}- No specific services detected from config files\n"
+
+  printf '%b' "$output"
+}
+
+tool_init_project() {
+  local dir="$1" config="$2"
+
+  if [[ ! -d "$dir" ]]; then
+    echo "Directory not found: ${dir}"
+    return 1
+  fi
+
+  # Validate JSON
+  if ! echo "$config" | jq . &>/dev/null; then
+    echo "Invalid JSON config"
+    return 1
+  fi
+
+  # Write deploy.json
+  echo "$config" | jq . > "${dir}/deploy.json"
+
+  # Create .muster structure
+  mkdir -p "${dir}/.muster/logs"
+
+  # Create hook directories for each service
+  local services
+  services=$(echo "$config" | jq -r '.services | keys[]' 2>/dev/null)
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    mkdir -p "${dir}/.muster/hooks/${svc}"
+  done <<< "$services"
+
+  # Update .gitignore
+  local gitignore="${dir}/.gitignore"
+  if [[ -f "$gitignore" ]]; then
+    if ! grep -q '.muster/logs' "$gitignore" 2>/dev/null; then
+      printf '\n# muster deploy logs\n.muster/logs/\n' >> "$gitignore"
+    fi
+  else
+    printf '# muster deploy logs\n.muster/logs/\n' > "$gitignore"
+  fi
+
+  local output="Created deploy.json\nCreated .muster/logs/\n"
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    output="${output}Created .muster/hooks/${svc}/\n"
+  done <<< "$services"
+  output="${output}Updated .gitignore\n\nProject initialized. Write hook scripts with muster_write_hook."
+
+  printf '%b' "$output"
+}
+
+tool_write_hook() {
+  local dir="$1" service="$2" hook="$3" content="$4"
+
+  # Validate hook name
+  case "$hook" in
+    deploy.sh|health.sh|rollback.sh|logs.sh|cleanup.sh) ;;
+    *) echo "Invalid hook: ${hook}. Must be deploy.sh, health.sh, rollback.sh, logs.sh, or cleanup.sh"; return 1 ;;
+  esac
+
+  local hook_dir="${dir}/.muster/hooks/${service}"
+  mkdir -p "$hook_dir"
+
+  local hook_file="${hook_dir}/${hook}"
+  printf '%s\n' "$content" > "$hook_file"
+  chmod +x "$hook_file"
+
+  echo "Wrote ${hook} for ${service} ($(wc -l < "$hook_file" | tr -d ' ') lines, executable)"
+}
+
+tool_read_hook() {
+  local dir="$1" service="$2" hook="$3"
+
+  local hook_file="${dir}/.muster/hooks/${service}/${hook}"
+  if [[ -f "$hook_file" ]]; then
+    echo "=== ${service}/${hook} ==="
+    cat "$hook_file"
+  else
+    echo "Hook not found: ${service}/${hook}"
+    # Show what hooks exist for this service
+    local hook_dir="${dir}/.muster/hooks/${service}"
+    if [[ -d "$hook_dir" ]]; then
+      local existing
+      existing=$(ls "$hook_dir" 2>/dev/null)
+      if [[ -n "$existing" ]]; then
+        echo "Existing hooks for ${service}: ${existing}"
+      else
+        echo "No hooks exist for ${service}"
+      fi
+    else
+      echo "No hook directory for ${service}"
+    fi
+  fi
+}
+
+# ── Credential tools ──
+
+tool_set_credential() {
+  local service="$1" key="$2" value="$3"
+
+  # Update existing or add new
+  local entry="${service}:${key}"
+  local i=0
+  while (( i < ${#_CRED_KEYS[@]} )); do
+    if [[ "${_CRED_KEYS[$i]}" == "$entry" ]]; then
+      _CRED_VALS[$i]="$value"
+      echo "Updated credential ${key} for ${service}"
+      return
+    fi
+    (( i++ ))
+  done
+
+  _CRED_KEYS[${#_CRED_KEYS[@]}]="$entry"
+  _CRED_VALS[${#_CRED_VALS[@]}]="$value"
+  echo "Stored credential ${key} for ${service}"
+}
+
+tool_list_credentials() {
+  if (( ${#_CRED_KEYS[@]} == 0 )); then
+    echo "No credentials stored"
+    return
+  fi
+
+  local output=""
+  local last_svc=""
+  local keys_for_svc=""
+  local i=0
+  # Collect keys grouped by service
+  while (( i < ${#_CRED_KEYS[@]} )); do
+    local entry="${_CRED_KEYS[$i]}"
+    local svc="${entry%%:*}"
+    local key="${entry#*:}"
+    if [[ "$svc" != "$last_svc" ]]; then
+      if [[ -n "$last_svc" ]]; then
+        output="${output}${last_svc}: ${keys_for_svc}\n"
+      fi
+      last_svc="$svc"
+      keys_for_svc="$key"
+    else
+      keys_for_svc="${keys_for_svc}, ${key}"
+    fi
+    (( i++ ))
+  done
+  if [[ -n "$last_svc" ]]; then
+    output="${output}${last_svc}: ${keys_for_svc}\n"
+  fi
+
+  printf '%b' "$output"
+}
+
+tool_clear_credentials() {
+  local count=${#_CRED_KEYS[@]}
+  _CRED_KEYS=()
+  _CRED_VALS=()
+  echo "Cleared ${count} credential(s)"
+}
+
+# Export credentials as env vars for a service before running hooks
+_export_creds_for_service() {
+  local service="$1"
+  local i=0
+  while (( i < ${#_CRED_KEYS[@]} )); do
+    local entry="${_CRED_KEYS[$i]}"
+    local svc="${entry%%:*}"
+    local key="${entry#*:}"
+    if [[ "$svc" == "$service" ]]; then
+      export "MUSTER_CRED_${key}=${_CRED_VALS[$i]}"
+    fi
+    (( i++ ))
+  done
+}
+
+# Unexport credentials after hook runs
+_unexport_creds_for_service() {
+  local service="$1"
+  local i=0
+  while (( i < ${#_CRED_KEYS[@]} )); do
+    local entry="${_CRED_KEYS[$i]}"
+    local svc="${entry%%:*}"
+    local key="${entry#*:}"
+    if [[ "$svc" == "$service" ]]; then
+      unset "MUSTER_CRED_${key}"
+    fi
+    (( i++ ))
+  done
+}
+
 # ── Handle tools/call ──
 handle_call() {
   local msg="$1" id="$2"
@@ -406,6 +787,74 @@ handle_call() {
       result=$(tool_cleanup "$project_dir" 2>&1) ;;
     muster_config)
       result=$(tool_config "$project_dir" 2>&1) ;;
+    muster_scan_project)
+      result=$(tool_scan_project "$project_dir" 2>&1) ;;
+    muster_init_project)
+      local config
+      config=$(echo "$msg" | jq -r '.params.arguments.config // empty')
+      if [[ -z "$config" ]]; then
+        json_error "$id" -32602 "config is required for init_project"
+        return
+      fi
+      result=$(tool_init_project "$project_dir" "$config" 2>&1) ;;
+    muster_write_hook)
+      local service hook content
+      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      hook=$(echo "$msg" | jq -r '.params.arguments.hook // empty')
+      content=$(echo "$msg" | jq -r '.params.arguments.content // empty')
+      if [[ -z "$service" ]] || [[ -z "$hook" ]] || [[ -z "$content" ]]; then
+        json_error "$id" -32602 "service, hook, and content are required for write_hook"
+        return
+      fi
+      result=$(tool_write_hook "$project_dir" "$service" "$hook" "$content" 2>&1) ;;
+    muster_read_hook)
+      local service hook
+      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      hook=$(echo "$msg" | jq -r '.params.arguments.hook // empty')
+      if [[ -z "$service" ]] || [[ -z "$hook" ]]; then
+        json_error "$id" -32602 "service and hook are required for read_hook"
+        return
+      fi
+      result=$(tool_read_hook "$project_dir" "$service" "$hook" 2>&1) ;;
+    muster_set_credential)
+      local service key value
+      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      key=$(echo "$msg" | jq -r '.params.arguments.key // empty')
+      value=$(echo "$msg" | jq -r '.params.arguments.value // empty')
+      if [[ -z "$service" ]] || [[ -z "$key" ]] || [[ -z "$value" ]]; then
+        json_error "$id" -32602 "service, key, and value are required for set_credential"
+        return
+      fi
+      # Run directly (not in subshell) so array changes persist
+      local entry="${service}:${key}"
+      local _i=0 _found=false
+      while (( _i < ${#_CRED_KEYS[@]} )); do
+        if [[ "${_CRED_KEYS[$_i]}" == "$entry" ]]; then
+          _CRED_VALS[$_i]="$value"
+          _found=true
+          break
+        fi
+        (( _i++ ))
+      done
+      if [[ "$_found" == "false" ]]; then
+        _CRED_KEYS[${#_CRED_KEYS[@]}]="$entry"
+        _CRED_VALS[${#_CRED_VALS[@]}]="$value"
+      fi
+      if [[ "$_found" == "true" ]]; then
+        json_tool_result "$id" "Updated credential ${key} for ${service}"
+      else
+        json_tool_result "$id" "Stored credential ${key} for ${service}"
+      fi
+      return ;;
+    muster_list_credentials)
+      result=$(tool_list_credentials 2>&1) ;;
+    muster_clear_credentials)
+      # Run directly so array changes persist
+      local _count=${#_CRED_KEYS[@]}
+      _CRED_KEYS=()
+      _CRED_VALS=()
+      json_tool_result "$id" "Cleared ${_count} credential(s)"
+      return ;;
     *)
       json_error "$id" -32601 "Unknown tool: ${tool_name}"
       return ;;

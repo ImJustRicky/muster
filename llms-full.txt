@@ -281,6 +281,17 @@ Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json
 
 ### Available Tools
 
+**Setup & scaffolding (create projects from scratch):**
+
+| Tool | Args | Description |
+|------|------|-------------|
+| `muster_scan_project` | `project_dir` | Detect Dockerfile, package.json, docker-compose, .env, etc. Suggests services. |
+| `muster_init_project` | `project_dir`, `config` | Create deploy.json, hook dirs, .gitignore. `config` is full JSON string. |
+| `muster_write_hook` | `project_dir`, `service`, `hook`, `content` | Write a hook script. `hook`: deploy.sh, health.sh, rollback.sh, logs.sh, cleanup.sh. Auto-creates dirs, sets executable. |
+| `muster_read_hook` | `project_dir`, `service`, `hook` | Read hook contents. Shows existing hooks if requested one is missing. |
+
+**Operations (manage running services):**
+
 | Tool | Args | Description |
 |------|------|-------------|
 | `muster_list_services` | `project_dir` | List services with health type and hook availability |
@@ -291,7 +302,15 @@ Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json
 | `muster_cleanup` | `project_dir` | Run cleanup hooks, delete old logs |
 | `muster_config` | `project_dir` | Return full deploy.json contents |
 
-All tools require `project_dir` — the path to the project containing `deploy.json`. Output is plain text (no ANSI codes).
+All tools require `project_dir`. Output is plain text (no ANSI codes).
+
+### Typical LLM workflow
+
+1. `muster_scan_project` — detect what's in the project
+2. `muster_init_project` — create deploy.json with services
+3. `muster_write_hook` — write deploy.sh, health.sh, rollback.sh for each service
+4. `muster_deploy` — deploy everything
+5. `muster_status` — verify health
 
 ### Protocol
 
