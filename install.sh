@@ -19,10 +19,11 @@ else
   git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo"
 fi
 
-# Create bin symlink
+# Create bin symlinks
 mkdir -p "$BIN_DIR"
-chmod +x "${INSTALL_DIR}/repo/bin/muster"
+chmod +x "${INSTALL_DIR}/repo/bin/muster" "${INSTALL_DIR}/repo/bin/muster-mcp"
 ln -sf "${INSTALL_DIR}/repo/bin/muster" "${BIN_DIR}/muster"
+ln -sf "${INSTALL_DIR}/repo/bin/muster-mcp" "${BIN_DIR}/muster-mcp"
 
 # Check PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -q "^${BIN_DIR}$"; then

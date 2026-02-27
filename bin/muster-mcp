@@ -1,0 +1,448 @@
+#!/usr/bin/env bash
+# muster-mcp — MCP stdio transport for muster
+# Reads JSON-RPC from stdin, executes muster operations, returns JSON to stdout.
+# Requires: jq
+set -uo pipefail
+
+MUSTER_VERSION="0.1.0"
+MUSTER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ── Core libs (for config reading) ──
+source "$MUSTER_ROOT/lib/core/utils.sh"
+source "$MUSTER_ROOT/lib/core/config.sh"
+source "$MUSTER_ROOT/lib/core/platform.sh"
+
+# ── Override EXIT trap — utils.sh writes ANSI to stdout which corrupts protocol ──
+trap 'true' EXIT
+
+# ── Require jq ──
+if ! command -v jq &>/dev/null; then
+  printf '{"jsonrpc":"2.0","error":{"code":-32603,"message":"jq is required for muster-mcp"},"id":null}\n'
+  exit 1
+fi
+
+# ── Logging (stderr only — stdout is protocol) ──
+_log() { echo "[muster-mcp] $*" >&2; }
+
+# ── JSON helpers ──
+json_str() {
+  printf '%s' "$1" | jq -Rs .
+}
+
+json_response() {
+  local id="$1" result="$2"
+  printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$result"
+}
+
+json_error() {
+  local id="$1" code="$2" msg="$3"
+  printf '{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":%s}}\n' "$id" "$code" "$(json_str "$msg")"
+}
+
+json_tool_result() {
+  local id="$1" text="$2"
+  local escaped
+  escaped=$(json_str "$text")
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":%s}]}}\n' "$id" "$escaped"
+}
+
+# ── Strip ANSI escape codes ──
+strip_ansi() {
+  sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b\[[0-9;]*m//g; s/\x1b(B//g'
+}
+
+# ── Tool definitions ──
+TOOLS_JSON='[
+  {
+    "name": "muster_list_services",
+    "description": "List all configured services and their health check types",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        }
+      },
+      "required": ["project_dir"]
+    }
+  },
+  {
+    "name": "muster_status",
+    "description": "Check health status of all services. Returns each service as healthy, unhealthy, or no health check.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        }
+      },
+      "required": ["project_dir"]
+    }
+  },
+  {
+    "name": "muster_deploy",
+    "description": "Deploy services. Runs deploy hooks in configured order and verifies health after each.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        },
+        "service": {
+          "type": "string",
+          "description": "Service key to deploy. Omit to deploy all services."
+        }
+      },
+      "required": ["project_dir"]
+    }
+  },
+  {
+    "name": "muster_rollback",
+    "description": "Rollback a service to its previous state using the rollback hook.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        },
+        "service": {
+          "type": "string",
+          "description": "Service key to rollback"
+        }
+      },
+      "required": ["project_dir", "service"]
+    }
+  },
+  {
+    "name": "muster_logs",
+    "description": "Get recent deploy logs for a service.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        },
+        "service": {
+          "type": "string",
+          "description": "Service key to get logs for"
+        },
+        "lines": {
+          "type": "number",
+          "description": "Number of log lines to return (default: 50)"
+        }
+      },
+      "required": ["project_dir", "service"]
+    }
+  },
+  {
+    "name": "muster_cleanup",
+    "description": "Clean up old deploy logs and run cleanup hooks for all services.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        }
+      },
+      "required": ["project_dir"]
+    }
+  },
+  {
+    "name": "muster_config",
+    "description": "Get the full deploy.json configuration for the project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_dir": {
+          "type": "string",
+          "description": "Path to the project directory containing deploy.json"
+        }
+      },
+      "required": ["project_dir"]
+    }
+  }
+]'
+
+# ── Load config for a project dir ──
+load_project_config() {
+  local dir="$1"
+  if [[ ! -f "${dir}/deploy.json" ]]; then
+    return 1
+  fi
+  CONFIG_FILE="${dir}/deploy.json"
+  return 0
+}
+
+# ── Tool implementations ──
+
+tool_list_services() {
+  local dir="$1"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+
+  local output=""
+  local services
+  services=$(config_services)
+
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    local name health_type
+    name=$(config_get ".services.${svc}.name")
+    health_type=$(config_get ".services.${svc}.health.type")
+    local has_deploy="false" has_rollback="false" has_logs="false"
+    [[ -x "${dir}/.muster/hooks/${svc}/deploy.sh" ]] && has_deploy="true"
+    [[ -x "${dir}/.muster/hooks/${svc}/rollback.sh" ]] && has_rollback="true"
+    [[ -x "${dir}/.muster/hooks/${svc}/logs.sh" ]] && has_logs="true"
+    output="${output}${svc}: ${name} (health: ${health_type}, deploy: ${has_deploy}, rollback: ${has_rollback}, logs: ${has_logs})\n"
+  done <<< "$services"
+
+  printf '%b' "$output"
+}
+
+tool_status() {
+  local dir="$1"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+
+  local output=""
+  local services
+  services=$(config_services)
+
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    local name
+    name=$(config_get ".services.${svc}.name")
+    local hook="${dir}/.muster/hooks/${svc}/health.sh"
+
+    if [[ -x "$hook" ]]; then
+      if "$hook" &>/dev/null; then
+        output="${output}${svc} (${name}): HEALTHY\n"
+      else
+        output="${output}${svc} (${name}): UNHEALTHY\n"
+      fi
+    else
+      output="${output}${svc} (${name}): NO HEALTH CHECK\n"
+    fi
+  done <<< "$services"
+
+  printf '%b' "$output"
+}
+
+tool_deploy() {
+  local dir="$1" target="${2:-all}"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+
+  local log_dir="${dir}/.muster/logs"
+  mkdir -p "$log_dir"
+
+  local services=()
+  if [[ "$target" == "all" ]]; then
+    while IFS= read -r svc; do
+      [[ -z "$svc" ]] && continue
+      local skip
+      skip=$(config_get ".services.${svc}.skip_deploy")
+      [[ "$skip" == "true" ]] && continue
+      services[${#services[@]}]="$svc"
+    done < <(config_get '.deploy_order[]' 2>/dev/null || config_services)
+  else
+    services[0]="$target"
+  fi
+
+  local output=""
+  for svc in "${services[@]}"; do
+    local name
+    name=$(config_get ".services.${svc}.name")
+    local hook="${dir}/.muster/hooks/${svc}/deploy.sh"
+
+    if [[ ! -x "$hook" ]]; then
+      output="${output}${svc} (${name}): SKIPPED (no deploy hook)\n"
+      continue
+    fi
+
+    local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
+    if "$hook" >> "$log_file" 2>&1; then
+      output="${output}${svc} (${name}): DEPLOYED"
+      # Health check
+      local health_hook="${dir}/.muster/hooks/${svc}/health.sh"
+      if [[ -x "$health_hook" ]]; then
+        if "$health_hook" &>/dev/null; then
+          output="${output} — HEALTHY\n"
+        else
+          output="${output} — HEALTH CHECK FAILED\n"
+        fi
+      else
+        output="${output}\n"
+      fi
+    else
+      output="${output}${svc} (${name}): DEPLOY FAILED (exit code $?)\n"
+    fi
+  done
+
+  printf '%b' "$output"
+}
+
+tool_rollback() {
+  local dir="$1" target="$2"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+
+  local hook="${dir}/.muster/hooks/${target}/rollback.sh"
+  if [[ ! -x "$hook" ]]; then
+    echo "No rollback hook for ${target}"
+    return 1
+  fi
+
+  local name
+  name=$(config_get ".services.${target}.name")
+  local log_dir="${dir}/.muster/logs"
+  mkdir -p "$log_dir"
+  local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
+
+  if "$hook" >> "$log_file" 2>&1; then
+    echo "${target} (${name}): ROLLED BACK"
+  else
+    echo "${target} (${name}): ROLLBACK FAILED (exit code $?)"
+  fi
+}
+
+tool_logs() {
+  local dir="$1" target="$2" lines="${3:-50}"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+
+  local log_dir="${dir}/.muster/logs"
+  local latest
+  latest=$(ls -t "${log_dir}/${target}-"*.log 2>/dev/null | head -1)
+
+  if [[ -n "$latest" ]]; then
+    echo "=== $(basename "$latest") ==="
+    tail -n "$lines" "$latest" | strip_ansi
+  else
+    echo "No logs found for ${target}"
+  fi
+}
+
+tool_cleanup() {
+  local dir="$1"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+
+  local output=""
+  local services
+  services=$(config_services)
+
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    local hook="${dir}/.muster/hooks/${svc}/cleanup.sh"
+    if [[ -x "$hook" ]]; then
+      local name
+      name=$(config_get ".services.${svc}.name")
+      "$hook" &>/dev/null
+      output="${output}${name}: cleaned up\n"
+    fi
+  done <<< "$services"
+
+  local log_dir="${dir}/.muster/logs"
+  if [[ -d "$log_dir" ]]; then
+    local old_logs
+    old_logs=$(find "$log_dir" -name "*.log" -mtime +7 2>/dev/null | wc -l | tr -d ' ')
+    if (( old_logs > 0 )); then
+      find "$log_dir" -name "*.log" -mtime +7 -delete 2>/dev/null
+      output="${output}Removed ${old_logs} old log files\n"
+    fi
+  fi
+
+  [[ -z "$output" ]] && output="Nothing to clean up\n"
+  printf '%b' "$output"
+}
+
+tool_config() {
+  local dir="$1"
+  load_project_config "$dir" || { echo "No deploy.json found in ${dir}"; return 1; }
+  cat "$CONFIG_FILE"
+}
+
+# ── Handle tools/call ──
+handle_call() {
+  local msg="$1" id="$2"
+  local tool_name project_dir
+  tool_name=$(echo "$msg" | jq -r '.params.name')
+  project_dir=$(echo "$msg" | jq -r '.params.arguments.project_dir // empty')
+
+  if [[ -z "$project_dir" ]]; then
+    json_error "$id" -32602 "project_dir is required"
+    return
+  fi
+
+  local result=""
+  case "$tool_name" in
+    muster_list_services)
+      result=$(tool_list_services "$project_dir" 2>&1) ;;
+    muster_status)
+      result=$(tool_status "$project_dir" 2>&1) ;;
+    muster_deploy)
+      local service
+      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      result=$(tool_deploy "$project_dir" "${service:-all}" 2>&1) ;;
+    muster_rollback)
+      local service
+      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      if [[ -z "$service" ]]; then
+        json_error "$id" -32602 "service is required for rollback"
+        return
+      fi
+      result=$(tool_rollback "$project_dir" "$service" 2>&1) ;;
+    muster_logs)
+      local service lines
+      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      lines=$(echo "$msg" | jq -r '.params.arguments.lines // 50')
+      if [[ -z "$service" ]]; then
+        json_error "$id" -32602 "service is required for logs"
+        return
+      fi
+      result=$(tool_logs "$project_dir" "$service" "$lines" 2>&1) ;;
+    muster_cleanup)
+      result=$(tool_cleanup "$project_dir" 2>&1) ;;
+    muster_config)
+      result=$(tool_config "$project_dir" 2>&1) ;;
+    *)
+      json_error "$id" -32601 "Unknown tool: ${tool_name}"
+      return ;;
+  esac
+
+  json_tool_result "$id" "$result"
+}
+
+# ── Main protocol loop ──
+_log "started (v${MUSTER_VERSION})"
+
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+
+  method=$(echo "$line" | jq -r '.method // empty')
+  id=$(echo "$line" | jq -r '.id // "null"')
+
+  case "$method" in
+    initialize)
+      json_response "$id" "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"muster\",\"version\":\"${MUSTER_VERSION}\"}}"
+      ;;
+    "notifications/initialized")
+      # No response needed
+      ;;
+    "tools/list")
+      json_response "$id" "{\"tools\":${TOOLS_JSON}}"
+      ;;
+    "tools/call")
+      handle_call "$line" "$id"
+      ;;
+    "ping")
+      json_response "$id" "{}"
+      ;;
+    *)
+      if [[ "$id" != "null" ]]; then
+        json_error "$id" -32601 "Method not found: ${method}"
+      fi
+      ;;
+  esac
+done

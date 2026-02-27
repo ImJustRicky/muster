@@ -21,6 +21,7 @@ Or clone manually:
 ```bash
 git clone https://github.com/ImJustRicky/muster.git ~/.muster/repo
 ln -s ~/.muster/repo/bin/muster ~/.local/bin/muster
+ln -s ~/.muster/repo/bin/muster-mcp ~/.local/bin/muster-mcp
 ```
 
 Or add to your shell profile (`.zshrc` / `.bashrc`):
@@ -127,6 +128,57 @@ Off by default. When enabled for a service, credentials are stored in:
 **Never** in deploy.json. **Never** in your project directory. **Never** in git.
 
 Services with stored credentials are flagged with `⚠ KEY` in the dashboard.
+
+## MCP Integration
+
+muster includes an MCP (Model Context Protocol) tool so LLMs can deploy, check status, rollback, and manage your services directly. Pure bash, runs locally over stdio.
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "muster": {
+      "command": "muster-mcp"
+    }
+  }
+}
+```
+
+### Claude Code
+
+Add to `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "muster": {
+      "command": "muster-mcp"
+    }
+  }
+}
+```
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `muster_status` | Health check all services |
+| `muster_deploy` | Deploy all or a specific service |
+| `muster_rollback` | Rollback a service |
+| `muster_logs` | Get recent deploy logs |
+| `muster_cleanup` | Clean up old logs and run cleanup hooks |
+| `muster_list_services` | List services with hook availability |
+| `muster_config` | Get the full deploy.json |
+
+Requires `jq` for JSON handling.
+
+## LLM Documentation
+
+- [`llms.txt`](llms.txt) — concise project index for LLMs
+- [`llms-full.txt`](llms-full.txt) — expanded reference with architecture, config format, and bash 3.2 compatibility notes
 
 ## Philosophy
 
