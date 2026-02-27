@@ -29,7 +29,7 @@ cmd_skill() {
 }
 
 skill_add() {
-  local source="$1"
+  local source="${1:-}"
 
   if [[ -z "$source" ]]; then
     err "Usage: muster skill add <git-url-or-path>"
@@ -71,7 +71,7 @@ skill_add() {
 }
 
 skill_remove() {
-  local name="$1"
+  local name="${1:-}"
 
   if [[ -z "$name" ]]; then
     err "Usage: muster skill remove <name>"
@@ -117,7 +117,7 @@ skill_list() {
 }
 
 skill_run() {
-  local name="$1"
+  local name="${1:-}"
   shift 2>/dev/null || true
 
   if [[ -z "$name" ]]; then

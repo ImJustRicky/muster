@@ -454,13 +454,13 @@ print(json.dumps(data, indent=2))
   _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}1. Edit hook scripts in .muster/hooks/${RESET}"
   _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
   _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
-  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press any key to exit${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press enter to exit${RESET}"
   _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
 
   _SETUP_CUR_PROMPT="false"
   _setup_screen 7 "Setup complete"
 
-  # Flush any leftover input, then wait for a real keypress
-  while read -rsn1 -t 0.1 2>/dev/null; do :; done 2>/dev/null || true
-  read -rsn1
+  # Wait for Enter — read -rs (no -n) consumes buffered chars until newline,
+  # which avoids the bash 3.2 fractional-timeout issue with -t 0.1
+  read -rs
 }

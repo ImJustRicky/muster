@@ -42,6 +42,10 @@ case "${1:-}" in
     source "$MUSTER_ROOT/lib/commands/cleanup.sh"
     cmd_cleanup
     ;;
+  uninstall)
+    source "$MUSTER_ROOT/lib/commands/uninstall.sh"
+    cmd_uninstall
+    ;;
   skill)
     shift
     source "$MUSTER_ROOT/lib/skills/manager.sh"
@@ -63,6 +67,7 @@ case "${1:-}" in
     echo "  logs        Stream service logs"
     echo "  rollback    Revert last deploy"
     echo "  cleanup     Clean up stuck processes"
+    echo "  uninstall   Remove muster from project"
     echo "  skill       Manage addon skills"
     echo ""
     echo "Options:"

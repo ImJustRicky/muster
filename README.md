@@ -23,6 +23,12 @@ git clone https://github.com/ImJustRicky/muster.git ~/.muster/repo
 ln -s ~/.muster/repo/bin/muster ~/.local/bin/muster
 ```
 
+Or add to your shell profile (`.zshrc` / `.bashrc`):
+
+```bash
+export PATH="$PATH:/path/to/muster/bin"
+```
+
 ## Quick Start
 
 ```bash
@@ -43,6 +49,7 @@ muster             # open the dashboard
 | `muster logs` | Stream logs (interactive service picker) |
 | `muster rollback` | Rollback a service |
 | `muster cleanup` | Clean up stuck processes and old logs |
+| `muster uninstall` | Remove muster from project |
 | `muster skill add <url>` | Install a skill addon |
 | `muster skill list` | List installed skills |
 | `muster skill remove <name>` | Remove a skill |

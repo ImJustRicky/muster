@@ -16,6 +16,7 @@ muster status    →  quick health check
 muster logs      →  stream logs
 muster rollback  →  revert last deploy
 muster cleanup   →  cleanup stuck processes
+muster uninstall →  remove muster from project
 muster skill     →  manage addon skills
 ```
 
@@ -34,6 +35,7 @@ muster/
 │   │   ├── config.sh           ← read/write deploy.json
 │   │   ├── colors.sh           ← colors, styling constants
 │   │   ├── logger.sh           ← log, warn, err, ok, info
+│   │   ├── platform.sh         ← OS/arch/tool detection
 │   │   └── utils.sh            ← shared helpers
 │   ├── tui/
 │   │   ├── menu.sh             ← arrow-key interactive menu
@@ -48,7 +50,8 @@ muster/
 │   │   ├── status.sh           ← health/status check
 │   │   ├── logs.sh             ← log streaming
 │   │   ├── rollback.sh         ← rollback logic
-│   │   └── cleanup.sh          ← cleanup stuck processes
+│   │   ├── cleanup.sh          ← cleanup stuck processes
+│   │   └── uninstall.sh        ← remove muster from project
 │   └── skills/
 │       └── manager.sh          ← install, list, remove, run skills
 ├── templates/
@@ -164,8 +167,8 @@ Interactive, conversational flow:
 3. **Scan & confirm** — scan the pointed directory for known files (Dockerfile, docker-compose.yml, k8s manifests, package.json, etc.) and propose findings
 4. **Checklist** — present all detected/declared services with checkmarks, user toggles what they want
 5. **Per-service config** — for each checked service, ask about health check type, deploy command, credentials
-6. **Skills suggestion** — recommend relevant skills based on the stack
-7. **Write config** — generate deploy.json, .muster/hooks/ scaffolding, update .gitignore
+6. **Project name** — confirm or customize the project name
+7. **Write config** — generate deploy.json, .muster/hooks/ scaffolding, update .gitignore, show completion summary
 
 ## Dashboard (`muster`)
 
