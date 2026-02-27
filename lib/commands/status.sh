@@ -37,16 +37,34 @@ cmd_status() {
     if [[ "$health_enabled" == "false" ]]; then
       echo -e "  ${GRAY}○${RESET} ${name}${_remote_tag} ${DIM}(disabled)${RESET}"
     elif [[ -x "$hook" ]]; then
+      # Export k8s env vars for health hook
+      local _k8s_env=""
+      _k8s_env=$(k8s_env_for_service "$svc")
+      if [[ -n "$_k8s_env" ]]; then
+        while IFS='=' read -r _ek _ev; do
+          [[ -z "$_ek" ]] && continue
+          export "$_ek=$_ev"
+        done <<< "$_k8s_env"
+      fi
+
       start_spinner "Checking ${name}..."
       local _health_ok=false
       if remote_is_enabled "$svc"; then
-        if remote_exec_stdout "$svc" "$hook" "" &>/dev/null; then
+        if remote_exec_stdout "$svc" "$hook" "$_k8s_env" &>/dev/null; then
           _health_ok=true
         fi
       else
         if "$hook" &>/dev/null; then
           _health_ok=true
         fi
+      fi
+
+      # Clean up k8s env
+      if [[ -n "$_k8s_env" ]]; then
+        while IFS='=' read -r _ek _ev; do
+          [[ -z "$_ek" ]] && continue
+          unset "$_ek"
+        done <<< "$_k8s_env"
       fi
       if [[ "$_health_ok" == "true" ]]; then
         stop_spinner

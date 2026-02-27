@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # Health check for {{SERVICE_NAME}} (infrastructure) on Kubernetes
 
-NAMESPACE="${NAMESPACE:-{{NAMESPACE}}}"
-SERVICE="{{SERVICE_NAME}}"
+NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"
+DEPLOY_NAME="${MUSTER_K8S_DEPLOYMENT:-{{K8S_DEPLOY_NAME}}}"
 
-# Check pod readiness
-kubectl wait --for=condition=Ready pod \
-  -l app="${SERVICE}" \
-  -n "$NAMESPACE" \
-  --timeout=10s &>/dev/null || exit 1
+# Check deployment rollout status
+kubectl rollout status "deployment/${DEPLOY_NAME}" -n "$NAMESPACE" --timeout=10s &>/dev/null || exit 1
 
 exit 0

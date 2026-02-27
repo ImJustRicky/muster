@@ -2,8 +2,9 @@
 set -eo pipefail
 # Deploy {{SERVICE_NAME}} to Kubernetes
 
-NAMESPACE="${NAMESPACE:-{{NAMESPACE}}}"
-SERVICE="{{SERVICE_NAME}}"
+NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"
+SERVICE="${MUSTER_K8S_SERVICE:-{{SERVICE_NAME}}}"
+DEPLOY_NAME="${MUSTER_K8S_DEPLOYMENT:-{{K8S_DEPLOY_NAME}}}"
 REGISTRY="${DOCKER_REGISTRY:-localhost:5000}"
 TAG="${IMAGE_TAG:-latest}"
 
@@ -21,12 +22,12 @@ kubectl apply -f "{{K8S_DIR}}" -n "$NAMESPACE" 2>/dev/null || true
 
 # Update deployment image
 echo "Updating deployment..."
-kubectl set image deployment/${SERVICE} \
-  ${SERVICE}="${REGISTRY}/${SERVICE}:${TAG}" \
+kubectl set image "deployment/${DEPLOY_NAME}" \
+  "${SERVICE}=${REGISTRY}/${SERVICE}:${TAG}" \
   -n "$NAMESPACE"
 
 # Wait for rollout
 echo "Waiting for rollout..."
-kubectl rollout status deployment/${SERVICE} -n "$NAMESPACE" --timeout=120s
+kubectl rollout status "deployment/${DEPLOY_NAME}" -n "$NAMESPACE" --timeout=120s
 
 echo "${SERVICE} deployed"

@@ -59,13 +59,26 @@ cmd_rollback() {
     done <<< "$_cred_env_lines"
   fi
 
+  # Export k8s config as env vars
+  local _k8s_env_lines=""
+  _k8s_env_lines=$(k8s_env_for_service "$target")
+  if [[ -n "$_k8s_env_lines" ]]; then
+    while IFS='=' read -r _ek _ev; do
+      [[ -z "$_ek" ]] && continue
+      export "$_ek=$_ev"
+    done <<< "$_k8s_env_lines"
+  fi
+
   if remote_is_enabled "$target"; then
     info "Rolling back ${name} remotely ($(remote_desc "$target"))"
   fi
 
   start_spinner "Rolling back ${name}..."
   if remote_is_enabled "$target"; then
-    remote_exec_stdout "$target" "$hook" "$_cred_env_lines" >> "$log_file" 2>&1
+    local _all_env="${_cred_env_lines}"
+    [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
+${_k8s_env_lines}"
+    remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
   else
     "$hook" >> "$log_file" 2>&1
   fi
@@ -78,6 +91,13 @@ cmd_rollback() {
       [[ -z "$_ck" ]] && continue
       unset "$_ck"
     done <<< "$_cred_env_lines"
+  fi
+  # Clean up k8s env vars
+  if [[ -n "$_k8s_env_lines" ]]; then
+    while IFS='=' read -r _ek _ev; do
+      [[ -z "$_ek" ]] && continue
+      unset "$_ek"
+    done <<< "$_k8s_env_lines"
   fi
 
   if (( rc == 0 )); then

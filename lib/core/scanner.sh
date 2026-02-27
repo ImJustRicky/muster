@@ -6,6 +6,10 @@ _SCAN_FILES=()       # "filename|description" entries
 _SCAN_SERVICES=()    # service names detected
 _SCAN_STACK=""       # k8s, compose, docker, bare
 _SCAN_PATHS=()       # "service|type|relative_path" entries for template generation
+_SCAN_HEALTH=()      # "service|type|endpoint|port" entries from live k8s
+_SCAN_K8S_NAMES=()   # "stripped_name|original_deploy_name" entries
+_SCAN_K8S_NS=""      # resolved namespace
+_SCAN_K8S_PREFIX=""   # common deployment name prefix
 
 # Subdirectories to check in addition to project root
 _SCAN_SUBDIRS="docker deploy infra .github"
@@ -98,6 +102,10 @@ scan_project() {
   _SCAN_SERVICES=()
   _SCAN_STACK=""
   _SCAN_PATHS=()
+  _SCAN_HEALTH=()
+  _SCAN_K8S_NAMES=()
+  _SCAN_K8S_NS=""
+  _SCAN_K8S_PREFIX=""
 
   local has_k8s=false has_compose=false has_docker=false has_systemd=false
 
@@ -433,4 +441,354 @@ scan_print_results() {
   fi
 
   return 0
+}
+
+# ══════════════════════════════════════════════════════════════
+# Live Kubernetes cluster introspection
+# ══════════════════════════════════════════════════════════════
+
+# Resolve namespace via: flag → k8s YAML → kubectl config → "default"
+# Usage: _scan_resolve_namespace "flag_ns" "project_dir"
+_scan_resolve_namespace() {
+  local flag_ns="$1" project_dir="$2"
+
+  # Priority 1: explicit flag
+  if [[ -n "$flag_ns" ]]; then
+    echo "$flag_ns"
+    return 0
+  fi
+
+  # Priority 2: grep namespace: from k8s YAML files
+  if [[ -n "$project_dir" ]]; then
+    local yaml_ns=""
+    local yaml_files=""
+    # Collect k8s YAML files from common locations
+    local _search_dirs="k8s kubernetes deploy infra"
+    local _sd
+    for _sd in $_search_dirs; do
+      if [[ -d "${project_dir}/${_sd}" ]]; then
+        yaml_files="${yaml_files} $(ls "${project_dir}/${_sd}"/*.yaml "${project_dir}/${_sd}"/*.yml 2>/dev/null || true)"
+        # Also check subdirs
+        local _sub
+        for _sub in "${project_dir}/${_sd}"/*/; do
+          [[ -d "$_sub" ]] && yaml_files="${yaml_files} $(ls "${_sub}"*.yaml "${_sub}"*.yml 2>/dev/null || true)"
+        done
+      fi
+    done
+    # Also check root-level YAML
+    yaml_files="${yaml_files} $(ls "${project_dir}"/*.yaml "${project_dir}"/*.yml 2>/dev/null || true)"
+
+    if [[ -n "$yaml_files" ]]; then
+      # Match: namespace: value or namespace: "value" or namespace: 'value'
+      # Skip template placeholders like {{ .Release.Namespace }}
+      yaml_ns=$(grep -h 'namespace:' $yaml_files 2>/dev/null \
+        | grep -v '{{' \
+        | head -1 \
+        | sed 's/.*namespace:[[:space:]]*//' \
+        | sed 's/^["'"'"']//' \
+        | sed 's/["'"'"']$//' \
+        | sed 's/[[:space:]]*$//' \
+        || true)
+      if [[ -n "$yaml_ns" ]]; then
+        echo "$yaml_ns"
+        return 0
+      fi
+    fi
+  fi
+
+  # Priority 3: kubectl config current namespace
+  if [[ "${MUSTER_HAS_KUBECTL:-}" == "true" ]]; then
+    local config_ns=""
+    config_ns=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null || true)
+    if [[ -n "$config_ns" ]]; then
+      echo "$config_ns"
+      return 0
+    fi
+  fi
+
+  # Priority 4: default
+  echo "default"
+}
+
+# Strip common deployment name prefix
+# Usage: _scan_strip_prefix "deployment_name"
+_scan_strip_prefix() {
+  local name="$1"
+  if [[ -n "$_SCAN_K8S_PREFIX" && "$name" == "${_SCAN_K8S_PREFIX}-"* ]]; then
+    echo "${name#${_SCAN_K8S_PREFIX}-}"
+  else
+    echo "$name"
+  fi
+}
+
+# Core k8s cluster scan: read deployments, extract services and health probes
+# Usage: scan_k8s_cluster "namespace"
+scan_k8s_cluster() {
+  local ns="${1:-default}"
+  _SCAN_K8S_NS="$ns"
+
+  # Guard: kubectl not available
+  if [[ "${MUSTER_HAS_KUBECTL:-}" != "true" ]]; then
+    return 0
+  fi
+
+  # Guard: cluster not reachable
+  if ! kubectl cluster-info &>/dev/null; then
+    warn "kubectl available but cluster not reachable — skipping live scan"
+    return 0
+  fi
+
+  # Fetch deployments JSON
+  local deploy_json=""
+  deploy_json=$(kubectl get deployments -n "$ns" -o json 2>/dev/null) || {
+    warn "Failed to list deployments in namespace '$ns'"
+    return 0
+  }
+
+  # Parse deployment names — prefer jq, fall back to python3
+  local dep_names=""
+  if has_cmd jq; then
+    dep_names=$(echo "$deploy_json" | jq -r '.items[].metadata.name' 2>/dev/null)
+  elif has_cmd python3; then
+    dep_names=$(echo "$deploy_json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for item in data.get('items', []):
+    print(item['metadata']['name'])
+" 2>/dev/null)
+  else
+    warn "Neither jq nor python3 available — cannot parse k8s deployments"
+    return 0
+  fi
+
+  if [[ -z "$dep_names" ]]; then
+    return 0
+  fi
+
+  # ── Compute common prefix ──
+  # Find longest "X-" prefix shared by ALL deployment names (only if >1)
+  local dep_count=0
+  local dep_arr=()
+  local _dn
+  while IFS= read -r _dn; do
+    [[ -z "$_dn" ]] && continue
+    dep_arr[${#dep_arr[@]}]="$_dn"
+    dep_count=$((dep_count + 1))
+  done <<< "$dep_names"
+
+  _SCAN_K8S_PREFIX=""
+  if (( dep_count > 1 )); then
+    # Start with the first name's prefix (everything before first -)
+    local first_name="${dep_arr[0]}"
+    local candidate=""
+    case "$first_name" in
+      *-*) candidate="${first_name%%-*}" ;;
+    esac
+
+    if [[ -n "$candidate" ]]; then
+      # Check if ALL names start with candidate-
+      local all_match=true
+      local _di=0
+      while (( _di < dep_count )); do
+        case "${dep_arr[$_di]}" in
+          "${candidate}-"*) ;;
+          *) all_match=false; break ;;
+        esac
+        _di=$((_di + 1))
+      done
+      if [[ "$all_match" == "true" ]]; then
+        _SCAN_K8S_PREFIX="$candidate"
+      fi
+    fi
+  fi
+
+  # ── Process each deployment ──
+  # Use jq for full extraction if available, otherwise python3
+  if has_cmd jq; then
+    local _idx=0
+    while (( _idx < dep_count )); do
+      local dep_name="${dep_arr[$_idx]}"
+      local svc_name
+      svc_name=$(_scan_strip_prefix "$dep_name")
+      _scan_add_service "$svc_name"
+
+      # Map stripped name to original k8s deployment name
+      _SCAN_K8S_NAMES[${#_SCAN_K8S_NAMES[@]}]="${svc_name}|${dep_name}"
+
+      # Extract container port and probes via jq
+      local container_json=""
+      container_json=$(echo "$deploy_json" | jq -r \
+        --arg name "$dep_name" \
+        '.items[] | select(.metadata.name == $name) | .spec.template.spec.containers[0]' 2>/dev/null)
+
+      local container_port=""
+      container_port=$(echo "$container_json" | jq -r '.ports[0].containerPort // empty' 2>/dev/null)
+
+      # Check readinessProbe first, then livenessProbe
+      local probe_json=""
+      local probe_source=""
+      local has_readiness=""
+      has_readiness=$(echo "$container_json" | jq -r '.readinessProbe // empty' 2>/dev/null)
+      if [[ -n "$has_readiness" ]]; then
+        probe_json=$(echo "$container_json" | jq -r '.readinessProbe' 2>/dev/null)
+        probe_source="readiness"
+      else
+        local has_liveness=""
+        has_liveness=$(echo "$container_json" | jq -r '.livenessProbe // empty' 2>/dev/null)
+        if [[ -n "$has_liveness" ]]; then
+          probe_json=$(echo "$container_json" | jq -r '.livenessProbe' 2>/dev/null)
+          probe_source="liveness"
+        fi
+      fi
+
+      if [[ -n "$probe_json" && "$probe_json" != "null" ]]; then
+        # httpGet probe
+        local http_path=""
+        http_path=$(echo "$probe_json" | jq -r '.httpGet.path // empty' 2>/dev/null)
+        if [[ -n "$http_path" ]]; then
+          local http_port=""
+          http_port=$(echo "$probe_json" | jq -r '.httpGet.port // empty' 2>/dev/null)
+          [[ -z "$http_port" ]] && http_port="$container_port"
+          _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|http|${http_path}|${http_port}"
+        else
+          # tcpSocket probe
+          local tcp_port=""
+          tcp_port=$(echo "$probe_json" | jq -r '.tcpSocket.port // empty' 2>/dev/null)
+          if [[ -n "$tcp_port" ]]; then
+            _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|tcp||${tcp_port}"
+          else
+            # exec probe
+            local exec_cmd=""
+            exec_cmd=$(echo "$probe_json" | jq -r '(.exec.command // []) | join(" ")' 2>/dev/null)
+            if [[ -n "$exec_cmd" ]]; then
+              _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|command|${exec_cmd}|"
+            fi
+          fi
+        fi
+      elif [[ -n "$container_port" ]]; then
+        # No probe but has a port — default to tcp
+        _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|tcp||${container_port}"
+      fi
+      # Neither probe nor port: skip (no health entry)
+
+      _idx=$((_idx + 1))
+    done
+  elif has_cmd python3; then
+    # Full processing via python3 fallback
+    local health_lines=""
+    health_lines=$(echo "$deploy_json" | python3 -c "
+import json, sys
+
+data = json.load(sys.stdin)
+prefix = sys.argv[1] if len(sys.argv) > 1 else ''
+
+for item in data.get('items', []):
+    dep_name = item['metadata']['name']
+    # Strip prefix
+    if prefix and dep_name.startswith(prefix + '-'):
+        svc_name = dep_name[len(prefix)+1:]
+    else:
+        svc_name = dep_name
+
+    # Always output name mapping
+    print('NAME|' + svc_name + '|' + dep_name)
+
+    containers = item.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+    if not containers:
+        print('SVC|' + svc_name)
+        continue
+
+    c = containers[0]
+    ports = c.get('ports', [])
+    container_port = str(ports[0].get('containerPort', '')) if ports else ''
+
+    # Check readinessProbe first, then livenessProbe
+    probe = c.get('readinessProbe') or c.get('livenessProbe')
+
+    if probe:
+        http_get = probe.get('httpGet')
+        tcp_socket = probe.get('tcpSocket')
+        exec_probe = probe.get('exec')
+
+        if http_get:
+            path = http_get.get('path', '/')
+            port = str(http_get.get('port', container_port))
+            print('HEALTH|' + svc_name + '|http|' + path + '|' + port)
+        elif tcp_socket:
+            port = str(tcp_socket.get('port', ''))
+            print('HEALTH|' + svc_name + '|tcp||' + port)
+        elif exec_probe:
+            cmd = ' '.join(exec_probe.get('command', []))
+            print('HEALTH|' + svc_name + '|command|' + cmd + '|')
+        else:
+            if container_port:
+                print('HEALTH|' + svc_name + '|tcp||' + container_port)
+            else:
+                print('SVC|' + svc_name)
+    elif container_port:
+        print('HEALTH|' + svc_name + '|tcp||' + container_port)
+    else:
+        print('SVC|' + svc_name)
+" "$_SCAN_K8S_PREFIX" 2>/dev/null)
+
+    local _line
+    while IFS= read -r _line; do
+      [[ -z "$_line" ]] && continue
+      case "$_line" in
+        NAME\|*)
+          local name_rest="${_line#NAME|}"
+          local n_svc="${name_rest%%|*}"
+          local n_orig="${name_rest#*|}"
+          _SCAN_K8S_NAMES[${#_SCAN_K8S_NAMES[@]}]="${n_svc}|${n_orig}"
+          ;;
+        HEALTH\|*)
+          local rest="${_line#HEALTH|}"
+          local h_svc="${rest%%|*}"
+          local h_rest="${rest#*|}"
+          _scan_add_service "$h_svc"
+          _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${h_svc}|${h_rest}"
+          ;;
+        SVC\|*)
+          local svc_name="${_line#SVC|}"
+          _scan_add_service "$svc_name"
+          ;;
+      esac
+    done <<< "$health_lines"
+  fi
+}
+
+# Look up health info for a service from _SCAN_HEALTH
+# Returns "type|endpoint|port" or empty string
+# Usage: scan_get_health "api"
+scan_get_health() {
+  local svc="$1"
+  local i=0
+  while (( i < ${#_SCAN_HEALTH[@]} )); do
+    local entry="${_SCAN_HEALTH[$i]}"
+    local h_svc="${entry%%|*}"
+    if [[ "$h_svc" == "$svc" ]]; then
+      echo "${entry#*|}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  echo ""
+}
+
+# Look up original k8s deployment name for a service
+# Returns original name or the input if not found
+# Usage: scan_get_k8s_name "api"  →  "waity-api"
+scan_get_k8s_name() {
+  local svc="$1"
+  local i=0
+  while (( i < ${#_SCAN_K8S_NAMES[@]} )); do
+    local entry="${_SCAN_K8S_NAMES[$i]}"
+    local n_svc="${entry%%|*}"
+    if [[ "$n_svc" == "$svc" ]]; then
+      echo "${entry#*|}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  echo "$svc"
 }

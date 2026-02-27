@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Cleanup stuck pods for {{SERVICE_NAME}} on Kubernetes
 
-NAMESPACE="${NAMESPACE:-{{NAMESPACE}}}"
-SERVICE="{{SERVICE_NAME}}"
+NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"
+DEPLOY_NAME="${MUSTER_K8S_DEPLOYMENT:-{{K8S_DEPLOY_NAME}}}"
 
 echo "Cleaning up failed pods..."
 kubectl delete pods -n "$NAMESPACE" \
-  -l app="${SERVICE}" \
+  -l app="${DEPLOY_NAME}" \
   --field-selector=status.phase!=Running \
   2>/dev/null || true
 
-echo "${SERVICE} cleanup complete"
+echo "Cleanup complete"

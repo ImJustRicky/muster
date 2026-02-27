@@ -152,3 +152,18 @@ config_set() {
     return 1
   fi
 }
+
+# Return k8s env vars for a service (from deploy.json .services.<svc>.k8s)
+# Outputs MUSTER_K8S_DEPLOYMENT=name, MUSTER_K8S_NAMESPACE=ns, MUSTER_K8S_SERVICE=svc
+# Usage: k8s_env_for_service "api"
+k8s_env_for_service() {
+  local svc="$1"
+  local deployment namespace
+  deployment=$(config_get ".services.${svc}.k8s.deployment")
+  namespace=$(config_get ".services.${svc}.k8s.namespace")
+  [[ "$deployment" == "null" || -z "$deployment" ]] && return
+  [[ "$namespace" == "null" || -z "$namespace" ]] && namespace="default"
+  echo "MUSTER_K8S_DEPLOYMENT=${deployment}"
+  echo "MUSTER_K8S_NAMESPACE=${namespace}"
+  echo "MUSTER_K8S_SERVICE=${svc}"
+}

@@ -231,7 +231,7 @@ _friendly_name() {
 }
 
 # ── Copy template hooks for a service, replacing placeholders ──
-# Args: stack svc_key svc_name hook_dir [compose_file] [dockerfile] [k8s_dir] [namespace] [port]
+# Args: stack svc_key svc_name hook_dir [compose_file] [dockerfile] [k8s_dir] [namespace] [port] [k8s_deploy_name]
 _setup_copy_hooks() {
   local stack="$1" svc_key="$2" svc_name="$3" hook_dir="$4"
   local compose_path="${5:-docker-compose.yml}"
@@ -239,6 +239,7 @@ _setup_copy_hooks() {
   local k8s_path="${7:-k8s/${svc_name}/}"
   local namespace="${8:-default}"
   local port="${9:-8080}"
+  local k8s_deploy_name="${10:-${svc_name}}"
   local template_dir="${MUSTER_ROOT}/templates/hooks/${stack}"
 
   # Use infrastructure templates for known infra services (skip build steps)
@@ -261,6 +262,7 @@ _setup_copy_hooks() {
     basename=$(basename "$f")
     sed \
       -e "s|{{SERVICE_NAME}}|${svc_name}|g" \
+      -e "s|{{K8S_DEPLOY_NAME}}|${k8s_deploy_name}|g" \
       -e "s|{{SERVICE_IMAGE}}|${svc_image}|g" \
       -e "s|{{NAMESPACE}}|${namespace}|g" \
       -e "s|{{PORT}}|${port}|g" \
@@ -351,6 +353,16 @@ _setup_noninteractive() {
     fi
 
     # Use scanned services if not explicitly provided
+    if [[ -z "$flag_services" && ${#_SCAN_SERVICES[@]} -gt 0 ]]; then
+      selected_services=("${_SCAN_SERVICES[@]}")
+    fi
+  fi
+
+  # ── Live k8s cluster scan ──
+  if [[ "${stack:-$_SCAN_STACK}" == "k8s" ]]; then
+    local resolved_ns
+    resolved_ns=$(_scan_resolve_namespace "${flag_namespace:-}" "$project_path")
+    scan_k8s_cluster "$resolved_ns"
     if [[ -z "$flag_services" && ${#_SCAN_SERVICES[@]} -gt 0 ]]; then
       selected_services=("${_SCAN_SERVICES[@]}")
     fi
@@ -448,11 +460,13 @@ _setup_noninteractive() {
     local key
     key=$(_svc_to_key "$svc")
 
-    # Look up health for this service
+    # Look up health for this service (explicit --health flags first)
     local health_json="{\"enabled\":false}"
+    local found_explicit=false
     local li=0
     while (( li < ${#_h_keys[@]} )); do
       if [[ "${_h_keys[$li]}" == "$svc" || "${_h_keys[$li]}" == "$key" ]]; then
+        found_explicit=true
         local h_spec="${_h_vals[$li]}"
         local h_type="${h_spec%%:*}"
         local h_args="${h_spec#*:}"
@@ -482,6 +496,33 @@ _setup_noninteractive() {
       fi
       li=$((li + 1))
     done
+
+    # Fallback: auto-detect health from k8s cluster scan
+    if [[ "$found_explicit" == "false" ]]; then
+      local auto_health=""
+      auto_health=$(scan_get_health "$svc")
+      [[ -z "$auto_health" ]] && auto_health=$(scan_get_health "$key")
+      if [[ -n "$auto_health" ]]; then
+        local ah_type="${auto_health%%|*}"
+        local ah_rest="${auto_health#*|}"
+        local ah_endpoint="${ah_rest%%|*}"
+        local ah_port="${ah_rest#*|}"
+        case "$ah_type" in
+          http)
+            [[ -z "$ah_endpoint" ]] && ah_endpoint="/health"
+            [[ -z "$ah_port" ]] && ah_port="8080"
+            health_json="{\"type\":\"http\",\"endpoint\":\"${ah_endpoint}\",\"port\":${ah_port},\"timeout\":10,\"enabled\":true}"
+            ;;
+          tcp)
+            [[ -z "$ah_port" ]] && ah_port="0"
+            health_json="{\"type\":\"tcp\",\"port\":${ah_port},\"timeout\":5,\"enabled\":true}"
+            ;;
+          command)
+            health_json="{\"type\":\"command\",\"command\":\"${ah_endpoint}\",\"timeout\":10,\"enabled\":true}"
+            ;;
+        esac
+      fi
+    fi
 
     # Look up creds for this service
     local cred_mode="off"
@@ -547,8 +588,19 @@ _setup_noninteractive() {
     local display_name
     display_name=$(_friendly_name "$svc")
 
+    # Build k8s config block if stack is k8s
+    local k8s_json=""
+    if [[ "$stack" == "k8s" ]]; then
+      local _k8s_deploy _k8s_ns
+      _k8s_deploy=$(scan_get_k8s_name "$svc")
+      [[ -z "$_k8s_deploy" || "$_k8s_deploy" == "$svc" ]] && _k8s_deploy=$(scan_get_k8s_name "$key")
+      [[ -z "$_k8s_deploy" || "$_k8s_deploy" == "$key" ]] && _k8s_deploy="$svc"
+      _k8s_ns="${_SCAN_K8S_NS:-${flag_namespace:-default}}"
+      k8s_json=",\"k8s\":{\"deployment\":\"${_k8s_deploy}\",\"namespace\":\"${_k8s_ns}\"}"
+    fi
+
     [[ "$first" == "true" ]] && first=false || services_json+=","
-    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${remote_json}}"
+    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${remote_json}${k8s_json}}"
     deploy_order_json+="\"${key}\","
   done
 
@@ -565,7 +617,7 @@ _setup_noninteractive() {
   # Resolve detected paths for template generation
   local _detected_compose _detected_dockerfile _detected_k8s
   _detected_compose=$(scan_get_compose_file)
-  local _ns="${flag_namespace:-default}"
+  local _ns="${_SCAN_K8S_NS:-${flag_namespace:-default}}"
   for svc in "${ordered_services[@]}"; do
     local key
     key=$(_svc_to_key "$svc")
@@ -596,11 +648,28 @@ _setup_noninteractive() {
       _hi=$((_hi + 1))
     done
 
+    # Fallback: port from auto-detected k8s health
+    if [[ "$_svc_port" == "8080" ]]; then
+      local _auto_h=""
+      _auto_h=$(scan_get_health "$svc")
+      [[ -z "$_auto_h" ]] && _auto_h=$(scan_get_health "$key")
+      if [[ -n "$_auto_h" ]]; then
+        local _auto_port="${_auto_h##*|}"
+        [[ -n "$_auto_port" ]] && _svc_port="$_auto_port"
+      fi
+    fi
+
+    # Resolve real k8s deployment name (may differ from service key)
+    local _k8s_deploy_name
+    _k8s_deploy_name=$(scan_get_k8s_name "$svc")
+    [[ -z "$_k8s_deploy_name" ]] && _k8s_deploy_name=$(scan_get_k8s_name "$key")
+    [[ -z "$_k8s_deploy_name" || "$_k8s_deploy_name" == "$svc" ]] && _k8s_deploy_name="$svc"
+
     _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
       "${_detected_compose:-docker-compose.yml}" \
       "${_detected_dockerfile:-Dockerfile}" \
       "${_detected_k8s:-k8s/${svc}/}" \
-      "$_ns" "$_svc_port"
+      "$_ns" "$_svc_port" "$_k8s_deploy_name"
   done
 
   # Write deploy.json
@@ -1003,7 +1072,8 @@ cmd_setup() {
         "${_detected_compose:-docker-compose.yml}" \
         "${_detected_dockerfile:-Dockerfile}" \
         "${_detected_k8s:-k8s/${svc}/}" \
-        "default" "${_svc_ports[$_si]:-8080}"
+        "default" "${_svc_ports[$_si]:-8080}" \
+        "$(scan_get_k8s_name "$svc")"
       generated_hooks[${#generated_hooks[@]}]=".muster/hooks/${key}/"
       _si=$((_si + 1))
     done
@@ -1260,7 +1330,8 @@ _setup_manual_flow() {
     mkdir -p "$hook_dir"
     _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
       "docker-compose.yml" "Dockerfile" "k8s/${svc}/" \
-      "default" "${_svc_ports[$_si]:-8080}"
+      "default" "${_svc_ports[$_si]:-8080}" \
+      "$(scan_get_k8s_name "$svc")"
     _si=$((_si + 1))
   done
 

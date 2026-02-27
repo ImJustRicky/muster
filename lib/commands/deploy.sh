@@ -135,6 +135,16 @@ cmd_deploy() {
       local _cred_env_lines=""
       _cred_env_lines=$(cred_env_for_service "$svc")
 
+      # Export k8s config as env vars (hooks read these at runtime)
+      local _k8s_env_lines=""
+      _k8s_env_lines=$(k8s_env_for_service "$svc")
+      if [[ -n "$_k8s_env_lines" ]]; then
+        while IFS='=' read -r _ek _ev; do
+          [[ -z "$_ek" ]] && continue
+          export "$_ek=$_ev"
+        done <<< "$_k8s_env_lines"
+      fi
+
       progress_bar "$current" "$total" "Deploying ${name}..."
       echo ""
 
@@ -143,7 +153,10 @@ cmd_deploy() {
       if remote_is_enabled "$svc"; then
         # ── Remote deploy via SSH ──
         info "Deploying ${name} remotely ($(remote_desc "$svc"))"
-        stream_in_box "$name" "$log_file" remote_exec_stdout "$svc" "$hook" "$_cred_env_lines"
+        local _all_env="${_cred_env_lines}"
+        [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
+${_k8s_env_lines}"
+        stream_in_box "$name" "$log_file" remote_exec_stdout "$svc" "$hook" "$_all_env"
       else
         # ── Local deploy ──
         if [[ -n "$_cred_env_lines" ]]; then
@@ -157,12 +170,20 @@ cmd_deploy() {
       fi
       local rc=$?
 
-      # Clean up exported cred vars (local deploy only)
-      if [[ -n "$_cred_env_lines" ]] && ! remote_is_enabled "$svc"; then
-        while IFS='=' read -r _ck _cv; do
-          [[ -z "$_ck" ]] && continue
-          unset "$_ck"
-        done <<< "$_cred_env_lines"
+      # Clean up exported env vars (local deploy only)
+      if ! remote_is_enabled "$svc"; then
+        if [[ -n "$_cred_env_lines" ]]; then
+          while IFS='=' read -r _ck _cv; do
+            [[ -z "$_ck" ]] && continue
+            unset "$_ck"
+          done <<< "$_cred_env_lines"
+        fi
+      fi
+      if [[ -n "$_k8s_env_lines" ]]; then
+        while IFS='=' read -r _ek _ev; do
+          [[ -z "$_ek" ]] && continue
+          unset "$_ek"
+        done <<< "$_k8s_env_lines"
       fi
 
       if (( rc == 0 )); then
