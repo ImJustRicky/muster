@@ -44,6 +44,8 @@ Or skip the wizard entirely with flags:
 muster setup --scan                                     # auto-detect everything
 muster setup --stack k8s --services api,redis,worker    # explicit
 muster setup --scan --health api=http:/health:3000      # scan + custom health
+muster setup --scan --namespace production              # set k8s namespace
+muster setup --scan --remote api=deploy@prod:/opt/app   # remote SSH deploy
 muster setup --help                                     # see all flags
 ```
 
@@ -56,6 +58,7 @@ muster setup --help                                     # see all flags
 | `muster setup --force` | Overwrite existing deploy.json |
 | `muster deploy` | Deploy all services (respects deploy order) |
 | `muster deploy api` | Deploy a specific service |
+| `muster deploy --dry-run` | Preview deploy plan without executing |
 | `muster status` | Check health of all services |
 | `muster logs` | Stream logs (interactive service picker) |
 | `muster rollback` | Rollback a service |
@@ -136,6 +139,47 @@ Clean, human-readable config:
 
 Operations without hooks are silently skipped — no errors, no empty menu items.
 
+## Dry Run
+
+Preview what a deploy would do — without executing anything:
+
+```bash
+muster deploy --dry-run            # all services
+muster deploy --dry-run api        # single service
+```
+
+Shows the hook script content, credential keys (not values), health check status, remote target, and deploy order. Useful for building confidence before first deploys.
+
+## Remote Deployment (SSH)
+
+Deploy to remote servers via SSH. Hook scripts are piped to the remote host and executed there — output streams back for live display.
+
+```bash
+# Setup with remote targets
+muster setup --scan --remote api=deploy@prod.example.com:/opt/myapp
+
+# Or configure per-service in deploy.json
+```
+
+```json
+{
+  "services": {
+    "api": {
+      "remote": {
+        "enabled": true,
+        "host": "prod.example.com",
+        "user": "deploy",
+        "port": 22,
+        "identity_file": "~/.ssh/deploy_key",
+        "project_dir": "/opt/myapp"
+      }
+    }
+  }
+}
+```
+
+Remote services use `ssh user@host "bash -s" < hook.sh` — credentials are exported on the remote side, never sent over the wire as arguments. Health checks and rollbacks also run remotely. Toggle remote on/off in `muster settings`.
+
 ## Credentials
 
 Off by default. Three modes per service:
@@ -159,6 +203,7 @@ Per-service toggles saved to deploy.json:
 - **Skip deploy** — health-check only, don't deploy
 - **Health check** — enable/disable health verification
 - **Credentials** — cycle through Off / Save always / Once per session / Every time
+- **Remote** — toggle SSH remote deployment on/off per service
 
 ### Global Settings
 

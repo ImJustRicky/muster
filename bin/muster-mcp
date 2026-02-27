@@ -21,6 +21,7 @@ source "$MUSTER_ROOT/lib/core/utils.sh"
 source "$MUSTER_ROOT/lib/core/config.sh"
 source "$MUSTER_ROOT/lib/core/platform.sh"
 source "$MUSTER_ROOT/lib/core/scanner.sh"
+source "$MUSTER_ROOT/lib/core/remote.sh"
 
 # ── Override EXIT trap — utils.sh writes ANSI to stdout which corrupts protocol ──
 trap 'true' EXIT
@@ -347,7 +348,14 @@ tool_list_services() {
     [[ -x "${dir}/.muster/hooks/${svc}/deploy.sh" ]] && has_deploy="true"
     [[ -x "${dir}/.muster/hooks/${svc}/rollback.sh" ]] && has_rollback="true"
     [[ -x "${dir}/.muster/hooks/${svc}/logs.sh" ]] && has_logs="true"
-    output="${output}${svc}: ${name} (health: ${health_type}, deploy: ${has_deploy}, rollback: ${has_rollback}, logs: ${has_logs})\n"
+    local remote_info=""
+    if remote_is_enabled "$svc"; then
+      local r_host r_user
+      r_host=$(config_get ".services.${svc}.remote.host")
+      r_user=$(config_get ".services.${svc}.remote.user")
+      remote_info=", remote: ${r_user}@${r_host}"
+    fi
+    output="${output}${svc}: ${name} (health: ${health_type}, deploy: ${has_deploy}, rollback: ${has_rollback}, logs: ${has_logs}${remote_info})\n"
   done <<< "$services"
 
   printf '%b' "$output"

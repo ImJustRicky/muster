@@ -13,6 +13,8 @@ muster setup --help                  # show all setup flags
 muster             # dashboard (live health + action menu + installed skills)
 muster deploy      # deploy all services
 muster deploy api  # deploy one service
+muster deploy --dry-run        # preview deploy plan without executing
+muster deploy --dry-run api    # dry-run a single service
 muster status      # health check all services
 muster logs <svc>  # stream logs for a service
 muster rollback <svc>  # rollback a service
@@ -32,7 +34,7 @@ muster skill remove <n> # remove a skill
 muster/
 ├── bin/muster                     ← entry point (routes commands)
 ├── bin/muster-mcp                 ← MCP stdio transport (uses shared scanner)
-├── lib/core/                      ← config, colors, logger, platform, utils, scanner, credentials
+├── lib/core/                      ← config, colors, logger, platform, utils, scanner, credentials, remote
 ├── lib/tui/                       ← menu, checklist, spinner, progress, streambox, dashboard, order
 ├── lib/commands/                  ← setup, deploy, status, logs, rollback, cleanup, settings, uninstall
 ├── lib/skills/manager.sh          ← skill lifecycle (reads name from skill.json)
@@ -70,11 +72,13 @@ Edit via `muster settings` (TUI) or `muster settings --global <key> <value>` (sc
 
 Service keys map to hook directories. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. `deploy_order` controls sequencing. Credential modes: `off`, `save` (keychain), `session` (memory), `always` (prompt every time) — never stored in config or git. Service keys with hyphens work (jq bracket notation via `_jq_quote()`).
 
+Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user": "...", "port": 22, "identity_file": "~/.ssh/key", "project_dir": "/opt/app"}`. Hooks are piped via `ssh user@host "bash -s"` with credential env vars exported remotely.
+
 ## Setup Wizard
 
 **Interactive (no flags):** Scan-first TUI wizard. Detects project files (including subdirectories: `docker/`, `k8s/`, `deploy/`, `infra/`), identifies stack and services. User confirms/overrides, sets deploy order, configures health + credentials per service. Falls back to manual questions if nothing detected. Warns if deploy.json already exists. Requires a TTY — errors cleanly if stdin is not interactive.
 
-**Non-interactive (flags):** `muster setup --scan` or `muster setup --services api,redis --stack k8s`. Flags: `--path/-p`, `--scan`, `--stack/-s`, `--services`, `--order`, `--health` (repeatable), `--creds` (repeatable), `--name/-n`, `--force/-f` (overwrite existing config). See `muster setup --help`.
+**Non-interactive (flags):** `muster setup --scan` or `muster setup --services api,redis --stack k8s`. Flags: `--path/-p`, `--scan`, `--stack/-s`, `--services`, `--order`, `--health` (repeatable), `--creds` (repeatable), `--remote` (repeatable, `svc=user@host[:port][:path]`), `--namespace`, `--name/-n`, `--force/-f` (overwrite existing config). See `muster setup --help`.
 
 Both modes generate real hooks from stack templates. Infrastructure services (redis, postgres, etc.) get pull-only templates (no docker build). Scanner uses `.musterignore` and auto-skips `archived/deprecated/old/backup` directories.
 

@@ -4,6 +4,7 @@
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
+source "$MUSTER_ROOT/lib/core/remote.sh"
 
 cmd_rollback() {
   load_config
@@ -58,13 +59,21 @@ cmd_rollback() {
     done <<< "$_cred_env_lines"
   fi
 
+  if remote_is_enabled "$target"; then
+    info "Rolling back ${name} remotely ($(remote_desc "$target"))"
+  fi
+
   start_spinner "Rolling back ${name}..."
-  "$hook" >> "$log_file" 2>&1
+  if remote_is_enabled "$target"; then
+    remote_exec_stdout "$target" "$hook" "$_cred_env_lines" >> "$log_file" 2>&1
+  else
+    "$hook" >> "$log_file" 2>&1
+  fi
   local rc=$?
   stop_spinner
 
-  # Clean up exported cred vars
-  if [[ -n "$_cred_env_lines" ]]; then
+  # Clean up exported cred vars (local only)
+  if [[ -n "$_cred_env_lines" ]] && ! remote_is_enabled "$target"; then
     while IFS='=' read -r _ck _cv; do
       [[ -z "$_ck" ]] && continue
       unset "$_ck"

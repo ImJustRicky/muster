@@ -2,6 +2,7 @@
 # muster/lib/commands/settings.sh — Interactive project settings
 
 source "$MUSTER_ROOT/lib/tui/menu.sh"
+source "$MUSTER_ROOT/lib/core/remote.sh"
 
 # Cycle menu: items cycle through options on Enter, "Back" exits
 # Globals before calling:
@@ -690,6 +691,20 @@ _settings_service_toggles() {
     *)       _TOG_STATES[${#_TOG_STATES[@]}]=0 ;;
   esac
 
+  # Remote — ON/OFF toggle
+  local remote_label="Remote: Off"
+  if remote_is_enabled "$svc"; then
+    remote_label="Remote: $(remote_desc "$svc")"
+  fi
+  _tog_keys[${#_tog_keys[@]}]="remote"
+  _TOG_LABELS[${#_TOG_LABELS[@]}]="$remote_label"
+  _TOG_OPTIONS[${#_TOG_OPTIONS[@]}]="OFF|ON"
+  if remote_is_enabled "$svc"; then
+    _TOG_STATES[${#_TOG_STATES[@]}]=1
+  else
+    _TOG_STATES[${#_TOG_STATES[@]}]=0
+  fi
+
   echo ""
   _toggle_select "$name"
 
@@ -718,6 +733,26 @@ _settings_service_toggles() {
           2) config_set ".services.${svc}.credentials" '{"enabled":true,"mode":"session"}' ;;
           3) config_set ".services.${svc}.credentials" '{"enabled":true,"mode":"always"}' ;;
         esac
+        ;;
+      remote)
+        if (( _TOG_STATES[i] >= 1 )); then
+          # Toggling ON — check if already configured
+          if ! remote_is_enabled "$svc"; then
+            # Prompt for user@host
+            echo ""
+            printf '  %b>%b Remote target (user@host): ' "${ACCENT}" "${RESET}"
+            local _remote_input=""
+            IFS= read -r _remote_input
+            if [[ -n "$_remote_input" ]]; then
+              local _rm_user="${_remote_input%%@*}"
+              local _rm_host="${_remote_input#*@}"
+              config_set ".services.${svc}.remote" "{\"enabled\":true,\"host\":\"${_rm_host}\",\"user\":\"${_rm_user}\",\"port\":22}"
+            fi
+          fi
+        else
+          # Toggling OFF — disable without deleting config
+          config_set ".services.${svc}.remote.enabled" 'false'
+        fi
         ;;
     esac
     i=$((i + 1))

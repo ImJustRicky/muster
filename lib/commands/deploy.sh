@@ -6,6 +6,7 @@ source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/tui/progress.sh"
 source "$MUSTER_ROOT/lib/tui/streambox.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
+source "$MUSTER_ROOT/lib/core/remote.sh"
 
 cmd_deploy() {
   local dry_run=false
@@ -115,6 +116,17 @@ cmd_deploy() {
         echo -e "  ${DIM}Health check:${RESET} ${RED}(disabled)${RESET}"
       fi
 
+      # Show remote status
+      if remote_is_enabled "$svc"; then
+        local _remote_pdir
+        _remote_pdir=$(config_get ".services.${svc}.remote.project_dir")
+        [[ "$_remote_pdir" == "null" ]] && _remote_pdir=""
+        echo -e "  ${DIM}Remote:${RESET} $(remote_desc "$svc") ${GREEN}(enabled)${RESET}"
+        if [[ -n "$_remote_pdir" ]]; then
+          echo -e "  ${DIM}Project dir:${RESET} ${_remote_pdir}"
+        fi
+      fi
+
       echo ""
     else
       # ── Normal deploy ──
@@ -122,22 +134,31 @@ cmd_deploy() {
       # Gather credentials if configured
       local _cred_env_lines=""
       _cred_env_lines=$(cred_env_for_service "$svc")
-      if [[ -n "$_cred_env_lines" ]]; then
-        while IFS='=' read -r _ck _cv; do
-          [[ -z "$_ck" ]] && continue
-          export "$_ck=$_cv"
-        done <<< "$_cred_env_lines"
-      fi
 
       progress_bar "$current" "$total" "Deploying ${name}..."
       echo ""
 
       local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
-      stream_in_box "$name" "$log_file" "$hook"
+
+      if remote_is_enabled "$svc"; then
+        # ── Remote deploy via SSH ──
+        info "Deploying ${name} remotely ($(remote_desc "$svc"))"
+        stream_in_box "$name" "$log_file" remote_exec_stdout "$svc" "$hook" "$_cred_env_lines"
+      else
+        # ── Local deploy ──
+        if [[ -n "$_cred_env_lines" ]]; then
+          while IFS='=' read -r _ck _cv; do
+            [[ -z "$_ck" ]] && continue
+            export "$_ck=$_cv"
+          done <<< "$_cred_env_lines"
+        fi
+
+        stream_in_box "$name" "$log_file" "$hook"
+      fi
       local rc=$?
 
-      # Clean up exported cred vars
-      if [[ -n "$_cred_env_lines" ]]; then
+      # Clean up exported cred vars (local deploy only)
+      if [[ -n "$_cred_env_lines" ]] && ! remote_is_enabled "$svc"; then
         while IFS='=' read -r _ck _cv; do
           [[ -z "$_ck" ]] && continue
           unset "$_ck"
@@ -153,7 +174,17 @@ cmd_deploy() {
         health_enabled=$(config_get ".services.${svc}.health.enabled")
         if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
           start_spinner "Health check: ${name}"
-          if "$health_hook" &>/dev/null; then
+          local _health_ok=false
+          if remote_is_enabled "$svc"; then
+            if remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null; then
+              _health_ok=true
+            fi
+          else
+            if "$health_hook" &>/dev/null; then
+              _health_ok=true
+            fi
+          fi
+          if [[ "$_health_ok" == "true" ]]; then
             stop_spinner
             ok "${name} healthy"
           else
@@ -165,7 +196,11 @@ cmd_deploy() {
               "Rollback ${name}")
                 local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
                 if [[ -x "$rb_hook" ]]; then
-                  "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                  if remote_is_enabled "$svc"; then
+                    remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                  else
+                    "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                  fi
                   ok "${name} rolled back"
                 else
                   err "No rollback hook for ${name}"

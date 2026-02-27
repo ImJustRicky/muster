@@ -322,7 +322,7 @@ HOOK
 _setup_noninteractive() {
   local flag_path="$1" flag_scan="$2" flag_stack="$3" flag_services="$4"
   local flag_order="$5" flag_name="$6" flag_force="$7" flag_namespace="$8"
-  # flag_health and flag_creds are in global arrays _FLAG_HEALTH[] and _FLAG_CREDS[]
+  # flag_health, flag_creds, and flag_remote are in global arrays _FLAG_HEALTH[], _FLAG_CREDS[], _FLAG_REMOTE[]
 
   # ── Resolve project path ──
   local project_path
@@ -425,6 +425,20 @@ _setup_noninteractive() {
     ci=$((ci + 1))
   done
 
+  # ── Build remote map from --remote flags ──
+  # Format: svc=user@host[:port][:path]
+  local _r_keys=()
+  local _r_vals=()
+  local ri=0
+  while (( ri < ${#_FLAG_REMOTE[@]} )); do
+    local spec="${_FLAG_REMOTE[$ri]}"
+    local r_svc="${spec%%=*}"
+    local r_rest="${spec#*=}"
+    _r_keys[${#_r_keys[@]}]="$r_svc"
+    _r_vals[${#_r_vals[@]}]="$r_rest"
+    ri=$((ri + 1))
+  done
+
   # ── Build services JSON ──
   local services_json="{"
   local deploy_order_json="["
@@ -486,11 +500,55 @@ _setup_noninteractive() {
       *) cred_mode="off" ;;
     esac
 
+    # Look up remote for this service
+    local remote_json=""
+    li=0
+    while (( li < ${#_r_keys[@]} )); do
+      if [[ "${_r_keys[$li]}" == "$svc" || "${_r_keys[$li]}" == "$key" ]]; then
+        local r_spec="${_r_vals[$li]}"
+        # Parse user@host[:port][:path]
+        local r_user="${r_spec%%@*}"
+        local r_after_user="${r_spec#*@}"
+        local r_host="" r_port="22" r_project_dir=""
+
+        # Split on colons: host[:port][:path]
+        # host is everything up to the first colon (or the whole string)
+        r_host="${r_after_user%%:*}"
+        local r_remainder="${r_after_user#*:}"
+
+        if [[ "$r_remainder" != "$r_after_user" ]]; then
+          # There was at least one colon after host
+          local r_first_part="${r_remainder%%:*}"
+          local r_second_remainder="${r_remainder#*:}"
+
+          if [[ "$r_first_part" == /* ]]; then
+            # First part starts with / — it's a path, no port
+            r_project_dir="$r_first_part"
+          else
+            # First part is a port number
+            r_port="$r_first_part"
+            # Check for a second part (path)
+            if [[ "$r_second_remainder" != "$r_remainder" ]]; then
+              r_project_dir="$r_second_remainder"
+            fi
+          fi
+        fi
+
+        remote_json=",\"remote\":{\"enabled\":true,\"host\":\"${r_host}\",\"user\":\"${r_user}\",\"port\":${r_port}"
+        if [[ -n "$r_project_dir" ]]; then
+          remote_json="${remote_json},\"project_dir\":\"${r_project_dir}\""
+        fi
+        remote_json="${remote_json}}"
+        break
+      fi
+      li=$((li + 1))
+    done
+
     local display_name
     display_name=$(_friendly_name "$svc")
 
     [[ "$first" == "true" ]] && first=false || services_json+=","
-    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}}"
+    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${remote_json}}"
     deploy_order_json+="\"${key}\","
   done
 
@@ -597,6 +655,7 @@ print(json.dumps(data, indent=2))
 # ══════════════════════════════════════════════════════════════
 _FLAG_HEALTH=()
 _FLAG_CREDS=()
+_FLAG_REMOTE=()
 
 cmd_setup() {
   # ── Parse flags ──
@@ -604,6 +663,7 @@ cmd_setup() {
   local flag_order="" flag_name="" flag_force="false" flag_namespace=""
   _FLAG_HEALTH=()
   _FLAG_CREDS=()
+  _FLAG_REMOTE=()
   local has_flags=false
 
   while [[ $# -gt 0 ]]; do
@@ -623,6 +683,8 @@ cmd_setup() {
         _FLAG_HEALTH[${#_FLAG_HEALTH[@]}]="$2"; shift 2 ;;
       --creds)
         _FLAG_CREDS[${#_FLAG_CREDS[@]}]="$2"; shift 2 ;;
+      --remote)
+        _FLAG_REMOTE[${#_FLAG_REMOTE[@]}]="$2"; shift 2 ;;
       --name|-n)
         flag_name="$2"; shift 2 ;;
       --namespace)
@@ -642,6 +704,7 @@ cmd_setup() {
         echo "  --order <list>        Comma-separated deploy order (default: services order)"
         echo "  --health <spec>       Per-service health: svc=type[:arg:arg] (repeatable)"
         echo "  --creds <spec>        Per-service credentials: svc=mode (repeatable)"
+        echo "  --remote <spec>       Per-service remote: svc=user@host[:port][:path] (repeatable)"
         echo "  --namespace <ns>      Kubernetes namespace (default: default)"
         echo "  --name, -n <name>     Project name (default: directory basename)"
         echo "  --force, -f           Overwrite existing deploy.json without prompting"
@@ -653,6 +716,12 @@ cmd_setup() {
         echo "  --health api=none"
         echo ""
         echo "Credential modes: off, save, session, always"
+        echo ""
+        echo "Remote spec examples:"
+        echo "  --remote api=deploy@prod.example.com"
+        echo "  --remote api=deploy@prod.example.com:2222"
+        echo "  --remote api=deploy@prod.example.com:/opt/myapp"
+        echo "  --remote api=deploy@prod.example.com:2222:/opt/myapp"
         echo ""
         echo "Examples:"
         echo "  muster setup --path /app --scan"
@@ -922,6 +991,7 @@ cmd_setup() {
     local generated_hooks=()
     local _detected_compose _detected_dockerfile _detected_k8s
     _detected_compose=$(scan_get_compose_file)
+    local _si=0
     for svc in "${selected_services[@]}"; do
       local key
       key=$(_svc_to_key "$svc")
@@ -932,8 +1002,10 @@ cmd_setup() {
       _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
         "${_detected_compose:-docker-compose.yml}" \
         "${_detected_dockerfile:-Dockerfile}" \
-        "${_detected_k8s:-k8s/${svc}/}"
+        "${_detected_k8s:-k8s/${svc}/}" \
+        "default" "${_svc_ports[$_si]:-8080}"
       generated_hooks[${#generated_hooks[@]}]=".muster/hooks/${key}/"
+      _si=$((_si + 1))
     done
 
     # Write deploy.json
@@ -1098,6 +1170,7 @@ _setup_manual_flow() {
   local deploy_order_json="["
   local first=true
   local svc_index=0
+  local _svc_ports=()
 
   for svc in "${selected_services[@]}"; do
     svc_index=$((svc_index + 1))
@@ -1110,6 +1183,7 @@ _setup_manual_flow() {
     local health_choice="$MENU_RESULT"
 
     local health_json="{}"
+    local port_num=""
     case "$health_choice" in
       HTTP)
         printf "\n  ${ACCENT}>${RESET} Health endpoint [/health]: "
@@ -1132,6 +1206,7 @@ _setup_manual_flow() {
         health_json="{\"enabled\":false}"
         ;;
     esac
+    _svc_ports[${#_svc_ports[@]}]="${port_num:-8080}"
 
     # Credentials
     _SETUP_CUR_SUMMARY=(
@@ -1177,12 +1252,16 @@ _setup_manual_flow() {
   mkdir -p "${muster_dir}/hooks"
   mkdir -p "${muster_dir}/logs"
 
+  local _si=0
   for svc in "${selected_services[@]}"; do
     local key
     key=$(_svc_to_key "$svc")
     local hook_dir="${muster_dir}/hooks/${key}"
     mkdir -p "$hook_dir"
-    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir"
+    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
+      "docker-compose.yml" "Dockerfile" "k8s/${svc}/" \
+      "default" "${_svc_ports[$_si]:-8080}"
+    _si=$((_si + 1))
   done
 
   if has_cmd jq; then

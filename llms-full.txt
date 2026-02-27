@@ -21,6 +21,7 @@ muster/
 │   │   ├── colors.sh              ← ANSI color constants
 │   │   ├── config.sh              ← deploy.json + ~/.muster/settings.json reader/writer
 │   │   ├── credentials.sh         ← credential storage (keychain/session/prompt)
+│   │   ├── remote.sh              ← SSH remote execution wrapper
 │   │   ├── logger.sh              ← log/warn/err/ok/info functions
 │   │   ├── platform.sh            ← OS/arch/tool detection
 │   │   ├── scanner.sh             ← project file/service/stack detection (subdirs, .musterignore)
@@ -87,6 +88,8 @@ your-project/
 | `muster setup` | Interactive setup wizard, or non-interactive with flags (`--help`) |
 | `muster deploy` | Deploy all services (respects deploy order) |
 | `muster deploy <svc>` | Deploy a specific service |
+| `muster deploy --dry-run` | Preview deploy plan without executing |
+| `muster deploy --dry-run <svc>` | Dry-run a single service |
 | `muster status` | Check health of all services |
 | `muster logs [svc]` | Stream logs (interactive picker if no arg) |
 | `muster rollback [svc]` | Rollback a service |
@@ -140,6 +143,8 @@ your-project/
 ```
 
 Service keys (e.g. `api`, `redis`) map to hook directories at `.muster/hooks/<key>/`. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. Services with `skip_deploy: true` are health-checked but not deployed. Credential modes: `off` (none), `save` (macOS Keychain), `session` (in-memory for current session), `always` (prompt every time) — actual credentials never stored in deploy.json or git.
+
+Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user": "...", "port": 22, "identity_file": "~/.ssh/key", "project_dir": "/opt/app"}`. Hooks are piped via `ssh user@host "bash -s"`. Health checks and rollbacks also route through SSH when remote is enabled.
 
 ## Entry Point: bin/muster
 
@@ -215,6 +220,17 @@ Five output functions, each with colored prefix icon:
 - `err()` — red `x`
 - `ok()` — green `*`
 - `info()` — accent `i`
+
+### remote.sh
+
+SSH remote execution wrapper. Reads `remote.*` config per service from deploy.json.
+
+- `remote_is_enabled(svc)` — checks if `.services.<svc>.remote.enabled` is `"true"`
+- `_remote_load_config(svc)` — sets `_REMOTE_HOST`, `_REMOTE_USER`, `_REMOTE_PORT`, `_REMOTE_IDENTITY`, `_REMOTE_PROJECT_DIR`
+- `_remote_build_opts()` — builds `_SSH_OPTS` string: `ConnectTimeout=10`, `StrictHostKeyChecking=accept-new`, `BatchMode=yes`, optional `-i` (with `~` expansion) and `-p`
+- `remote_exec_stdout(svc, hook_file, cred_env_lines)` — builds wrapper script (credential exports + cd to project_dir + hook content), pipes via `ssh ... "bash -s"` to stdout. Works directly with `stream_in_box`.
+- `remote_check(svc)` — quick `ssh ... "echo ok"` connectivity test
+- `remote_desc(svc)` — returns `"user@host:port"` display string
 
 ### platform.sh
 
@@ -296,6 +312,7 @@ Two sections: Project Settings and Muster Settings.
 - Skip deploy: `OFF|ON`
 - Health check: `ON|OFF`
 - Credentials: `Off|Save always|Once per session|Every time`
+- Remote: `Off` / `user@host:port` (toggle on/off, prompts for host when enabling)
 
 Uses pipe-separated option strings for cycling. Saves changes to deploy.json via `config_set()`. Also provides "Open config" which opens Finder (macOS), xdg-open (Linux), or prints path (headless).
 
@@ -340,6 +357,8 @@ Any flag triggers non-interactive mode — no TUI, plain text output only. Flags
 | `--order <list>` | | Comma-separated deploy order | same as `--services` order |
 | `--health <spec>` | | Per-service: `svc=type[:endpoint:port]` (repeatable) | `none` for all |
 | `--creds <spec>` | | Per-service: `svc=mode` (repeatable) | `off` for all |
+| `--remote <spec>` | | Per-service: `svc=user@host[:port][:path]` (repeatable) | off |
+| `--namespace <ns>` | | Kubernetes namespace for k8s templates | `default` |
 | `--name <name>` | `-n` | Project name | directory basename |
 | `--force` | `-f` | Overwrite existing deploy.json | off |
 | `--help` | `-h` | Show usage and examples | |
@@ -352,15 +371,23 @@ Banner box: drawn with `printf '%b'` (not `echo -e`) to handle ANSI codes correc
 
 ## Deploy Flow (deploy.sh)
 
+Supports `--dry-run` flag and remote SSH execution.
+
+**Dry-run mode** (`muster deploy --dry-run`):
+1. For each service: show hook path, first 10 lines of hook content, credential key names (not values), health check status, remote target if configured
+2. No hooks executed, no health checks, no rollback menu
+3. Output prefixed with `[DRY-RUN]`
+
+**Normal mode:**
 1. Load config, determine target (all or specific service)
 2. For each service in `deploy_order`:
    a. Show progress bar
-   b. Gather credentials via `cred_env_for_service()`, export as `MUSTER_CRED_*`
-   c. Run `deploy.sh` hook inside `stream_in_box` (live log output)
-   d. Unset `MUSTER_CRED_*` env vars
-   e. If deploy succeeds and `health.enabled` is true, run `health.sh` with spinner
+   b. Gather credentials via `cred_env_for_service()`
+   c. If `remote.enabled`: run hook via `remote_exec_stdout` (SSH, creds exported on remote side)
+   d. If local: export `MUSTER_CRED_*`, run `deploy.sh` hook inside `stream_in_box`, unset creds
+   e. If deploy succeeds and `health.enabled` is true, run `health.sh` (remotely if configured) with spinner
    f. If health fails: menu offers "Continue anyway" / "Rollback" / "Abort"
-   g. Rollback runs `rollback.sh` hook if available
+   g. Rollback runs `rollback.sh` hook (remotely if configured)
 3. Show "Deploy complete" on success
 
 ## Hook Templates

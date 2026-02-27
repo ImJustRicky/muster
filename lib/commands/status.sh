@@ -2,6 +2,7 @@
 # muster/lib/commands/status.sh — Service health status
 
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
+source "$MUSTER_ROOT/lib/core/remote.sh"
 
 cmd_status() {
   load_config
@@ -28,19 +29,34 @@ cmd_status() {
     local health_enabled
     health_enabled=$(config_get ".services.${svc}.health.enabled")
 
+    local _remote_tag=""
+    if remote_is_enabled "$svc"; then
+      _remote_tag=" ${DIM}($(remote_desc "$svc"))${RESET}"
+    fi
+
     if [[ "$health_enabled" == "false" ]]; then
-      echo -e "  ${GRAY}○${RESET} ${name} ${DIM}(disabled)${RESET}"
+      echo -e "  ${GRAY}○${RESET} ${name}${_remote_tag} ${DIM}(disabled)${RESET}"
     elif [[ -x "$hook" ]]; then
       start_spinner "Checking ${name}..."
-      if "$hook" &>/dev/null; then
+      local _health_ok=false
+      if remote_is_enabled "$svc"; then
+        if remote_exec_stdout "$svc" "$hook" "" &>/dev/null; then
+          _health_ok=true
+        fi
+      else
+        if "$hook" &>/dev/null; then
+          _health_ok=true
+        fi
+      fi
+      if [[ "$_health_ok" == "true" ]]; then
         stop_spinner
-        echo -e "  ${GREEN}●${RESET} ${name}"
+        echo -e "  ${GREEN}●${RESET} ${name}${_remote_tag}"
       else
         stop_spinner
-        echo -e "  ${RED}●${RESET} ${name}"
+        echo -e "  ${RED}●${RESET} ${name}${_remote_tag}"
       fi
     else
-      echo -e "  ${GRAY}○${RESET} ${name} ${DIM}(no health check)${RESET}"
+      echo -e "  ${GRAY}○${RESET} ${name}${_remote_tag} ${DIM}(no health check)${RESET}"
     fi
   done <<< "$services"
 
