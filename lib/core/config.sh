@@ -166,4 +166,9 @@ k8s_env_for_service() {
   echo "MUSTER_K8S_DEPLOYMENT=${deployment}"
   echo "MUSTER_K8S_NAMESPACE=${namespace}"
   echo "MUSTER_K8S_SERVICE=${svc}"
+  local deploy_timeout
+  deploy_timeout=$(config_get ".services.${svc}.deploy_timeout")
+  if [[ -n "$deploy_timeout" && "$deploy_timeout" != "null" ]]; then
+    echo "MUSTER_DEPLOY_TIMEOUT=${deploy_timeout}"
+  fi
 }

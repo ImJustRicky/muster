@@ -19,6 +19,6 @@ kubectl set image "deployment/${DEPLOY_NAME}" \
 
 # Wait for rollout
 echo "Waiting for rollout..."
-kubectl rollout status "deployment/${DEPLOY_NAME}" -n "$NAMESPACE" --timeout=120s
+kubectl rollout status "deployment/${DEPLOY_NAME}" -n "$NAMESPACE" --timeout="${MUSTER_DEPLOY_TIMEOUT:-120}s"
 
 echo "${SERVICE} deployed"

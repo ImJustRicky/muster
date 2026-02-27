@@ -10,6 +10,6 @@ echo "Rolling back ${SERVICE}..."
 kubectl rollout undo "deployment/${DEPLOY_NAME}" -n "$NAMESPACE"
 
 echo "Waiting for rollback..."
-kubectl rollout status "deployment/${DEPLOY_NAME}" -n "$NAMESPACE" --timeout=120s
+kubectl rollout status "deployment/${DEPLOY_NAME}" -n "$NAMESPACE" --timeout="${MUSTER_DEPLOY_TIMEOUT:-120}s"
 
 echo "${SERVICE} rolled back"

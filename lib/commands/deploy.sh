@@ -153,27 +153,128 @@ cmd_deploy() {
       progress_bar "$current" "$total" "Deploying ${name}..."
       echo ""
 
-      local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
+      while true; do
+        local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
 
-      if remote_is_enabled "$svc"; then
-        # ── Remote deploy via SSH ──
-        info "Deploying ${name} remotely ($(remote_desc "$svc"))"
-        local _all_env="${_cred_env_lines}"
-        [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
+        if remote_is_enabled "$svc"; then
+          # ── Remote deploy via SSH ──
+          info "Deploying ${name} remotely ($(remote_desc "$svc"))"
+          local _all_env="${_cred_env_lines}"
+          [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
 ${_k8s_env_lines}"
-        stream_in_box "$name" "$log_file" remote_exec_stdout "$svc" "$hook" "$_all_env"
-      else
-        # ── Local deploy ──
-        if [[ -n "$_cred_env_lines" ]]; then
-          while IFS='=' read -r _ck _cv; do
-            [[ -z "$_ck" ]] && continue
-            export "$_ck=$_cv"
-          done <<< "$_cred_env_lines"
-        fi
+          stream_in_box "$name" "$log_file" remote_exec_stdout "$svc" "$hook" "$_all_env"
+        else
+          # ── Local deploy ──
+          if [[ -n "$_cred_env_lines" ]]; then
+            while IFS='=' read -r _ck _cv; do
+              [[ -z "$_ck" ]] && continue
+              export "$_ck=$_cv"
+            done <<< "$_cred_env_lines"
+          fi
 
-        stream_in_box "$name" "$log_file" "$hook"
-      fi
-      local rc=$?
+          stream_in_box "$name" "$log_file" "$hook"
+        fi
+        local rc=$?
+
+        if (( rc == 0 )); then
+          ok "${name} deployed"
+          _history_log_event "$svc" "deploy" "ok"
+          run_skill_hooks "post-deploy" "$svc"
+
+          # Run health check
+          local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"
+          local health_enabled
+          health_enabled=$(config_get ".services.${svc}.health.enabled")
+          if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
+            start_spinner "Health check: ${name}"
+            local _health_ok=false
+            if remote_is_enabled "$svc"; then
+              if remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null; then
+                _health_ok=true
+              fi
+            else
+              if "$health_hook" &>/dev/null; then
+                _health_ok=true
+              fi
+            fi
+            if [[ "$_health_ok" == "true" ]]; then
+              stop_spinner
+              ok "${name} healthy"
+            else
+              stop_spinner
+              err "${name} health check failed"
+              echo ""
+              menu_select "Health check failed. What do you want to do?" "Continue anyway" "Rollback ${name}" "Abort"
+              case "$MENU_RESULT" in
+                "Rollback ${name}")
+                  local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
+                  if [[ -x "$rb_hook" ]]; then
+                    if remote_is_enabled "$svc"; then
+                      remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                    else
+                      "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                    fi
+                    ok "${name} rolled back"
+                    _history_log_event "$svc" "rollback" "ok"
+                  else
+                    err "No rollback hook for ${name}"
+                  fi
+                  ;;
+                "Abort")
+                  err "Deploy aborted"
+                  _unload_env_file
+                  return 1
+                  ;;
+              esac
+            fi
+          fi
+          break
+        else
+          err "${name} deploy failed (exit code ${rc})"
+          _history_log_event "$svc" "deploy" "failed"
+
+          # Show last few lines of log for context
+          echo ""
+          if [[ -f "$log_file" ]]; then
+            tail -5 "$log_file" | while IFS= read -r _line; do
+              echo -e "  ${DIM}${_line}${RESET}"
+            done
+          fi
+          echo ""
+
+          menu_select "Deploy failed. What do you want to do?" "Retry" "Rollback ${name}" "Skip and continue" "Abort"
+
+          case "$MENU_RESULT" in
+            "Retry")
+              ;; # loop continues
+            "Rollback ${name}")
+              local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
+              if [[ -x "$rb_hook" ]]; then
+                start_spinner "Rolling back ${name}..."
+                if remote_is_enabled "$svc"; then
+                  remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+                else
+                  "$rb_hook" >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+                fi
+                stop_spinner
+                ok "${name} rolled back"
+                _history_log_event "$svc" "rollback" "ok"
+              else
+                err "No rollback hook for ${name}"
+              fi
+              break
+              ;;
+            "Skip and continue")
+              warn "Skipping ${name}, continuing with next service"
+              break
+              ;;
+            "Abort")
+              _unload_env_file
+              return 1
+              ;;
+          esac
+        fi
+      done
 
       # Clean up exported env vars (local deploy only)
       if ! remote_is_enabled "$svc"; then
@@ -189,63 +290,6 @@ ${_k8s_env_lines}"
           [[ -z "$_ek" ]] && continue
           unset "$_ek"
         done <<< "$_k8s_env_lines"
-      fi
-
-      if (( rc == 0 )); then
-        ok "${name} deployed"
-        _history_log_event "$svc" "deploy" "ok"
-        run_skill_hooks "post-deploy" "$svc"
-
-        # Run health check
-        local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"
-        local health_enabled
-        health_enabled=$(config_get ".services.${svc}.health.enabled")
-        if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
-          start_spinner "Health check: ${name}"
-          local _health_ok=false
-          if remote_is_enabled "$svc"; then
-            if remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null; then
-              _health_ok=true
-            fi
-          else
-            if "$health_hook" &>/dev/null; then
-              _health_ok=true
-            fi
-          fi
-          if [[ "$_health_ok" == "true" ]]; then
-            stop_spinner
-            ok "${name} healthy"
-          else
-            stop_spinner
-            err "${name} health check failed"
-            echo ""
-            menu_select "Health check failed. What do you want to do?" "Continue anyway" "Rollback ${name}" "Abort"
-            case "$MENU_RESULT" in
-              "Rollback ${name}")
-                local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
-                if [[ -x "$rb_hook" ]]; then
-                  if remote_is_enabled "$svc"; then
-                    remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
-                  else
-                    "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
-                  fi
-                  ok "${name} rolled back"
-                else
-                  err "No rollback hook for ${name}"
-                fi
-                ;;
-              "Abort")
-                err "Deploy aborted"
-                return 1
-                ;;
-            esac
-          fi
-        fi
-      else
-        err "${name} deploy failed (exit code ${rc})"
-        err "Log: ${log_file}"
-        _history_log_event "$svc" "deploy" "failed"
-        return 1
       fi
 
       echo ""

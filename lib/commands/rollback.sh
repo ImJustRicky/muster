@@ -18,13 +18,13 @@ cmd_rollback() {
 
   # If no target, let user pick from services that have rollback hooks
   if [[ -z "$target" ]]; then
-    local -a rollback_services=()
+    local rollback_services=()
     local services
     services=$(config_services)
 
     while IFS= read -r svc; do
       [[ -z "$svc" ]] && continue
-      [[ -x "${project_dir}/.muster/hooks/${svc}/rollback.sh" ]] && rollback_services+=("$svc")
+      [[ -x "${project_dir}/.muster/hooks/${svc}/rollback.sh" ]] && rollback_services[${#rollback_services[@]}]="$svc"
     done <<< "$services"
 
     if [[ ${#rollback_services[@]} -eq 0 ]]; then
@@ -32,7 +32,8 @@ cmd_rollback() {
       return 1
     fi
 
-    menu_select target "Rollback which service?" "${rollback_services[@]}"
+    menu_select "Rollback which service?" "${rollback_services[@]}"
+    target="$MENU_RESULT"
   fi
 
   local hook="${project_dir}/.muster/hooks/${target}/rollback.sh"
@@ -50,7 +51,6 @@ cmd_rollback() {
 
   local log_dir="${project_dir}/.muster/logs"
   mkdir -p "$log_dir"
-  local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
   # Gather credentials if configured
   local _cred_env_lines=""
@@ -78,17 +78,65 @@ cmd_rollback() {
     info "Rolling back ${name} remotely ($(remote_desc "$target"))"
   fi
 
-  start_spinner "Rolling back ${name}..."
-  if remote_is_enabled "$target"; then
-    local _all_env="${_cred_env_lines}"
-    [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
+  while true; do
+    local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
+
+    start_spinner "Rolling back ${name}..."
+    if remote_is_enabled "$target"; then
+      local _all_env="${_cred_env_lines}"
+      [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
 ${_k8s_env_lines}"
-    remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
-  else
-    "$hook" >> "$log_file" 2>&1
-  fi
-  local rc=$?
-  stop_spinner
+      remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
+    else
+      "$hook" >> "$log_file" 2>&1
+    fi
+    local rc=$?
+    stop_spinner
+
+    if (( rc == 0 )); then
+      ok "${name} rolled back successfully"
+      _history_log_event "$target" "rollback" "ok"
+      run_skill_hooks "post-rollback" "$target"
+      break
+    else
+      err "${name} rollback failed (exit code ${rc})"
+      _history_log_event "$target" "rollback" "failed"
+
+      # Show last few lines of log for context
+      echo ""
+      if [[ -f "$log_file" ]]; then
+        tail -5 "$log_file" | while IFS= read -r _line; do
+          echo -e "  ${DIM}${_line}${RESET}"
+        done
+      fi
+      echo ""
+
+      menu_select "Rollback failed. What do you want to do?" "Retry" "Force cleanup and retry" "Abort"
+
+      case "$MENU_RESULT" in
+        "Retry")
+          ;; # loop continues
+        "Force cleanup and retry")
+          local cleanup_hook="${project_dir}/.muster/hooks/${target}/cleanup.sh"
+          if [[ -x "$cleanup_hook" ]]; then
+            start_spinner "Running cleanup for ${name}..."
+            if remote_is_enabled "$target"; then
+              remote_exec_stdout "$target" "$cleanup_hook" "" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+            else
+              "$cleanup_hook" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+            fi
+            stop_spinner
+            ok "${name} cleaned up"
+          else
+            warn "No cleanup hook for ${name}, retrying rollback anyway"
+          fi
+          ;; # loop continues with rollback retry
+        "Abort")
+          break
+          ;;
+      esac
+    fi
+  done
 
   # Clean up exported cred vars (local only)
   if [[ -n "$_cred_env_lines" ]] && ! remote_is_enabled "$target"; then
@@ -105,15 +153,6 @@ ${_k8s_env_lines}"
     done <<< "$_k8s_env_lines"
   fi
 
-  if (( rc == 0 )); then
-    ok "${name} rolled back successfully"
-    _history_log_event "$target" "rollback" "ok"
-    run_skill_hooks "post-rollback" "$target"
-  else
-    err "${name} rollback failed (exit code ${rc})"
-    err "Log: ${log_file}"
-    _history_log_event "$target" "rollback" "failed"
-  fi
   echo ""
 
   _unload_env_file
