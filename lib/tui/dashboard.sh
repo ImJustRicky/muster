@@ -3,6 +3,7 @@
 
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
+source "$MUSTER_ROOT/lib/core/updater.sh"
 
 _dashboard_pause() {
   echo ""
@@ -112,8 +113,18 @@ cmd_dashboard() {
     return 1
   fi
 
+  # Kick off background update check (non-blocking)
+  update_check_start
+
   while true; do
     _dashboard_header
+
+    # Collect background update check result
+    update_check_collect
+    if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
+      echo -e "  ${YELLOW}!${RESET} ${DIM}A new version of muster is available${RESET}"
+      echo ""
+    fi
 
     # Collect available actions
     local actions=()
@@ -161,6 +172,9 @@ cmd_dashboard() {
       done
     fi
 
+    if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
+      actions[${#actions[@]}]="Update muster"
+    fi
     actions[${#actions[@]}]="Quit"
 
     menu_select "Actions" "${actions[@]}"
@@ -225,6 +239,9 @@ cmd_dashboard() {
           skill_run "$_run_name"
           _dashboard_pause
         fi
+        ;;
+      "Update muster")
+        update_apply
         ;;
       Quit)
         echo ""
