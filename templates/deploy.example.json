@@ -5,42 +5,41 @@
   "services": {
     "api": {
       "name": "API Server",
-      "type": "docker",
-      "port": 8080,
       "health": {
         "type": "http",
         "endpoint": "/health",
         "port": 8080,
-        "timeout": 10
+        "timeout": 10,
+        "enabled": true
       },
       "credentials": {
-        "enabled": false,
-        "risk_level": "high"
+        "mode": "off"
       },
-      "depends_on": ["redis", "postgres"]
+      "skip_deploy": false
     },
     "redis": {
       "name": "Redis",
-      "type": "docker",
-      "port": 6379,
       "health": {
         "type": "tcp",
         "port": 6379,
-        "timeout": 5
+        "timeout": 5,
+        "enabled": true
+      },
+      "credentials": {
+        "mode": "off"
       }
     },
     "postgres": {
       "name": "PostgreSQL",
-      "type": "managed",
       "skip_deploy": true,
       "health": {
         "type": "tcp",
         "port": 5432,
-        "timeout": 5
+        "timeout": 5,
+        "enabled": true
       },
       "credentials": {
-        "enabled": false,
-        "risk_level": "high"
+        "mode": "save"
       }
     }
   },

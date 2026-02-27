@@ -13,6 +13,7 @@ muster status      # health check all services
 muster logs <svc>  # stream logs for a service
 muster rollback <svc>  # rollback a service
 muster cleanup     # clean stuck processes + old logs
+muster settings    # view and edit project settings
 muster uninstall   # remove muster from project
 muster skill add <url>  # install a skill addon
 muster skill list       # list installed skills
@@ -25,11 +26,12 @@ muster skill remove <n> # remove a skill
 muster/
 ├── bin/muster                     ← entry point (routes commands)
 ├── bin/muster-mcp                 ← MCP stdio transport (LLM tool interface)
-├── lib/core/                      ← config, colors, logger, platform, utils
-├── lib/tui/                       ← menu, checklist, spinner, progress, streambox, dashboard
-├── lib/commands/                  ← setup, deploy, status, logs, rollback, cleanup, uninstall
+├── lib/core/                      ← config, colors, logger, platform, utils, scanner, credentials
+├── lib/tui/                       ← menu, checklist, spinner, progress, streambox, dashboard, order
+├── lib/commands/                  ← setup, deploy, status, logs, rollback, cleanup, settings, uninstall
 ├── lib/skills/manager.sh          ← skill lifecycle
 ├── templates/deploy.example.json  ← example config
+├── templates/hooks/               ← stack-specific hook templates (k8s, compose, docker, bare)
 └── docs/skills.md                 ← skill authoring guide
 ```
 
@@ -45,7 +47,11 @@ your-project/
 
 ## Config (deploy.json)
 
-Service keys map to hook directories. Health types: `http`, `tcp`, `command`, `null`. `deploy_order` controls sequencing. Credentials never stored in config.
+Service keys map to hook directories. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. `deploy_order` controls sequencing. Credential modes: `off`, `save` (keychain), `session` (memory), `always` (prompt every time) — never stored in config or git.
+
+## Setup Wizard
+
+Scan-first: detects project files (k8s manifests, docker-compose, Dockerfiles, language files), identifies stack and services automatically. User confirms/overrides stack, selects services, sets deploy order, configures health + credentials per service. Generates real working hooks from stack templates (`templates/hooks/{k8s,compose,docker,bare}/`). Falls back to manual question flow if nothing detected.
 
 ## Bash 3.2 Rules
 

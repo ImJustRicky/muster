@@ -34,7 +34,7 @@ export PATH="$PATH:/path/to/muster/bin"
 
 ```bash
 cd your-project
-muster setup      # guided wizard — creates deploy.json + hook scripts
+muster setup      # guided wizard — scans project, creates deploy.json + hook scripts
 muster             # open the dashboard
 ```
 
@@ -43,13 +43,14 @@ muster             # open the dashboard
 | Command | Description |
 |---------|-------------|
 | `muster` | Dashboard — live health/status view with action menu |
-| `muster setup` | Guided setup wizard |
+| `muster setup` | Guided setup wizard (scans project, generates hooks) |
 | `muster deploy` | Deploy all services (respects deploy order) |
 | `muster deploy api` | Deploy a specific service |
 | `muster status` | Check health of all services |
 | `muster logs` | Stream logs (interactive service picker) |
 | `muster rollback` | Rollback a service |
 | `muster cleanup` | Clean up stuck processes and old logs |
+| `muster settings` | View and edit project settings |
 | `muster uninstall` | Remove muster from project |
 | `muster skill add <url>` | Install a skill addon |
 | `muster skill list` | List installed skills |
@@ -59,6 +60,14 @@ muster             # open the dashboard
 
 muster is an **orchestrator**, not a deployment tool. Your project provides hook scripts that do the actual work — muster runs them in order, shows beautiful output, and verifies health.
 
+### Smart Setup
+
+`muster setup` scans your project first — detects Dockerfiles, docker-compose configs, Kubernetes manifests, language files, and config references. It identifies your stack (k8s, compose, docker, or bare metal) and discovers services automatically.
+
+You confirm what it found, set deploy order, configure health checks and credentials per service, and muster generates **real working hook scripts** from stack-specific templates — not empty stubs.
+
+If nothing is detected (empty project), it falls back to a conversational question flow.
+
 ### Setup creates this in your project:
 
 ```
@@ -67,12 +76,15 @@ your-project/
 └── .muster/
     └── hooks/
         ├── api/
-        │   ├── deploy.sh    ← your deploy logic
-        │   ├── health.sh    ← your health check
-        │   └── rollback.sh  ← your rollback logic
+        │   ├── deploy.sh    ← real deploy commands for your stack
+        │   ├── health.sh    ← real health check
+        │   ├── rollback.sh  ← real rollback logic
+        │   ├── logs.sh      ← log streaming
+        │   └── cleanup.sh   ← cleanup stale resources
         └── redis/
             ├── deploy.sh
-            └── health.sh
+            ├── health.sh
+            └── ...
 ```
 
 ### deploy.json
@@ -89,7 +101,12 @@ Clean, human-readable config:
       "health": {
         "type": "http",
         "endpoint": "/health",
-        "timeout": 10
+        "port": 8080,
+        "timeout": 10,
+        "enabled": true
+      },
+      "credentials": {
+        "mode": "off"
       }
     },
     "redis": {
@@ -97,7 +114,8 @@ Clean, human-readable config:
       "health": {
         "type": "tcp",
         "port": 6379,
-        "timeout": 5
+        "timeout": 5,
+        "enabled": true
       }
     }
   },
@@ -106,6 +124,28 @@ Clean, human-readable config:
 ```
 
 Operations without hooks are silently skipped — no errors, no empty menu items.
+
+## Credentials
+
+Off by default. Three modes per service:
+
+1. **Save always** — stored in macOS Keychain (via `security` command). Persists across sessions.
+2. **Once per session** — prompted once, kept in memory for the session.
+3. **Every time** — prompted on every deploy/rollback.
+
+**Never** in deploy.json. **Never** in your project directory. **Never** in git.
+
+Services with stored credentials are flagged with `! KEY` in the dashboard.
+
+## Settings
+
+`muster settings` lets you toggle per-service options interactively:
+
+- **Skip deploy** — health-check only, don't deploy
+- **Health check** — enable/disable health verification
+- **Credentials** — cycle through Off / Save always / Once per session / Every time
+
+Changes are saved directly to deploy.json.
 
 ## Skills
 
@@ -117,17 +157,6 @@ muster skill add https://github.com/someone/muster-skill-notify
 ```
 
 Skills are bash scripts with a `skill.json` manifest. See [docs/skills.md](docs/skills.md) for how to create one.
-
-## Credentials
-
-Off by default. When enabled for a service, credentials are stored in:
-
-1. System keychain (macOS Keychain, `secret-tool`, `pass`) if available
-2. Encrypted vault at `~/.muster/vault` (AES-256, passphrase-protected) as fallback
-
-**Never** in deploy.json. **Never** in your project directory. **Never** in git.
-
-Services with stored credentials are flagged with `⚠ KEY` in the dashboard.
 
 ## MCP Integration
 
