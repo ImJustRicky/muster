@@ -78,6 +78,8 @@ muster is an **orchestrator**, not a deployment tool. Your project provides hook
 
 `muster setup` scans your project first — detects Dockerfiles, docker-compose configs, Kubernetes manifests, language files, and config references. It checks subdirectories too (`docker/`, `k8s/`, `deploy/`, `infra/`). It identifies your stack (k8s, compose, docker, or bare metal) and discovers services automatically. Infrastructure services (redis, postgres, etc.) get pull-only templates instead of build templates.
 
+**On k8s clusters**, the scanner goes further — it queries `kubectl get deployments` to read real deployment names, container ports, and liveness/readiness probes directly from the cluster. Health checks are auto-configured from probe data (HTTP endpoints, TCP ports, or `kubectl rollout status` for deployments without probes). Deploy order is smart: infra services (redis, postgres, meilisearch) are sorted before app services. Services detected from files but not running as k8s deployments are automatically marked `skip_deploy: true`.
+
 You confirm what it found, set deploy order, configure health checks and credentials per service, and muster generates **real working hook scripts** from stack-specific templates — not empty stubs.
 
 If nothing is detected (empty project), it falls back to a conversational question flow.
@@ -119,8 +121,10 @@ Clean, human-readable config:
         "timeout": 10,
         "enabled": true
       },
-      "credentials": {
-        "mode": "off"
+      "credentials": { "mode": "off" },
+      "k8s": {
+        "deployment": "myapp-api",
+        "namespace": "production"
       }
     },
     "redis": {
@@ -130,12 +134,18 @@ Clean, human-readable config:
         "port": 6379,
         "timeout": 5,
         "enabled": true
+      },
+      "k8s": {
+        "deployment": "myapp-redis",
+        "namespace": "production"
       }
     }
   },
   "deploy_order": ["redis", "api"]
 }
 ```
+
+The `k8s` block is config-driven — change `deployment` or `namespace` in deploy.json and all hooks update automatically (hooks read `MUSTER_K8S_*` env vars at runtime). `deploy_order` controls sequencing — infra services are auto-sorted first by the scanner.
 
 Operations without hooks are silently skipped — no errors, no empty menu items.
 
@@ -286,11 +296,6 @@ Add to `.claude/settings.json`:
 | `muster_config` | Get the full deploy.json |
 
 An LLM can scan your project, create the config, write all the hook scripts, then deploy — all through conversation. Requires `jq`.
-
-## LLM Documentation
-
-- [`llms.txt`](llms.txt) — concise project index for LLMs
-- [`llms-full.txt`](llms-full.txt) — expanded reference with architecture, config format, and bash 3.2 compatibility notes
 
 ## Philosophy
 

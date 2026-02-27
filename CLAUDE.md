@@ -70,9 +70,11 @@ Edit via `muster settings` (TUI) or `muster settings --global <key> <value>` (sc
 
 ## Config (deploy.json)
 
-Service keys map to hook directories. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. `deploy_order` controls sequencing. Credential modes: `off`, `save` (keychain), `session` (memory), `always` (prompt every time) — never stored in config or git. Service keys with hyphens work (jq bracket notation via `_jq_quote()`).
+Service keys map to hook directories. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. `deploy_order` controls sequencing (infra services auto-sorted first when no explicit `--order`). `skip_deploy: true` excludes a service from `muster deploy` (auto-set for file-detected services not found as k8s deployments). Credential modes: `off`, `save` (keychain), `session` (memory), `always` (prompt every time) — never stored in config or git. Service keys with hyphens work (jq bracket notation via `_jq_quote()`).
 
-Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user": "...", "port": 22, "identity_file": "~/.ssh/key", "project_dir": "/opt/app"}`. Hooks are piped via `ssh user@host "bash -s"` with credential env vars exported remotely.
+K8s config: per-service `"k8s": {"deployment": "waity-api", "namespace": "waity"}`. Hooks read `MUSTER_K8S_DEPLOYMENT`, `MUSTER_K8S_NAMESPACE`, `MUSTER_K8S_SERVICE` env vars at runtime (exported by deploy/status/rollback commands from deploy.json). Change deployment name in config, all hooks update automatically.
+
+Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user": "...", "port": 22, "identity_file": "~/.ssh/key", "project_dir": "/opt/app"}`. Hooks are piped via `ssh user@host "bash -s"` with credential + k8s env vars exported remotely.
 
 ## Setup Wizard
 
@@ -81,6 +83,8 @@ Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user
 **Non-interactive (flags):** `muster setup --scan` or `muster setup --services api,redis --stack k8s`. Flags: `--path/-p`, `--scan`, `--stack/-s`, `--services`, `--order`, `--health` (repeatable), `--creds` (repeatable), `--remote` (repeatable, `svc=user@host[:port][:path]`), `--namespace`, `--name/-n`, `--force/-f` (overwrite existing config). See `muster setup --help`.
 
 Both modes generate real hooks from stack templates. Infrastructure services (redis, postgres, etc.) get pull-only templates (no docker build). Scanner uses `.musterignore` and auto-skips `archived/deprecated/old/backup` directories.
+
+**K8s live introspection:** When stack is k8s, `scan_k8s_cluster()` queries `kubectl get deployments -n <ns> -o json` to auto-detect real deployment names, container ports, and liveness/readiness probes. Strips common project prefix from names (e.g., `waity-api` → `api`). Deployments with probes get auto-configured health checks. Deployments with no probe and no port get `kubectl rollout status` as health fallback. Services detected from files but not found as k8s deployments get `skip_deploy: true`. Deploy order auto-sorts infra services (redis, postgres, etc.) before app services. Graceful degradation: no kubectl → skip, cluster unreachable → warn and skip.
 
 ## Bash 3.2 Rules
 
