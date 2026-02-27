@@ -51,15 +51,17 @@ muster setup --help                                     # see all flags
 
 | Command | Description |
 |---------|-------------|
-| `muster` | Dashboard — live health/status view with action menu |
+| `muster` | Dashboard — live health/status view with action menu + installed skills |
 | `muster setup` | Guided setup wizard, or use flags for non-interactive (`--help`) |
+| `muster setup --force` | Overwrite existing deploy.json |
 | `muster deploy` | Deploy all services (respects deploy order) |
 | `muster deploy api` | Deploy a specific service |
 | `muster status` | Check health of all services |
 | `muster logs` | Stream logs (interactive service picker) |
 | `muster rollback` | Rollback a service |
 | `muster cleanup` | Clean up stuck processes and old logs |
-| `muster settings` | View and edit project settings |
+| `muster settings` | Project settings + global muster preferences |
+| `muster settings --global` | View/edit global settings (color, log retention, etc.) |
 | `muster uninstall` | Remove muster from project |
 | `muster skill add <url>` | Install a skill addon |
 | `muster skill list` | List installed skills |
@@ -71,7 +73,7 @@ muster is an **orchestrator**, not a deployment tool. Your project provides hook
 
 ### Smart Setup
 
-`muster setup` scans your project first — detects Dockerfiles, docker-compose configs, Kubernetes manifests, language files, and config references. It identifies your stack (k8s, compose, docker, or bare metal) and discovers services automatically.
+`muster setup` scans your project first — detects Dockerfiles, docker-compose configs, Kubernetes manifests, language files, and config references. It checks subdirectories too (`docker/`, `k8s/`, `deploy/`, `infra/`). It identifies your stack (k8s, compose, docker, or bare metal) and discovers services automatically. Infrastructure services (redis, postgres, etc.) get pull-only templates instead of build templates.
 
 You confirm what it found, set deploy order, configure health checks and credentials per service, and muster generates **real working hook scripts** from stack-specific templates — not empty stubs.
 
@@ -148,13 +150,36 @@ Services with stored credentials are flagged with `! KEY` in the dashboard.
 
 ## Settings
 
-`muster settings` lets you toggle per-service options interactively:
+`muster settings` has two sections:
+
+### Project Settings
+
+Per-service toggles saved to deploy.json:
 
 - **Skip deploy** — health-check only, don't deploy
 - **Health check** — enable/disable health verification
 - **Credentials** — cycle through Off / Save always / Once per session / Every time
 
-Changes are saved directly to deploy.json.
+### Global Settings
+
+Muster-wide preferences stored in `~/.muster/settings.json`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `color_mode` | `auto` | Color output: `auto`, `always`, `never` |
+| `log_retention_days` | `7` | Days to keep deploy logs |
+| `default_stack` | `bare` | Default stack for new projects |
+| `default_health_timeout` | `10` | Health check timeout (seconds) |
+| `scanner_exclude` | `[]` | Patterns to exclude from project scanning |
+| `update_check` | `on` | Check for muster updates |
+
+Edit interactively via the TUI, or from the command line:
+
+```bash
+muster settings --global                        # dump all settings
+muster settings --global color_mode never        # set a value
+muster settings --global scanner_exclude add old # add exclude pattern
+```
 
 ## Skills
 
@@ -165,7 +190,7 @@ muster skill add https://github.com/someone/muster-skill-ssl
 muster skill add https://github.com/someone/muster-skill-notify
 ```
 
-Skills are bash scripts with a `skill.json` manifest. See [docs/skills.md](docs/skills.md) for how to create one.
+Skills are bash scripts with a `skill.json` manifest. Install from git URLs or local paths — muster reads the `name` field from `skill.json`. Installed skills appear automatically in the dashboard Actions menu. See [docs/skills.md](docs/skills.md) for how to create one.
 
 ## MCP Integration
 

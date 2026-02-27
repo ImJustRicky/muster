@@ -19,11 +19,11 @@ muster/
 ├── lib/
 │   ├── core/
 │   │   ├── colors.sh              ← ANSI color constants
-│   │   ├── config.sh              ← deploy.json reader/writer (jq/python3)
+│   │   ├── config.sh              ← deploy.json + ~/.muster/settings.json reader/writer
 │   │   ├── credentials.sh         ← credential storage (keychain/session/prompt)
 │   │   ├── logger.sh              ← log/warn/err/ok/info functions
 │   │   ├── platform.sh            ← OS/arch/tool detection
-│   │   ├── scanner.sh             ← project file/service/stack detection
+│   │   ├── scanner.sh             ← project file/service/stack detection (subdirs, .musterignore)
 │   │   └── utils.sh               ← terminal size, WINCH trap, Ctrl+C guard, helpers
 │   ├── tui/
 │   │   ├── menu.sh                ← arrow-key interactive menu
@@ -40,7 +40,7 @@ muster/
 │   │   ├── logs.sh                ← log streaming
 │   │   ├── rollback.sh            ← rollback services
 │   │   ├── cleanup.sh             ← cleanup processes/logs
-│   │   ├── settings.sh            ← interactive settings (toggles/cycles)
+│   │   ├── settings.sh            ← project settings + global muster settings
 │   │   └── uninstall.sh           ← remove muster from project
 │   └── skills/
 │       └── manager.sh             ← skill add/remove/list/run
@@ -48,8 +48,11 @@ muster/
 │   ├── deploy.example.json        ← example config
 │   └── hooks/                     ← stack-specific hook templates
 │       ├── k8s/                   ← kubectl apply, set image, rollout, logs
+│       │   └── infra/            ← infrastructure variant (pull-only, no build)
 │       ├── compose/               ← docker compose build, up, down, logs
+│       │   └── infra/            ← infrastructure variant (pull-only)
 │       ├── docker/                ← docker build, run, stop, logs
+│       │   └── infra/            ← infrastructure variant (pull-only)
 │       └── bare/                  ← git pull, make, systemctl, journalctl
 ├── install.sh                     ← curl | bash installer
 ├── LICENSE
@@ -88,7 +91,8 @@ your-project/
 | `muster logs [svc]` | Stream logs (interactive picker if no arg) |
 | `muster rollback [svc]` | Rollback a service |
 | `muster cleanup` | Clean up stuck processes and old logs |
-| `muster settings` | View and edit project settings (toggles/cycles) |
+| `muster settings` | Project settings + global muster preferences |
+| `muster settings --global [key] [value]` | View/edit global settings (color, log retention, etc.) |
 | `muster uninstall` | Remove muster from project (with confirmation) |
 | `muster skill add <url>` | Install a skill addon |
 | `muster skill list` | List installed skills |
@@ -157,15 +161,26 @@ Key globals set at startup:
 - `config_set(path, value)` — writes individual JSON value via jq
 - `config_services()` — returns service key names (one per line)
 - `config_write(target)` — writes stdin to target file
+- `_jq_quote(query)` — converts `.services.my-svc.name` to `.services["my-svc"].name` for jq safety with hyphenated keys
+- `global_config_get(key)` — reads from `~/.muster/settings.json`
+- `global_config_set(key, value)` — writes to `~/.muster/settings.json`
+- `global_config_dump()` — prints all global settings as JSON
+- `_ensure_global_config()` — creates settings file with defaults on first use
 
 ### scanner.sh
 
 - `scan_project(dir)` — scans directory for deploy-relevant files and services
+- Scans root + subdirectories: `docker/`, `deploy/`, `infra/`, `.github/`
 - Sets `_SCAN_FILES[]` — `"filename|description"` entries
-- Sets `_SCAN_SERVICES[]` — detected service names (from k8s subdirs, compose YAML, config hints)
+- Sets `_SCAN_SERVICES[]` — detected service names (from k8s subdirs, compose YAML, Dockerfile suffixes, config hints)
 - Sets `_SCAN_STACK` — detected stack: `k8s`, `compose`, `docker`, `bare`, or empty
+- Sets `_SCAN_PATHS[]` — `"service|type|relative_path"` entries for template generation
+- `scan_get_path(svc, type)` — look up detected path (e.g., `scan_get_path "api" "dockerfile"`)
+- `scan_get_compose_file()` — returns detected compose file path
+- `_scan_add_service(name)` — deduplicating service registration
 - `scan_print_results()` — pretty-prints detected files and stack
-- Detection: k8s manifests, docker-compose services (YAML parsing), Dockerfiles, systemd .service files, language files (package.json, go.mod, Cargo.toml, etc.), service hints via grep (redis, postgres, mongo, etc.)
+- Service hints: whole-word grep (`-w` flag) for redis, postgres, mongo, etc. — avoids false positives like "mongoose"
+- Exclusion: `_SCAN_EXCLUDES` (space-separated), `.musterignore` file (one pattern per line), auto-skips `archived/deprecated/old/backup` dirs. Global `scanner_exclude` from settings is prepended.
 - Stack priority: k8s > compose > docker > bare
 
 ### credentials.sh
@@ -190,7 +205,7 @@ Key globals set at startup:
 
 ### colors.sh
 
-ANSI 256-color constants. Brand color: mustard (`\033[38;5;178m`). Aliases: `ACCENT=$MUSTARD`, `ACCENT_BRIGHT=$MUSTARD_BRIGHT`. All TUI components use these variables, never hardcoded escape codes.
+ANSI 256-color constants. Brand color: mustard (`\033[38;5;178m`). Aliases: `ACCENT=$MUSTARD`, `ACCENT_BRIGHT=$MUSTARD_BRIGHT`. All TUI components use these variables, never hardcoded escape codes. Reads `color_mode` from `~/.muster/settings.json` at source time: `never` clears all color vars, `always` forces colors, `auto` disables on non-TTY.
 
 ### logger.sh
 
@@ -271,16 +286,28 @@ Draws a titled box with 4 visible lines. Runs command in background, redirects o
 
 ### dashboard.sh — Main Dashboard
 
-Runs in a `while true` loop. Shows project info, platform details, service health box (green/red/gray dots), credential warnings (`! KEY`), and an action menu. Only shows actions that have corresponding hooks (e.g., Rollback only appears if any service has `rollback.sh`). Includes Settings and Quit options. Pauses after each action ("Press any key to continue...") except interactive ones (logs, settings).
+Requires TTY (errors cleanly on non-interactive stdin). Runs in a `while true` loop. Shows project info, platform details, service health box (green/red/gray dots), credential warnings (`! KEY`), and an action menu. Only shows actions that have corresponding hooks (e.g., Rollback only appears if any service has `rollback.sh`). Scans `~/.muster/skills/` and appends installed skills as "Skill: <name>" menu items. Includes Settings and Quit options. Pauses after each action ("Press any key to continue...") except interactive ones (logs, settings).
 
 ### settings.sh — Interactive Settings
 
-Cycle-style toggle widget (`_toggle_select`). Per-service options:
+Two sections: Project Settings and Muster Settings.
+
+**Project Settings** — Cycle-style toggle widget (`_toggle_select`). Per-service options:
 - Skip deploy: `OFF|ON`
 - Health check: `ON|OFF`
 - Credentials: `Off|Save always|Once per session|Every time`
 
 Uses pipe-separated option strings for cycling. Saves changes to deploy.json via `config_set()`. Also provides "Open config" which opens Finder (macOS), xdg-open (Linux), or prints path (headless).
+
+**Muster Settings** — Global preferences in `~/.muster/settings.json`:
+- `color_mode`: auto/always/never (toggle)
+- `log_retention_days`: number (text prompt)
+- `default_stack`: bare/docker/compose/k8s (toggle)
+- `default_health_timeout`: seconds (text prompt)
+- `scanner_exclude`: patterns (add/remove)
+- `update_check`: on/off (toggle)
+
+**Non-interactive:** `muster settings --global [key] [value]`. No args dumps JSON. `scanner_exclude add|remove <patterns>` for array manipulation.
 
 ## Setup Wizard (setup.sh)
 
@@ -314,11 +341,12 @@ Any flag triggers non-interactive mode — no TUI, plain text output only. Flags
 | `--health <spec>` | | Per-service: `svc=type[:endpoint:port]` (repeatable) | `none` for all |
 | `--creds <spec>` | | Per-service: `svc=mode` (repeatable) | `off` for all |
 | `--name <name>` | `-n` | Project name | directory basename |
+| `--force` | `-f` | Overwrite existing deploy.json | off |
 | `--help` | `-h` | Show usage and examples | |
 
 Health spec format: `api=http:/health:8080`, `redis=tcp:6379`, `worker=command:./check.sh`, `api=none`. Credential modes: `off`, `save`, `session`, `always`.
 
-`--scan` can combine with explicit flags — explicit values override scan results. Without `--scan`, `--services` is required.
+`--scan` can combine with explicit flags — explicit values override scan results. Without `--scan`, `--services` is required. If deploy.json already exists, `--force` is required to overwrite. Interactive mode shows an "Overwrite/Cancel" menu instead. Non-TTY stdin errors with a suggestion to use `--scan` or `--help`.
 
 Banner box: drawn with `printf '%b'` (not `echo -e`) to handle ANSI codes correctly. Progress bar in banner uses `#`/`-` chars. Phrase/tagline set once per session via `_SETUP_SESSION_PHRASE`. WINCH redraw only during `read` prompts (not during menus — `read -rsn1` not interrupted by SIGWINCH on bash 3.2).
 
@@ -337,18 +365,29 @@ Banner box: drawn with `printf '%b'` (not `echo -e`) to handle ANSI codes correc
 
 ## Hook Templates
 
-`templates/hooks/` contains 20 template files (4 stacks × 5 hooks):
+`templates/hooks/` contains 35 template files: 20 application templates (4 stacks × 5 hooks) + 15 infrastructure templates (3 stacks × 5 hooks in `{k8s,compose,docker}/infra/`):
 
+**Application templates** (build + deploy):
 - **k8s/** — `docker build`, `docker push`, `kubectl apply`, `kubectl set image`, `kubectl rollout status/undo`, `kubectl logs`, `kubectl delete` failed pods
 - **compose/** — `docker compose build`, `docker compose up -d`, `docker compose down`, `docker compose logs -f`, `docker compose rm`
 - **docker/** — `docker build`, `docker run -d`, `docker stop/rm`, `docker logs -f`, `docker image prune`
-- **bare/** — `git pull`, build command (TODO), `systemctl restart`, `journalctl -f`, `journalctl --vacuum-time`
+- **bare/** — `git pull`, build command, `systemctl restart`, `journalctl -f`, `journalctl --vacuum-time`
+
+**Infrastructure templates** (pull-only, no build — for redis, postgres, etc.):
+- **k8s/infra/** — `kubectl set image` with pre-built `{{SERVICE_IMAGE}}`, no docker build/push
+- **compose/infra/** — `docker compose pull` instead of build
+- **docker/infra/** — `docker pull {{SERVICE_IMAGE}}` instead of build
+
+Setup auto-selects infrastructure templates for known services (redis, postgres, mysql, mongo, rabbitmq, kafka, elasticsearch, nginx, memcached, etc.).
 
 Each template uses `{{PLACEHOLDER}}` markers replaced during setup:
 - `{{SERVICE_NAME}}` — service name
 - `{{NAMESPACE}}` — k8s namespace (defaults to `default`)
 - `{{PORT}}` — service port (defaults to `8080`)
 - `{{COMPOSE_FILE}}` — compose file name (defaults to `docker-compose.yml`)
+- `{{DOCKERFILE}}` — path to Dockerfile (from scanner, e.g., `docker/Dockerfile.api`)
+- `{{K8S_DIR}}` — path to k8s manifests (from scanner, e.g., `k8s/api/`)
+- `{{SERVICE_IMAGE}}` — pre-built image reference (e.g., `redis:7-alpine`)
 
 ## Skills System
 
@@ -362,7 +401,9 @@ skill-name/
 
 Environment variables passed to run.sh: `MUSTER_PROJECT_DIR`, `MUSTER_CONFIG_FILE`, `MUSTER_SERVICE`, `MUSTER_HOOK`.
 
-Install: `muster skill add <git-url-or-local-path>` — git URLs are cloned, `muster-skill-` prefix stripped. Local paths are copied. Validates `skill.json` exists.
+Install: `muster skill add <git-url-or-local-path>` — git URLs are cloned, `muster-skill-` prefix stripped. Local paths are copied and the `name` field from `skill.json` is used as the install name (falls back to directory basename). Validates `skill.json` exists.
+
+Installed skills appear automatically in the dashboard Actions menu as "Skill: <name>".
 
 Naming convention: `muster-skill-<name>` for GitHub repos.
 
@@ -370,7 +411,7 @@ Naming convention: `muster-skill-<name>` for GitHub repos.
 
 Pure bash MCP stdio transport. Lets LLMs call muster operations via the Model Context Protocol. Requires `jq`.
 
-Runs as a local process — reads JSON-RPC from stdin, writes responses to stdout. Not a network server.
+Runs as a local process — reads JSON-RPC from stdin, writes responses to stdout. Not a network server. Supports JSON-RPC batch arrays (dispatches each element individually). Uses shared `scan_project()` from `scanner.sh` for project detection (not a separate implementation). `scan_project` response includes a `paths` object mapping services to detected file paths.
 
 ### Configuration
 

@@ -13,25 +13,25 @@ Muster is a CLI tool (`bin/muster`) that gives any project a polished deploy exp
 ## Core
 
 - [bin/muster](bin/muster): Entry point. Routes commands (setup, deploy, status, logs, rollback, cleanup, settings, uninstall, skill). Loads core libs, dispatches to command modules.
-- [lib/core/config.sh](lib/core/config.sh): Config reader. `load_config` finds deploy.json walking up from cwd. `config_get` reads JSON via jq or python3 fallback. `config_set` writes individual values via jq. `config_services` lists service keys.
-- [lib/core/colors.sh](lib/core/colors.sh): ANSI color constants. Mustard brand accent (`\033[38;5;178m`). All TUI components reference `ACCENT`, `GREEN`, `RED`, `DIM`, `BOLD`, `RESET`.
+- [lib/core/config.sh](lib/core/config.sh): Config reader. `load_config` finds deploy.json walking up from cwd. `config_get` reads JSON via jq or python3 fallback. `config_set` writes individual values via jq. `config_services` lists service keys. `_jq_quote` handles hyphenated keys. Also: `global_config_get`/`global_config_set`/`global_config_dump` for `~/.muster/settings.json`.
+- [lib/core/colors.sh](lib/core/colors.sh): ANSI color constants. Mustard brand accent (`\033[38;5;178m`). All TUI components reference `ACCENT`, `GREEN`, `RED`, `DIM`, `BOLD`, `RESET`. Reads `color_mode` from global settings (auto/always/never).
 - [lib/core/logger.sh](lib/core/logger.sh): Output functions: `log`, `warn`, `err`, `ok`, `info`. Each prefixed with colored icon.
 - [lib/core/platform.sh](lib/core/platform.sh): Detects OS/arch, checks for docker/kubectl/jq/python3/keychain. Sets `MUSTER_OS`, `MUSTER_ARCH`, `MUSTER_HAS_*` globals.
 - [lib/core/utils.sh](lib/core/utils.sh): Terminal size tracking (`TERM_COLS`/`TERM_ROWS`), SIGWINCH handler, double Ctrl+C guard, `cleanup_term` EXIT trap, `has_cmd`, `find_config`.
-- [lib/core/scanner.sh](lib/core/scanner.sh): Project scanner. Detects k8s manifests, docker-compose services, Dockerfiles, language files, service hints. Sets `_SCAN_FILES[]`, `_SCAN_SERVICES[]`, `_SCAN_STACK` (k8s/compose/docker/bare).
+- [lib/core/scanner.sh](lib/core/scanner.sh): Project scanner. Scans root + subdirectories (docker/, k8s/, deploy/, infra/). Detects k8s manifests, docker-compose services, Dockerfiles, service hints (whole-word grep). Sets `_SCAN_FILES[]`, `_SCAN_SERVICES[]`, `_SCAN_STACK`, `_SCAN_PATHS[]`. Exports `scan_get_path()`, `scan_get_compose_file()`. Supports `.musterignore` and `_SCAN_EXCLUDES`. Auto-skips archived/deprecated/old/backup dirs.
 - [lib/core/credentials.sh](lib/core/credentials.sh): Credential system. Three modes: save (macOS Keychain), session (in-memory cache), always (prompt every time). `cred_env_for_service()` returns `MUSTER_CRED_*` env vars for hook scripts.
 
 ## Commands
 
-- [lib/commands/setup.sh](lib/commands/setup.sh): Setup wizard with two modes. **Interactive (no flags):** scan-first TUI wizard. **Non-interactive (flags):** `--scan`, `--services`, `--stack`, `--health`, `--creds`, `--order`, `--name`, `--path`. Generates real hook scripts from stack templates (`templates/hooks/{k8s,compose,docker,bare}/`). Falls back to manual question flow if nothing detected in interactive mode.
+- [lib/commands/setup.sh](lib/commands/setup.sh): Setup wizard with two modes. **Interactive (no flags):** scan-first TUI wizard (requires TTY, warns if deploy.json exists). **Non-interactive (flags):** `--scan`, `--services`, `--stack`, `--health`, `--creds`, `--order`, `--name`, `--path`, `--force`. Generates real hook scripts from stack templates. Infrastructure services (redis, postgres, etc.) get pull-only templates. `_friendly_name()` generates display names from keys. Falls back to manual question flow if nothing detected.
 - [lib/commands/deploy.sh](lib/commands/deploy.sh): Deploy orchestration. Iterates `deploy_order`, runs each service's `deploy.sh` hook inside `stream_in_box` (live log), then runs `health.sh`. On health failure: menu offers continue/rollback/abort. Injects credential env vars.
 - [lib/commands/status.sh](lib/commands/status.sh): Runs `health.sh` for each service (respects `health.enabled`), shows green/red dot per service.
 - [lib/commands/logs.sh](lib/commands/logs.sh): Runs `logs.sh` hook for a service, or falls back to `tail -f` on latest deploy log.
 - [lib/commands/rollback.sh](lib/commands/rollback.sh): Runs `rollback.sh` hook. If no target given, menu picks from services that have rollback hooks. Injects credential env vars.
-- [lib/commands/cleanup.sh](lib/commands/cleanup.sh): Runs `cleanup.sh` hooks, deletes logs older than 7 days.
-- [lib/commands/settings.sh](lib/commands/settings.sh): Interactive settings. Per-service toggles: skip deploy (ON/OFF), health check (ON/OFF), credential mode (Off/Save always/Once per session/Every time). Saves to deploy.json via `config_set`.
+- [lib/commands/cleanup.sh](lib/commands/cleanup.sh): Runs `cleanup.sh` hooks, deletes logs older than `log_retention_days` (from global settings, default 7).
+- [lib/commands/settings.sh](lib/commands/settings.sh): Interactive settings with two sections. **Project Settings:** per-service toggles (skip deploy, health check, credential mode). **Muster Settings:** global prefs (color_mode, log_retention_days, default_stack, default_health_timeout, scanner_exclude, update_check). Non-interactive: `muster settings --global [key] [value]`.
 - [lib/commands/uninstall.sh](lib/commands/uninstall.sh): Removes deploy.json, .muster/ directory, cleans .gitignore. Confirmation menu before deletion.
-- [lib/skills/manager.sh](lib/skills/manager.sh): Skill lifecycle: `add` (git clone or local copy), `remove`, `list` (reads skill.json for description), `run` (executes run.sh).
+- [lib/skills/manager.sh](lib/skills/manager.sh): Skill lifecycle: `add` (git clone or local copy — reads name from skill.json), `remove`, `list` (reads skill.json for description), `run` (executes run.sh).
 
 ## TUI Components
 
@@ -41,20 +41,20 @@ Muster is a CLI tool (`bin/muster`) that gives any project a polished deploy exp
 - [lib/tui/spinner.sh](lib/tui/spinner.sh): Braille character spinner in background subshell. `start_spinner "msg"` / `stop_spinner`.
 - [lib/tui/progress.sh](lib/tui/progress.sh): Color-coded progress bar (red→yellow→green). `progress_bar current total "label"`.
 - [lib/tui/streambox.sh](lib/tui/streambox.sh): Live-scrolling 4-line log box with borders. Runs command in background, tails output into box with 0.3s refresh.
-- [lib/tui/dashboard.sh](lib/tui/dashboard.sh): Main dashboard view (loops). Box with service health dots, credential warnings (`! KEY`), action menu (deploy, status, logs, rollback, cleanup, settings, quit). Only shows operations that have hooks defined.
+- [lib/tui/dashboard.sh](lib/tui/dashboard.sh): Main dashboard view (loops, requires TTY). Box with service health dots, credential warnings (`! KEY`), action menu (deploy, status, logs, rollback, cleanup, settings, installed skills, quit). Only shows operations that have hooks defined.
 
 ## MCP Integration
 
-- [bin/muster-mcp](bin/muster-mcp): MCP stdio transport. Pure bash + jq. Exposes muster operations as MCP tools (status, deploy, rollback, logs, cleanup, list_services, config, scan_project, init_project, write_hook, read_hook). Reads JSON-RPC from stdin, returns results to stdout. Configure in Claude Desktop or any MCP client.
+- [bin/muster-mcp](bin/muster-mcp): MCP stdio transport. Pure bash + jq. Exposes muster operations as MCP tools (status, deploy, rollback, logs, cleanup, list_services, config, scan_project, init_project, write_hook, read_hook). Uses shared `scan_project()` from scanner.sh. Supports JSON-RPC batch arrays. Reads JSON-RPC from stdin, returns results to stdout.
 
 ## Config & Templates
 
 - [templates/deploy.example.json](templates/deploy.example.json): Example deploy.json with all fields documented.
-- [templates/hooks/](templates/hooks/): Stack-specific hook templates. 4 stacks × 5 hooks = 20 templates. Placeholders: `{{SERVICE_NAME}}`, `{{NAMESPACE}}`, `{{PORT}}`, `{{COMPOSE_FILE}}`.
+- [templates/hooks/](templates/hooks/): Stack-specific hook templates. 4 stacks × 5 hooks = 20 app templates + 15 infra templates (in `{k8s,compose,docker}/infra/`). Placeholders: `{{SERVICE_NAME}}`, `{{NAMESPACE}}`, `{{PORT}}`, `{{COMPOSE_FILE}}`, `{{DOCKERFILE}}`, `{{K8S_DIR}}`, `{{SERVICE_IMAGE}}`.
 - [docs/skills.md](docs/skills.md): How to create skills. Structure: `skill.json` manifest + `run.sh` entry point. Env vars: `MUSTER_PROJECT_DIR`, `MUSTER_CONFIG_FILE`, `MUSTER_SERVICE`, `MUSTER_HOOK`.
 
 ## Optional
 
 - [docs/plans/2026-02-26-muster-design.md](docs/plans/2026-02-26-muster-design.md): Original design document with architecture decisions.
-- [install.sh](install.sh): Curl-pipe installer. Clones to `~/.muster/repo`, symlinks to `~/.local/bin/muster`.
+- [install.sh](install.sh): Curl-pipe installer. Clones to `~/.muster/repo`, symlinks to `~/.local/bin/muster`. Runs post-install smoke test to verify the binary works.
 - [README.md](README.md): User-facing docs with install instructions, command reference, project structure, config format.
