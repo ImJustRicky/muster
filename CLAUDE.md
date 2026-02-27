@@ -11,13 +11,19 @@ muster setup --services api,redis    # non-interactive: explicit services
 muster setup --force --scan          # overwrite existing deploy.json
 muster setup --help                  # show all setup flags
 muster             # dashboard (live health + action menu + installed skills)
-muster deploy      # deploy all services
+muster deploy      # deploy all (interactive: pick "All" or "Select services")
 muster deploy api  # deploy one service
 muster deploy --dry-run        # preview deploy plan without executing
 muster deploy --dry-run api    # dry-run a single service
+muster dev         # deploy + watch health every 5s (Ctrl+C to cleanup)
 muster status      # health check all services
 muster logs <svc>  # stream logs for a service
-muster rollback <svc>  # rollback a service
+muster rollback <svc>  # rollback a service (interactive picker if no arg)
+muster history     # show deploy/rollback event log
+muster history --all           # show full history (not just recent)
+muster history api             # show history for one service
+muster doctor      # run project diagnostics (11 checks)
+muster doctor --fix            # auto-fix what it can (permissions, stale PIDs, old logs)
 muster cleanup     # clean stuck processes + old logs
 muster settings    # project settings + global muster settings
 muster settings --global                  # dump global settings as JSON
@@ -34,13 +40,14 @@ muster skill remove <n> # remove a skill
 muster/
 ├── bin/muster                     ← entry point (routes commands)
 ├── bin/muster-mcp                 ← MCP stdio transport (uses shared scanner)
-├── lib/core/                      ← config, colors, logger, platform, utils, scanner, credentials, remote
+├── lib/core/                      ← config, colors, logger, platform, utils, scanner, credentials, remote, k8s_diag, updater
 ├── lib/tui/                       ← menu, checklist, spinner, progress, streambox, dashboard, order
-├── lib/commands/                  ← setup, deploy, status, logs, rollback, cleanup, settings, uninstall
+├── lib/commands/                  ← setup, deploy, dev, status, logs, rollback, history, doctor, cleanup, settings, uninstall
 ├── lib/skills/manager.sh          ← skill lifecycle (reads name from skill.json)
 ├── templates/deploy.example.json  ← example config
-├── templates/hooks/               ← stack-specific hook templates (k8s, compose, docker, bare)
-│   └── {k8s,compose,docker}/infra/ ← infrastructure service variants (pull-only, no build)
+├── templates/hooks/               ← stack-specific hook templates (k8s, compose, docker, bare, dev)
+│   ├── {k8s,compose,docker}/infra/ ← infrastructure service variants (pull-only, no build)
+│   └── dev/                       ← local dev stack (PID-managed processes, docker compose infra)
 └── docs/skills.md                 ← skill authoring guide
 ```
 
@@ -49,10 +56,12 @@ muster/
 ```
 your-project/
 ├── deploy.json        ← config: services, health checks, deploy order
+├── .env               ← (optional) auto-loaded env vars for deploys
 ├── .musterignore      ← (optional) patterns to exclude from scanning
 └── .muster/
     ├── hooks/<svc>/   ← deploy.sh, health.sh, rollback.sh, logs.sh, cleanup.sh
-    └── logs/          ← deploy logs (gitignored)
+    ├── logs/          ← deploy logs (gitignored)
+    └── pids/          ← PID files for dev stack (gitignored)
 ```
 
 ## Global Settings (~/.muster/settings.json)
@@ -72,9 +81,13 @@ Edit via `muster settings` (TUI) or `muster settings --global <key> <value>` (sc
 
 Service keys map to hook directories. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. `deploy_order` controls sequencing (infra services auto-sorted first when no explicit `--order`). `skip_deploy: true` excludes a service from `muster deploy` (auto-set for file-detected services not found as k8s deployments). Credential modes: `off`, `save` (keychain), `session` (memory), `always` (prompt every time) — never stored in config or git. Service keys with hyphens work (jq bracket notation via `_jq_quote()`).
 
-K8s config: per-service `"k8s": {"deployment": "waity-api", "namespace": "waity"}`. Hooks read `MUSTER_K8S_DEPLOYMENT`, `MUSTER_K8S_NAMESPACE`, `MUSTER_K8S_SERVICE` env vars at runtime (exported by deploy/status/rollback commands from deploy.json). Change deployment name in config, all hooks update automatically.
+K8s config: per-service `"k8s": {"deployment": "waity-api", "namespace": "waity"}`. Hooks read `MUSTER_K8S_DEPLOYMENT`, `MUSTER_K8S_NAMESPACE`, `MUSTER_K8S_SERVICE` env vars at runtime (exported by deploy/status/rollback commands from deploy.json). Change deployment name in config, all hooks update automatically. Optional `"deploy_timeout": 300` per-service (default 120) → exported as `MUSTER_DEPLOY_TIMEOUT`, used in k8s templates for `kubectl rollout status --timeout`.
+
+K8s infra services use `kubectl rollout restart` (not `kubectl set image`) — they deploy whatever image version is in the YAML manifest, avoiding accidental `:latest` pulls.
 
 Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user": "...", "port": 22, "identity_file": "~/.ssh/key", "project_dir": "/opt/app"}`. Hooks are piped via `ssh user@host "bash -s"` with credential + k8s env vars exported remotely.
+
+.env auto-loading: `_load_env_file` in `lib/core/utils.sh` reads `.env` from the project root before deploy/rollback/dev. Exports `KEY=VALUE` pairs without overriding existing env vars. `_unload_env_file` cleans up after.
 
 ## Setup Wizard
 
@@ -85,6 +98,22 @@ Remote deployment: per-service `"remote": {"enabled": true, "host": "...", "user
 Both modes generate real hooks from stack templates. Infrastructure services (redis, postgres, etc.) get pull-only templates (no docker build). Scanner uses `.musterignore` and auto-skips `archived/deprecated/old/backup` directories.
 
 **K8s live introspection:** When stack is k8s, `scan_k8s_cluster()` queries `kubectl get deployments -n <ns> -o json` to auto-detect real deployment names, container ports, and liveness/readiness probes. Strips common project prefix from names (e.g., `waity-api` → `api`). Deployments with probes get auto-configured health checks. Deployments with no probe and no port get `kubectl rollout status` as health fallback. Services detected from files but not found as k8s deployments get `skip_deploy: true`. Deploy order auto-sorts infra services (redis, postgres, etc.) before app services. Graceful degradation: no kubectl → skip, cluster unreachable → warn and skip.
+
+## Deploy Failure Handling
+
+Deploy and rollback failures show interactive recovery menus instead of aborting:
+
+**Deploy failure:** Shows last 5 log lines → k8s diagnostics (if applicable) → menu: Retry / Rollback / Skip and continue / Abort. Retry loops the same service with a fresh log file. The entire deploy execution is wrapped in a `while true` retry loop in `lib/commands/deploy.sh`.
+
+**Rollback failure:** Same pattern → menu: Retry / Force cleanup and retry / Abort. "Force cleanup" runs the cleanup hook first, then retries rollback.
+
+**K8s diagnostics** (`lib/core/k8s_diag.sh`): Auto-runs after deploy/rollback failure for k8s services. Inspects deployment → finds new ReplicaSet → finds failing pod → describes pod + gets logs. Matches 7 known error patterns (ImagePullBackOff, OOMKilled, CrashLoopBackOff, Unschedulable, missing secrets, missing PVCs, version mismatch). Handles both local and remote kubectl via `_diag_run_kubectl`. Silently skips for non-k8s services.
+
+**Interactive service selection:** `muster deploy` with >1 service in a TTY shows "All services" / "Select services" menu. "Select services" opens a checklist (`lib/tui/checklist.sh`). Non-interactive (scripts, CI) deploys all as before.
+
+## Dev Stack
+
+Stack type `dev` for local development. App services use PID-managed background processes (`.muster/pids/`), infra services use docker compose. Templates in `templates/hooks/dev/` and `dev/infra/`. Scanner detects dev commands from project files (package.json → npm, go.mod → go run, requirements.txt → Django/FastAPI/Flask, etc.) via `_scan_detect_dev_cmds()` in `lib/core/scanner.sh`. `muster dev` (`lib/commands/dev.sh`) deploys all services then enters a health-watch loop (5s interval), with Ctrl+C triggering cleanup of all services.
 
 ## Bash 3.2 Rules
 
