@@ -9,7 +9,7 @@ TAG="${IMAGE_TAG:-latest}"
 
 # Build Docker image
 echo "Building ${SERVICE}..."
-docker build -t "${REGISTRY}/${SERVICE}:${TAG}" . # TODO: adjust build context/Dockerfile path
+docker build -t "${REGISTRY}/${SERVICE}:${TAG}" -f "{{DOCKERFILE}}" .
 
 # Push to registry
 echo "Pushing image..."
@@ -17,7 +17,7 @@ docker push "${REGISTRY}/${SERVICE}:${TAG}"
 
 # Apply manifests
 echo "Applying Kubernetes manifests..."
-kubectl apply -f k8s/${SERVICE}/ -n "$NAMESPACE" 2>/dev/null || true
+kubectl apply -f "{{K8S_DIR}}" -n "$NAMESPACE" 2>/dev/null || true
 
 # Update deployment image
 echo "Updating deployment..."

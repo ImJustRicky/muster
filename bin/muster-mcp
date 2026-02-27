@@ -578,20 +578,20 @@ tool_init_project() {
   fi
 
   # Validate JSON
-  if ! echo "$config" | jq . &>/dev/null; then
+  if ! printf '%s\n' "$config" | jq . &>/dev/null; then
     echo "Invalid JSON config"
     return 1
   fi
 
   # Write deploy.json
-  echo "$config" | jq . > "${dir}/deploy.json"
+  printf '%s\n' "$config" | jq . > "${dir}/deploy.json"
 
   # Create .muster structure
   mkdir -p "${dir}/.muster/logs"
 
   # Create hook directories for each service
   local services
-  services=$(echo "$config" | jq -r '.services | keys[]' 2>/dev/null)
+  services=$(printf '%s\n' "$config" | jq -r '.services | keys[]' 2>/dev/null)
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
     mkdir -p "${dir}/.muster/hooks/${svc}"
@@ -757,8 +757,8 @@ _unexport_creds_for_service() {
 handle_call() {
   local msg="$1" id="$2"
   local tool_name project_dir
-  tool_name=$(echo "$msg" | jq -r '.params.name')
-  project_dir=$(echo "$msg" | jq -r '.params.arguments.project_dir // empty')
+  tool_name=$(printf '%s\n' "$msg" | jq -r '.params.name')
+  project_dir=$(printf '%s\n' "$msg" | jq -r '.params.arguments.project_dir // empty')
 
   if [[ -z "$project_dir" ]]; then
     json_error "$id" -32602 "project_dir is required"
@@ -773,11 +773,11 @@ handle_call() {
       result=$(tool_status "$project_dir" 2>&1) ;;
     muster_deploy)
       local service
-      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      service=$(printf '%s\n' "$msg" | jq -r '.params.arguments.service // empty')
       result=$(tool_deploy "$project_dir" "${service:-all}" 2>&1) ;;
     muster_rollback)
       local service
-      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
+      service=$(printf '%s\n' "$msg" | jq -r '.params.arguments.service // empty')
       if [[ -z "$service" ]]; then
         json_error "$id" -32602 "service is required for rollback"
         return
@@ -785,8 +785,8 @@ handle_call() {
       result=$(tool_rollback "$project_dir" "$service" 2>&1) ;;
     muster_logs)
       local service lines
-      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
-      lines=$(echo "$msg" | jq -r '.params.arguments.lines // 50')
+      service=$(printf '%s\n' "$msg" | jq -r '.params.arguments.service // empty')
+      lines=$(printf '%s\n' "$msg" | jq -r '.params.arguments.lines // 50')
       if [[ -z "$service" ]]; then
         json_error "$id" -32602 "service is required for logs"
         return
@@ -800,7 +800,7 @@ handle_call() {
       result=$(tool_scan_project "$project_dir" 2>&1) ;;
     muster_init_project)
       local config
-      config=$(echo "$msg" | jq -r '.params.arguments.config // empty')
+      config=$(printf '%s\n' "$msg" | jq -r '.params.arguments.config // empty')
       if [[ -z "$config" ]]; then
         json_error "$id" -32602 "config is required for init_project"
         return
@@ -808,9 +808,9 @@ handle_call() {
       result=$(tool_init_project "$project_dir" "$config" 2>&1) ;;
     muster_write_hook)
       local service hook content
-      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
-      hook=$(echo "$msg" | jq -r '.params.arguments.hook // empty')
-      content=$(echo "$msg" | jq -r '.params.arguments.content // empty')
+      service=$(printf '%s\n' "$msg" | jq -r '.params.arguments.service // empty')
+      hook=$(printf '%s\n' "$msg" | jq -r '.params.arguments.hook // empty')
+      content=$(printf '%s\n' "$msg" | jq -r '.params.arguments.content // empty')
       if [[ -z "$service" ]] || [[ -z "$hook" ]] || [[ -z "$content" ]]; then
         json_error "$id" -32602 "service, hook, and content are required for write_hook"
         return
@@ -818,8 +818,8 @@ handle_call() {
       result=$(tool_write_hook "$project_dir" "$service" "$hook" "$content" 2>&1) ;;
     muster_read_hook)
       local service hook
-      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
-      hook=$(echo "$msg" | jq -r '.params.arguments.hook // empty')
+      service=$(printf '%s\n' "$msg" | jq -r '.params.arguments.service // empty')
+      hook=$(printf '%s\n' "$msg" | jq -r '.params.arguments.hook // empty')
       if [[ -z "$service" ]] || [[ -z "$hook" ]]; then
         json_error "$id" -32602 "service and hook are required for read_hook"
         return
@@ -827,9 +827,9 @@ handle_call() {
       result=$(tool_read_hook "$project_dir" "$service" "$hook" 2>&1) ;;
     muster_set_credential)
       local service key value
-      service=$(echo "$msg" | jq -r '.params.arguments.service // empty')
-      key=$(echo "$msg" | jq -r '.params.arguments.key // empty')
-      value=$(echo "$msg" | jq -r '.params.arguments.value // empty')
+      service=$(printf '%s\n' "$msg" | jq -r '.params.arguments.service // empty')
+      key=$(printf '%s\n' "$msg" | jq -r '.params.arguments.key // empty')
+      value=$(printf '%s\n' "$msg" | jq -r '.params.arguments.value // empty')
       if [[ -z "$service" ]] || [[ -z "$key" ]] || [[ -z "$value" ]]; then
         json_error "$id" -32602 "service, key, and value are required for set_credential"
         return
@@ -872,14 +872,12 @@ handle_call() {
   json_tool_result "$id" "$result"
 }
 
-# ── Main protocol loop ──
-_log "started (v${MUSTER_VERSION})"
-
-while IFS= read -r line; do
-  [[ -z "$line" ]] && continue
-
-  method=$(echo "$line" | jq -r '.method // empty')
-  id=$(echo "$line" | jq -r '.id // "null"')
+# ── Dispatch a single JSON-RPC message ──
+dispatch_message() {
+  local msg="$1"
+  local method id
+  method=$(printf '%s\n' "$msg" | jq -r '.method // empty')
+  id=$(printf '%s\n' "$msg" | jq -r '.id // "null"')
 
   case "$method" in
     initialize)
@@ -892,7 +890,7 @@ while IFS= read -r line; do
       json_response "$id" "{\"tools\":${TOOLS_JSON}}"
       ;;
     "tools/call")
-      handle_call "$line" "$id"
+      handle_call "$msg" "$id"
       ;;
     "ping")
       json_response "$id" "{}"
@@ -903,4 +901,27 @@ while IFS= read -r line; do
       fi
       ;;
   esac
+}
+
+# ── Main protocol loop ──
+_log "started (v${MUSTER_VERSION})"
+
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+
+  # Check if input is a JSON-RPC batch (array of requests)
+  line_type=$(printf '%s\n' "$line" | jq -r 'type' 2>/dev/null)
+
+  if [[ "$line_type" == "array" ]]; then
+    # Batch request: iterate over each element
+    count=$(printf '%s\n' "$line" | jq 'length')
+    i=0
+    while (( i < count )); do
+      msg=$(printf '%s\n' "$line" | jq -c ".[$i]")
+      dispatch_message "$msg"
+      (( i++ ))
+    done
+  else
+    dispatch_message "$line"
+  fi
 done

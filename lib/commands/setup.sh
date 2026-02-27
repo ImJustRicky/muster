@@ -141,15 +141,110 @@ _setup_screen() {
   _setup_screen_inner
 }
 
+# ── Known infrastructure services (no build step needed) ──
+_INFRA_SERVICES="redis postgres postgresql mysql mariadb mongo mongodb meilisearch minio rabbitmq kafka elasticsearch opensearch nginx memcached etcd zookeeper consul vault nats"
+
+# Default images for known infrastructure services
+_infra_default_image() {
+  case "$1" in
+    redis)         echo "redis:7-alpine" ;;
+    postgres|postgresql) echo "postgres:16-alpine" ;;
+    mysql)         echo "mysql:8" ;;
+    mariadb)       echo "mariadb:11" ;;
+    mongo|mongodb) echo "mongo:7" ;;
+    meilisearch)   echo "getmeili/meilisearch:latest" ;;
+    minio)         echo "minio/minio:latest" ;;
+    rabbitmq)      echo "rabbitmq:3-management-alpine" ;;
+    kafka)         echo "confluentinc/cp-kafka:latest" ;;
+    elasticsearch) echo "elasticsearch:8.12.0" ;;
+    opensearch)    echo "opensearchproject/opensearch:latest" ;;
+    nginx)         echo "nginx:alpine" ;;
+    memcached)     echo "memcached:alpine" ;;
+    etcd)          echo "quay.io/coreos/etcd:latest" ;;
+    zookeeper)     echo "zookeeper:latest" ;;
+    consul)        echo "hashicorp/consul:latest" ;;
+    vault)         echo "hashicorp/vault:latest" ;;
+    nats)          echo "nats:alpine" ;;
+    *)             echo "" ;;
+  esac
+}
+
+# Check if a service name is a known infrastructure service
+_is_infra_service() {
+  local name="$1"
+  local lower
+  lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+  local svc
+  for svc in $_INFRA_SERVICES; do
+    [[ "$lower" == "$svc" ]] && return 0
+  done
+  return 1
+}
+
 # ── Sanitize service name to a config key ──
 _svc_to_key() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//'
 }
 
+# ── Generate a human-friendly display name from a service key ──
+_friendly_name() {
+  local raw="$1"
+
+  # Replace hyphens and underscores with spaces
+  local spaced
+  spaced=$(echo "$raw" | sed 's/[-_]/ /g')
+
+  # Capitalize each word; uppercase known abbreviations
+  local result=""
+  local word
+  for word in $spaced; do
+    local lower
+    lower=$(echo "$word" | tr '[:upper:]' '[:lower:]')
+    case "$lower" in
+      api|db|mq|ui|io|ci|cd|ssl|tcp|http|dns|ssh|sql|cpu|gpu|cdn|aws|gcp)
+        word=$(echo "$lower" | tr '[:lower:]' '[:upper:]')
+        ;;
+      *)
+        # Capitalize first letter
+        local first rest
+        first=$(echo "$lower" | cut -c1 | tr '[:lower:]' '[:upper:]')
+        rest=$(echo "$lower" | cut -c2-)
+        word="${first}${rest}"
+        ;;
+    esac
+    if [[ -n "$result" ]]; then
+      result="${result} ${word}"
+    else
+      result="${word}"
+    fi
+  done
+
+  # Special full-word mappings
+  case "$result" in
+    "API")           result="API Server" ;;
+    "DB"|"Database") result="Database" ;;
+    "Redis")         result="Redis" ;;
+    "Worker")        result="Worker" ;;
+  esac
+
+  echo "$result"
+}
+
 # ── Copy template hooks for a service, replacing placeholders ──
+# Args: stack svc_key svc_name hook_dir [compose_file] [dockerfile] [k8s_dir]
 _setup_copy_hooks() {
   local stack="$1" svc_key="$2" svc_name="$3" hook_dir="$4"
+  local compose_path="${5:-docker-compose.yml}"
+  local dockerfile_path="${6:-Dockerfile}"
+  local k8s_path="${7:-k8s/${svc_name}/}"
   local template_dir="${MUSTER_ROOT}/templates/hooks/${stack}"
+
+  # Use infrastructure templates for known infra services (skip build steps)
+  local svc_image=""
+  if _is_infra_service "$svc_name" && [[ -d "${template_dir}/infra" ]]; then
+    template_dir="${template_dir}/infra"
+    svc_image=$(_infra_default_image "$svc_name")
+  fi
 
   if [[ ! -d "$template_dir" ]]; then
     # No templates for this stack, write stub hooks
@@ -163,10 +258,13 @@ _setup_copy_hooks() {
     local basename
     basename=$(basename "$f")
     sed \
-      -e "s/{{SERVICE_NAME}}/${svc_name}/g" \
-      -e "s/{{NAMESPACE}}/default/g" \
-      -e "s/{{PORT}}/8080/g" \
-      -e "s/{{COMPOSE_FILE}}/docker-compose.yml/g" \
+      -e "s|{{SERVICE_NAME}}|${svc_name}|g" \
+      -e "s|{{SERVICE_IMAGE}}|${svc_image}|g" \
+      -e "s|{{NAMESPACE}}|default|g" \
+      -e "s|{{PORT}}|8080|g" \
+      -e "s|{{COMPOSE_FILE}}|${compose_path}|g" \
+      -e "s|{{DOCKERFILE}}|${dockerfile_path}|g" \
+      -e "s|{{K8S_DIR}}|${k8s_path}|g" \
       "$f" > "${hook_dir}/${basename}"
     chmod +x "${hook_dir}/${basename}"
   done
@@ -221,7 +319,7 @@ HOOK
 # ══════════════════════════════════════════════════════════════
 _setup_noninteractive() {
   local flag_path="$1" flag_scan="$2" flag_stack="$3" flag_services="$4"
-  local flag_order="$5" flag_name="$6"
+  local flag_order="$5" flag_name="$6" flag_force="$7"
   # flag_health and flag_creds are in global arrays _FLAG_HEALTH[] and _FLAG_CREDS[]
 
   # ── Resolve project path ──
@@ -230,6 +328,13 @@ _setup_noninteractive() {
     err "Path does not exist: $flag_path"
     return 1
   }
+
+  # ── Check for existing deploy.json ──
+  if [[ -f "${project_path}/deploy.json" && "$flag_force" != "true" ]]; then
+    err "deploy.json already exists at ${project_path}/deploy.json"
+    echo "  Use --force to overwrite."
+    return 1
+  fi
 
   local stack="$flag_stack"
   local selected_services=()
@@ -379,8 +484,11 @@ _setup_noninteractive() {
       *) cred_mode="off" ;;
     esac
 
+    local display_name
+    display_name=$(_friendly_name "$svc")
+
     [[ "$first" == "true" ]] && first=false || services_json+=","
-    services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}}"
+    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}}"
     deploy_order_json+="\"${key}\","
   done
 
@@ -394,12 +502,20 @@ _setup_noninteractive() {
   mkdir -p "${muster_dir}/hooks"
   mkdir -p "${muster_dir}/logs"
 
+  # Resolve detected paths for template generation
+  local _detected_compose _detected_dockerfile _detected_k8s
+  _detected_compose=$(scan_get_compose_file)
   for svc in "${ordered_services[@]}"; do
     local key
     key=$(_svc_to_key "$svc")
     local hook_dir="${muster_dir}/hooks/${key}"
     mkdir -p "$hook_dir"
-    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir"
+    _detected_dockerfile=$(scan_get_path "$svc" "dockerfile")
+    _detected_k8s=$(scan_get_path "$svc" "k8s_dir")
+    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
+      "${_detected_compose:-docker-compose.yml}" \
+      "${_detected_dockerfile:-Dockerfile}" \
+      "${_detected_k8s:-k8s/${svc}/}"
   done
 
   # Write deploy.json
@@ -458,7 +574,7 @@ _FLAG_CREDS=()
 cmd_setup() {
   # ── Parse flags ──
   local flag_path="" flag_scan="false" flag_stack="" flag_services=""
-  local flag_order="" flag_name=""
+  local flag_order="" flag_name="" flag_force="false"
   _FLAG_HEALTH=()
   _FLAG_CREDS=()
   local has_flags=false
@@ -482,6 +598,8 @@ cmd_setup() {
         _FLAG_CREDS[${#_FLAG_CREDS[@]}]="$2"; shift 2 ;;
       --name|-n)
         flag_name="$2"; shift 2 ;;
+      --force|-f)
+        flag_force="true"; shift ;;
       --help|-h)
         echo "Usage: muster setup [flags]"
         echo ""
@@ -496,6 +614,7 @@ cmd_setup() {
         echo "  --health <spec>       Per-service health: svc=type[:arg:arg] (repeatable)"
         echo "  --creds <spec>        Per-service credentials: svc=mode (repeatable)"
         echo "  --name, -n <name>     Project name (default: directory basename)"
+        echo "  --force, -f           Overwrite existing deploy.json without prompting"
         echo ""
         echo "Health spec examples:"
         echo "  --health api=http:/health:8080"
@@ -522,11 +641,21 @@ cmd_setup() {
   # If flags were provided, run non-interactive
   if [[ "$has_flags" == "true" ]]; then
     [[ -z "$flag_path" ]] && flag_path="."
-    _setup_noninteractive "$flag_path" "$flag_scan" "$flag_stack" "$flag_services" "$flag_order" "$flag_name"
+    _setup_noninteractive "$flag_path" "$flag_scan" "$flag_stack" "$flag_services" "$flag_order" "$flag_name" "$flag_force"
     return $?
   fi
 
   # ── Interactive TUI wizard ──
+
+  # ── Non-TTY guard: fail early if stdin is not a terminal ──
+  if [[ ! -t 0 ]]; then
+    err "Interactive setup requires a terminal (TTY)."
+    echo "  For non-interactive usage, try:"
+    echo "    muster setup --scan"
+    echo "    muster setup --services api,redis --stack k8s"
+    echo "  Run 'muster setup --help' for all options."
+    return 1
+  fi
 
   # ── Step 1: Project root ──
   local _plat_tools=""
@@ -559,6 +688,17 @@ cmd_setup() {
     err "Path does not exist: $project_path"
     return 1
   }
+
+  # ── Check for existing deploy.json ──
+  if [[ -f "${project_path}/deploy.json" ]]; then
+    _SETUP_CUR_SUMMARY=("")
+    _setup_screen 1 "Existing config found"
+    menu_select "deploy.json already exists at ${project_path}. Overwrite?" "Overwrite" "Cancel"
+    if [[ "$MENU_RESULT" == "Cancel" ]]; then
+      info "Setup cancelled."
+      return 0
+    fi
+  fi
 
   # ── Step 2: Scan project ──
   _SETUP_CUR_SUMMARY=("")
@@ -745,14 +885,21 @@ cmd_setup() {
     mkdir -p "${muster_dir}/hooks"
     mkdir -p "${muster_dir}/logs"
 
-    # Copy template hooks for each service
+    # Copy template hooks for each service, using real detected paths
     local generated_hooks=()
+    local _detected_compose _detected_dockerfile _detected_k8s
+    _detected_compose=$(scan_get_compose_file)
     for svc in "${selected_services[@]}"; do
       local key
       key=$(_svc_to_key "$svc")
       local hook_dir="${muster_dir}/hooks/${key}"
       mkdir -p "$hook_dir"
-      _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir"
+      _detected_dockerfile=$(scan_get_path "$svc" "dockerfile")
+      _detected_k8s=$(scan_get_path "$svc" "k8s_dir")
+      _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
+        "${_detected_compose:-docker-compose.yml}" \
+        "${_detected_dockerfile:-Dockerfile}" \
+        "${_detected_k8s:-k8s/${svc}/}"
       generated_hooks[${#generated_hooks[@]}]=".muster/hooks/${key}/"
     done
 
