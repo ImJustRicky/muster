@@ -18,6 +18,7 @@ order_select() {
   local selected=0
   local grabbed=-1  # -1 = nothing grabbed
 
+  muster_tui_enter
   tput civis
 
   local w=$(( TERM_COLS - 4 ))

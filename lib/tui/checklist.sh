@@ -21,6 +21,7 @@ checklist_select() {
   local i=0
   while (( i < count )); do checked[$i]=1; i=$((i + 1)); done
 
+  muster_tui_enter
   tput civis
 
   _cl_draw_header() {

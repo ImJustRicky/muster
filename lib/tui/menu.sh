@@ -17,6 +17,7 @@ menu_select() {
   local selected=0
   local count=${#options[@]}
 
+  muster_tui_enter
   tput civis
 
   _menu_draw_header() {

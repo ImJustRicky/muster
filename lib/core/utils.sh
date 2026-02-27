@@ -25,13 +25,23 @@ _on_resize() {
 }
 trap '_on_resize' WINCH
 
-# Cleanup terminal state on exit
+# Track whether TUI modified terminal state
+_MUSTER_TUI_ACTIVE="false"
+
+# Call this when entering TUI mode (dashboard, menus with cursor hidden, etc.)
+muster_tui_enter() {
+  _MUSTER_TUI_ACTIVE="true"
+}
+
+# Cleanup terminal state on exit — only resets if TUI was active
 cleanup_term() {
-  printf '\033[;r' 2>/dev/null
-  tput cnorm 2>/dev/null || true
-  printf '\033[0m' 2>/dev/null
-  stty echo 2>/dev/null || true
-  echo ""
+  if [[ "$_MUSTER_TUI_ACTIVE" = "true" ]]; then
+    printf '\033[;r' 2>/dev/null
+    tput cnorm 2>/dev/null || true
+    printf '\033[0m' 2>/dev/null
+    stty echo 2>/dev/null || true
+    echo ""
+  fi
 }
 trap cleanup_term EXIT
 

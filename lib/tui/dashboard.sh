@@ -16,6 +16,7 @@ _dashboard_header() {
   local project
   project=$(config_get '.project')
 
+  muster_tui_enter
   clear
   echo -e "\n  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}v${MUSTER_VERSION}${RESET}  ${WHITE}${project}${RESET}"
   print_platform
