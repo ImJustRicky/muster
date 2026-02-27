@@ -7,6 +7,7 @@ source "$MUSTER_ROOT/lib/tui/progress.sh"
 source "$MUSTER_ROOT/lib/tui/streambox.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
+source "$MUSTER_ROOT/lib/skills/manager.sh"
 
 cmd_deploy() {
   local dry_run=false
@@ -145,6 +146,8 @@ cmd_deploy() {
         done <<< "$_k8s_env_lines"
       fi
 
+      run_skill_hooks "pre-deploy" "$svc"
+
       progress_bar "$current" "$total" "Deploying ${name}..."
       echo ""
 
@@ -188,6 +191,7 @@ ${_k8s_env_lines}"
 
       if (( rc == 0 )); then
         ok "${name} deployed"
+        run_skill_hooks "post-deploy" "$svc"
 
         # Run health check
         local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"

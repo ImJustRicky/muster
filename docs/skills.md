@@ -63,6 +63,29 @@ Exit codes:
 - `0` — success
 - `1` — failure (muster reports the error)
 
+## Creating a Skill
+
+The fastest way to start:
+
+```bash
+muster skill create my-skill
+```
+
+This scaffolds `~/.muster/skills/my-skill/` with a ready-to-edit `skill.json` and executable `run.sh` stub. Edit the files, add hooks, and test with `muster skill run my-skill`.
+
+## Hooks
+
+Skills that declare hooks in `skill.json` are automatically triggered during deploy and rollback:
+
+| Hook | When it runs |
+|------|-------------|
+| `pre-deploy` | Before each service deploys |
+| `post-deploy` | After each service deploys successfully |
+| `pre-rollback` | Before a service rollback |
+| `post-rollback` | After a service rollback succeeds |
+
+Hook execution is **non-fatal** — if a skill fails, muster warns and continues.
+
 ## Installing
 
 Users install your skill from a git repo:
@@ -126,12 +149,18 @@ If publishing to GitHub, name your repo `muster-skill-<name>`. The `muster-skill
 ## Testing Your Skill
 
 ```bash
-# Install locally
+# Create a new skill
+muster skill create my-skill
+
+# Or install from local path
 muster skill add ./your-skill-folder
 
 # Run it
-muster skill run yourname
+muster skill run my-skill
 
 # Check it shows up
 muster skill list
+
+# Remove it
+muster skill remove my-skill
 ```

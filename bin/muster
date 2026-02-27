@@ -3,7 +3,7 @@
 # https://github.com/ImJustRicky/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.1.0"
+MUSTER_VERSION="0.2.0"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -89,7 +89,7 @@ case "${1:-}" in
     echo "  cleanup     Clean up stuck processes"
     echo "  settings    View and edit project/global settings"
     echo "  uninstall   Remove muster from project"
-    echo "  skill       Manage addon skills"
+    echo "  skill       Manage addon skills (add, create, remove, list, run)"
     echo ""
     echo "Options:"
     echo "  -v, --version   Show version"

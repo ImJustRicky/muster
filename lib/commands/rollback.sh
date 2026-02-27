@@ -5,6 +5,7 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
+source "$MUSTER_ROOT/lib/skills/manager.sh"
 
 cmd_rollback() {
   load_config
@@ -69,6 +70,8 @@ cmd_rollback() {
     done <<< "$_k8s_env_lines"
   fi
 
+  run_skill_hooks "pre-rollback" "$target"
+
   if remote_is_enabled "$target"; then
     info "Rolling back ${name} remotely ($(remote_desc "$target"))"
   fi
@@ -102,6 +105,7 @@ ${_k8s_env_lines}"
 
   if (( rc == 0 )); then
     ok "${name} rolled back successfully"
+    run_skill_hooks "post-rollback" "$target"
   else
     err "${name} rollback failed (exit code ${rc})"
     err "Log: ${log_file}"
