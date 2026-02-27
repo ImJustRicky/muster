@@ -1,6 +1,12 @@
-# muster
+<p align="center">
+  <img src="assets/banner.png" alt="muster" width="600" />
+</p>
 
-Universal deploy framework with a beautiful TUI. Pure bash, zero dependencies, fully modular.
+<p align="center">
+  Universal deploy framework with a beautiful TUI. Pure bash, zero dependencies, fully modular.
+</p>
+
+---
 
 **muster** gives any project a polished deploy experience — interactive dashboard, health checks, rollback, log streaming — regardless of stack. It doesn't know how to deploy your app. It knows how to run your scripts beautifully and verify everything works.
 

@@ -59,6 +59,7 @@ _setup_screen_inner() {
 
   # Progress bar
   local bar_w=$(( W - 4 ))
+  (( bar_w < 1 )) && bar_w=1
   local filled=$(( _SETUP_CUR_STEP * bar_w / SETUP_TOTAL_STEPS ))
   local empty_count=$(( bar_w - filled ))
   local bar_filled=""
@@ -74,20 +75,39 @@ _setup_screen_inner() {
   local hline=""
   i=0; while (( i < W )); do hline="${hline}─"; i=$((i + 1)); done
 
+  # Truncate phrase to fit box
+  local max_phrase_len=$(( W - 2 ))
+  local display_phrase="$_SETUP_CUR_PHRASE"
+  if (( ${#display_phrase} > max_phrase_len )); then
+    display_phrase="${display_phrase:0:$((max_phrase_len - 3))}..."
+  fi
+
+  # Truncate step text if needed
+  local display_step="$step_text"
+  if (( ${#display_step} > max_phrase_len )); then
+    display_step="${display_step:0:$((max_phrase_len - 3))}..."
+  fi
+
   # Padding
   local p_empty=$(printf '%*s' "$W" "")
-  local p_title=$(printf '%*s' $((W - 13)) "")
-  local p_phrase=$(printf '%*s' $((W - ${#_SETUP_CUR_PHRASE} - 2)) "")
-  local p_step=$(printf '%*s' $((W - ${#step_text} - 2)) "")
+  local p_title_pad=$(( W - 13 ))
+  (( p_title_pad < 0 )) && p_title_pad=0
+  local p_title=$(printf '%*s' "$p_title_pad" "")
+  local p_phrase_pad=$(( W - ${#display_phrase} - 2 ))
+  (( p_phrase_pad < 0 )) && p_phrase_pad=0
+  local p_phrase=$(printf '%*s' "$p_phrase_pad" "")
+  local p_step_pad=$(( W - ${#display_step} - 2 ))
+  (( p_step_pad < 0 )) && p_step_pad=0
+  local p_step=$(printf '%*s' "$p_step_pad" "")
 
   echo ""
   echo -e "  ${C}┌${hline}┐${R}"
   echo -e "  ${C}│${R}${p_empty}${C}│${R}"
   echo -e "  ${C}│${R}  ${B}${C}m u s t e r${R}${p_title}${C}│${R}"
-  echo -e "  ${C}│${R}  ${D}${_SETUP_CUR_PHRASE}${R}${p_phrase}${C}│${R}"
+  echo -e "  ${C}│${R}  ${D}${display_phrase}${R}${p_phrase}${C}│${R}"
   echo -e "  ${C}│${R}${p_empty}${C}│${R}"
   echo -e "  ${C}│${R}  ${C}${bar_filled}${G}${bar_empty}${R}  ${C}│${R}"
-  echo -e "  ${C}│${R}  ${D}${step_text}${R}${p_step}${C}│${R}"
+  echo -e "  ${C}│${R}  ${D}${display_step}${R}${p_step}${C}│${R}"
   echo -e "  ${C}└${hline}┘${R}"
 
   if [[ -n "$_SETUP_CUR_LABEL" ]]; then
