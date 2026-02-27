@@ -36,10 +36,11 @@ _SETUP_CUR_STEP=1
 _SETUP_CUR_LABEL=""
 _SETUP_CUR_PHRASE=""
 _SETUP_CUR_SUMMARY=()
+_SETUP_CUR_PROMPT="false"  # if true, last summary line is a prompt (no trailing newline)
 
-# Called by WINCH trap to redraw on resize (in-place, preserves step content)
+# Called by WINCH trap to redraw on resize
 _setup_redraw() {
-  _setup_redraw_banner
+  _setup_screen_inner
 }
 
 # Number of lines the banner box occupies (blank + 8 box lines)
@@ -139,23 +140,18 @@ _setup_screen_inner() {
     echo -e "  ${BOLD}${_SETUP_CUR_LABEL}${RESET}"
   fi
 
-  # Redraw summary lines
+  # Redraw summary lines (last line uses printf to keep cursor on same line for prompts)
+  local _sum_count=${#_SETUP_CUR_SUMMARY[@]}
+  local _sum_i=0
   local s
   for s in "${_SETUP_CUR_SUMMARY[@]}"; do
-    echo -e "$s"
+    _sum_i=$((_sum_i + 1))
+    if (( _sum_i == _sum_count )) && [[ "$_SETUP_CUR_PROMPT" == "true" ]]; then
+      printf '%b' "$s"
+    else
+      echo -e "$s"
+    fi
   done
-}
-
-# Redraw ONLY the banner in-place (preserves content below)
-_setup_redraw_banner() {
-  _setup_build_banner
-
-  # Jump to top of screen, overwrite banner lines, then jump back down
-  # Use ANSI escapes directly (reliable on macOS Terminal + bash 3.2)
-  printf '\033[s'          # save cursor
-  printf '\033[H'          # move to top-left
-  _setup_print_banner
-  printf '\033[u'          # restore cursor
 }
 
 # Public: set state and draw
@@ -169,6 +165,7 @@ _setup_screen() {
 
 # Helper: build summary lines for step 2
 _build_stack_summary() {
+  _SETUP_CUR_PROMPT="false"
   _SETUP_CUR_SUMMARY=("")
   _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Project: ${project_path}${RESET}"
   [[ "$has_db" == "yes" && -n "$db_type" ]] && _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${GREEN}*${RESET} Database: ${db_type}"
@@ -181,15 +178,30 @@ _build_stack_summary() {
 
 cmd_setup() {
   # ── Step 1: Project root ──
-  _SETUP_CUR_SUMMARY=("")
+  # Build platform info lines for summary (so resize redraw can reproduce them)
+  local _plat_tools=""
+  [[ "$MUSTER_HAS_DOCKER" == "true" ]] && _plat_tools+="docker "
+  [[ "$MUSTER_HAS_KUBECTL" == "true" ]] && _plat_tools+="kubectl "
+  [[ "$MUSTER_HAS_JQ" == "true" ]] && _plat_tools+="jq "
+  [[ "$MUSTER_HAS_PYTHON" == "true" ]] && _plat_tools+="python3 "
+  local _plat_kc="not available (will use encrypted vault)"
+  [[ "$MUSTER_HAS_KEYCHAIN" == "true" ]] && _plat_kc="available"
+
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}${MUSTER_OS} ${MUSTER_ARCH}${RESET}"
+    "  ${DIM}tools: ${_plat_tools}${RESET}"
+    "  ${DIM}keychain: ${_plat_kc}${RESET}"
+    ""
+    "  ${BOLD}Where is your project?${RESET}"
+    "  ${DIM}Enter path or press enter for parent directory${RESET}"
+    ""
+    "  ${ACCENT}>${RESET} "
+  )
+  _SETUP_CUR_PROMPT="true"
   _setup_screen 1 "Project location"
-  echo ""
-  print_platform
-  echo ""
-  echo -e "  ${BOLD}Where is your project?${RESET}"
-  echo -e "  ${DIM}Enter path or press enter for parent directory${RESET}\n"
-  printf "  ${ACCENT}>${RESET} "
   read -r project_path
+  _SETUP_CUR_PROMPT="false"
   project_path="${project_path:-..}"
 
   project_path="$(cd "$project_path" 2>/dev/null && pwd)" || {
@@ -340,13 +352,15 @@ cmd_setup() {
     esac
 
     # Credentials
-    _SETUP_CUR_SUMMARY=("")
+    _SETUP_CUR_SUMMARY=(
+      ""
+      "  ${GREEN}*${RESET} Health: ${health_choice}"
+      ""
+      "  ${YELLOW}! HIGH RISK${RESET}: Store superuser credentials for ${svc}?"
+      "  ${DIM}Credentials stored in system keychain or encrypted vault.${RESET}"
+      "  ${DIM}NEVER in deploy.json or committed to git.${RESET}"
+    )
     _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
-    echo -e "  ${GREEN}*${RESET} Health: ${health_choice}"
-    echo ""
-    echo -e "  ${YELLOW}! HIGH RISK${RESET}: Store superuser credentials for ${svc}?"
-    echo -e "  ${DIM}Credentials stored in system keychain or encrypted vault.${RESET}"
-    echo -e "  ${DIM}NEVER in deploy.json or committed to git.${RESET}"
     menu_select "Store credentials?" "No, prompt each time (recommended)" "Yes, store securely"
     local cred_choice="$MENU_RESULT"
 
@@ -364,13 +378,16 @@ cmd_setup() {
   deploy_order_json="${deploy_order_json%,}]"
 
   # ── Step 6: Project name ──
-  _SETUP_CUR_SUMMARY=("")
-  _setup_screen 6 "Project name"
-  echo ""
   local project_name
   project_name=$(basename "$project_path")
-  printf "  ${ACCENT}>${RESET} Project name [${project_name}]: "
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${ACCENT}>${RESET} Project name [${project_name}]: "
+  )
+  _SETUP_CUR_PROMPT="true"
+  _setup_screen 6 "Project name"
   read -r custom_name
+  _SETUP_CUR_PROMPT="false"
   project_name="${custom_name:-$project_name}"
 
   # ── Step 7: Write config ──
