@@ -231,12 +231,14 @@ _friendly_name() {
 }
 
 # ── Copy template hooks for a service, replacing placeholders ──
-# Args: stack svc_key svc_name hook_dir [compose_file] [dockerfile] [k8s_dir]
+# Args: stack svc_key svc_name hook_dir [compose_file] [dockerfile] [k8s_dir] [namespace] [port]
 _setup_copy_hooks() {
   local stack="$1" svc_key="$2" svc_name="$3" hook_dir="$4"
   local compose_path="${5:-docker-compose.yml}"
   local dockerfile_path="${6:-Dockerfile}"
   local k8s_path="${7:-k8s/${svc_name}/}"
+  local namespace="${8:-default}"
+  local port="${9:-8080}"
   local template_dir="${MUSTER_ROOT}/templates/hooks/${stack}"
 
   # Use infrastructure templates for known infra services (skip build steps)
@@ -260,8 +262,8 @@ _setup_copy_hooks() {
     sed \
       -e "s|{{SERVICE_NAME}}|${svc_name}|g" \
       -e "s|{{SERVICE_IMAGE}}|${svc_image}|g" \
-      -e "s|{{NAMESPACE}}|default|g" \
-      -e "s|{{PORT}}|8080|g" \
+      -e "s|{{NAMESPACE}}|${namespace}|g" \
+      -e "s|{{PORT}}|${port}|g" \
       -e "s|{{COMPOSE_FILE}}|${compose_path}|g" \
       -e "s|{{DOCKERFILE}}|${dockerfile_path}|g" \
       -e "s|{{K8S_DIR}}|${k8s_path}|g" \
@@ -319,7 +321,7 @@ HOOK
 # ══════════════════════════════════════════════════════════════
 _setup_noninteractive() {
   local flag_path="$1" flag_scan="$2" flag_stack="$3" flag_services="$4"
-  local flag_order="$5" flag_name="$6" flag_force="$7"
+  local flag_order="$5" flag_name="$6" flag_force="$7" flag_namespace="$8"
   # flag_health and flag_creds are in global arrays _FLAG_HEALTH[] and _FLAG_CREDS[]
 
   # ── Resolve project path ──
@@ -505,6 +507,7 @@ _setup_noninteractive() {
   # Resolve detected paths for template generation
   local _detected_compose _detected_dockerfile _detected_k8s
   _detected_compose=$(scan_get_compose_file)
+  local _ns="${flag_namespace:-default}"
   for svc in "${ordered_services[@]}"; do
     local key
     key=$(_svc_to_key "$svc")
@@ -512,10 +515,34 @@ _setup_noninteractive() {
     mkdir -p "$hook_dir"
     _detected_dockerfile=$(scan_get_path "$svc" "dockerfile")
     _detected_k8s=$(scan_get_path "$svc" "k8s_dir")
+
+    # Extract port from health spec for this service
+    local _svc_port="8080"
+    local _hi=0
+    while (( _hi < ${#_h_keys[@]} )); do
+      if [[ "${_h_keys[$_hi]}" == "$svc" || "${_h_keys[$_hi]}" == "$key" ]]; then
+        local _h_spec="${_h_vals[$_hi]}"
+        local _h_type="${_h_spec%%:*}"
+        local _h_args="${_h_spec#*:}"
+        case "$_h_type" in
+          http)
+            local _hp="${_h_args#*:}"
+            [[ -n "$_hp" && "$_hp" != "${_h_args%%:*}" ]] && _svc_port="$_hp"
+            ;;
+          tcp)
+            [[ -n "$_h_args" ]] && _svc_port="$_h_args"
+            ;;
+        esac
+        break
+      fi
+      _hi=$((_hi + 1))
+    done
+
     _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
       "${_detected_compose:-docker-compose.yml}" \
       "${_detected_dockerfile:-Dockerfile}" \
-      "${_detected_k8s:-k8s/${svc}/}"
+      "${_detected_k8s:-k8s/${svc}/}" \
+      "$_ns" "$_svc_port"
   done
 
   # Write deploy.json
@@ -574,7 +601,7 @@ _FLAG_CREDS=()
 cmd_setup() {
   # ── Parse flags ──
   local flag_path="" flag_scan="false" flag_stack="" flag_services=""
-  local flag_order="" flag_name="" flag_force="false"
+  local flag_order="" flag_name="" flag_force="false" flag_namespace=""
   _FLAG_HEALTH=()
   _FLAG_CREDS=()
   local has_flags=false
@@ -598,6 +625,8 @@ cmd_setup() {
         _FLAG_CREDS[${#_FLAG_CREDS[@]}]="$2"; shift 2 ;;
       --name|-n)
         flag_name="$2"; shift 2 ;;
+      --namespace)
+        flag_namespace="$2"; shift 2 ;;
       --force|-f)
         flag_force="true"; shift ;;
       --help|-h)
@@ -613,6 +642,7 @@ cmd_setup() {
         echo "  --order <list>        Comma-separated deploy order (default: services order)"
         echo "  --health <spec>       Per-service health: svc=type[:arg:arg] (repeatable)"
         echo "  --creds <spec>        Per-service credentials: svc=mode (repeatable)"
+        echo "  --namespace <ns>      Kubernetes namespace (default: default)"
         echo "  --name, -n <name>     Project name (default: directory basename)"
         echo "  --force, -f           Overwrite existing deploy.json without prompting"
         echo ""
@@ -641,7 +671,7 @@ cmd_setup() {
   # If flags were provided, run non-interactive
   if [[ "$has_flags" == "true" ]]; then
     [[ -z "$flag_path" ]] && flag_path="."
-    _setup_noninteractive "$flag_path" "$flag_scan" "$flag_stack" "$flag_services" "$flag_order" "$flag_name" "$flag_force"
+    _setup_noninteractive "$flag_path" "$flag_scan" "$flag_stack" "$flag_services" "$flag_order" "$flag_name" "$flag_force" "$flag_namespace"
     return $?
   fi
 
@@ -805,6 +835,7 @@ cmd_setup() {
     local deploy_order_json="["
     local first=true
     local svc_index=0
+    local _svc_ports=()
 
     for svc in "${selected_services[@]}"; do
       svc_index=$((svc_index + 1))
@@ -818,6 +849,7 @@ cmd_setup() {
       local health_choice="$MENU_RESULT"
 
       local health_json="{}"
+      local port_num=""
       case "$health_choice" in
         HTTP)
           printf "\n  ${ACCENT}>${RESET} Health endpoint [/health]: "
@@ -840,6 +872,7 @@ cmd_setup() {
           health_json="{\"enabled\":false}"
           ;;
       esac
+      _svc_ports[${#_svc_ports[@]}]="${port_num:-8080}"
 
       # Credentials
       _SETUP_CUR_SUMMARY=(

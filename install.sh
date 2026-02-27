@@ -57,9 +57,48 @@ fi
 
 if [[ "$_path_has_bin_dir" = false ]]; then
   echo ""
-  echo "  Note: ${BIN_DIR} is not in your PATH."
-  echo "  Add this to your shell profile:"
-  echo ""
-  echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+  echo "  ${BIN_DIR} is not in your PATH."
+
+  # Detect shell profile
+  _shell_profile=""
+  case "${SHELL:-}" in
+    */zsh)  _shell_profile="$HOME/.zshrc" ;;
+    */bash) _shell_profile="$HOME/.bashrc" ;;
+  esac
+  # Fallback: check what exists
+  if [[ -z "$_shell_profile" ]]; then
+    if [[ -f "$HOME/.zshrc" ]]; then
+      _shell_profile="$HOME/.zshrc"
+    elif [[ -f "$HOME/.bashrc" ]]; then
+      _shell_profile="$HOME/.bashrc"
+    elif [[ -f "$HOME/.profile" ]]; then
+      _shell_profile="$HOME/.profile"
+    fi
+  fi
+
+  _export_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
+  _added=false
+
+  if [[ -n "$_shell_profile" && -t 0 ]]; then
+    echo ""
+    printf "  Add to %s? [Y/n] " "$_shell_profile"
+    read -r _answer
+    case "${_answer:-Y}" in
+      [Yy]|"")
+        echo "" >> "$_shell_profile"
+        echo "# Added by muster installer" >> "$_shell_profile"
+        echo "$_export_line" >> "$_shell_profile"
+        echo "  Added to ${_shell_profile}."
+        echo "  Run: source ${_shell_profile}"
+        _added=true
+        ;;
+    esac
+  fi
+
+  if [[ "$_added" = false ]]; then
+    echo "  Add this to your shell profile:"
+    echo ""
+    echo "    ${_export_line}"
+  fi
 fi
 echo ""

@@ -8,7 +8,7 @@ IMAGE="{{SERVICE_IMAGE}}"
 
 # Apply manifests
 echo "Applying Kubernetes manifests for ${SERVICE}..."
-kubectl apply -f k8s/${SERVICE}/ -n "$NAMESPACE" 2>/dev/null || true
+kubectl apply -f {{K8S_DIR}} -n "$NAMESPACE" 2>/dev/null || true
 
 # Update deployment image (pull only, no build)
 echo "Updating deployment to ${IMAGE}..."

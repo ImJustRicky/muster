@@ -77,7 +77,7 @@ case "${1:-}" in
     echo "Commands:"
     echo "  (none)      Open the dashboard"
     echo "  setup       Guided setup wizard (or setup --help for flags)"
-    echo "  deploy      Deploy services"
+    echo "  deploy      Deploy services (--dry-run to preview)"
     echo "  status      Check service health"
     echo "  logs        Stream service logs"
     echo "  rollback    Revert last deploy"
