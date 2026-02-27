@@ -67,7 +67,7 @@ case "${1:-}" in
     cmd_skill "$@"
     ;;
   --version|-v)
-    echo "muster v${MUSTER_VERSION}"
+    echo "v${MUSTER_VERSION}"
     ;;
   --help|-h)
     echo -e "${BOLD}muster${RESET} — Universal deploy framework"

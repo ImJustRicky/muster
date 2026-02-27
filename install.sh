@@ -35,7 +35,7 @@ fi
 if "${BIN_DIR}/muster" --version >/dev/null 2>&1; then
   _ver="$("${BIN_DIR}/muster" --version 2>/dev/null || true)"
   if [[ -n "$_ver" ]]; then
-    echo "  Done! ${_ver} installed."
+    echo "  Done! muster ${_ver} installed."
   else
     echo "  Done! muster installed."
   fi
