@@ -668,8 +668,10 @@ for item in data.get('items', []):
       elif [[ -n "$container_port" ]]; then
         # No probe but has a port — default to tcp
         _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|tcp||${container_port}"
+      else
+        # No probe and no port — use kubectl rollout status as health check
+        _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|command|kubectl rollout status deployment/${dep_name} -n ${ns} --timeout=30s|"
       fi
-      # Neither probe nor port: skip (no health entry)
 
       _idx=$((_idx + 1))
     done
@@ -728,8 +730,8 @@ for item in data.get('items', []):
     elif container_port:
         print('HEALTH|' + svc_name + '|tcp||' + container_port)
     else:
-        print('SVC|' + svc_name)
-" "$_SCAN_K8S_PREFIX" 2>/dev/null)
+        print('HEALTH|' + svc_name + '|command|kubectl rollout status deployment/' + dep_name + ' -n ' + sys.argv[2] + ' --timeout=30s|')
+" "$_SCAN_K8S_PREFIX" "$ns" 2>/dev/null)
 
     local _line
     while IFS= read -r _line; do
@@ -773,6 +775,23 @@ scan_get_health() {
     i=$((i + 1))
   done
   echo ""
+}
+
+# Check if a service was found in the live k8s cluster scan
+# Returns 0 if found, 1 if not
+# Usage: scan_has_k8s_deployment "api"
+scan_has_k8s_deployment() {
+  local svc="$1"
+  local i=0
+  while (( i < ${#_SCAN_K8S_NAMES[@]} )); do
+    local entry="${_SCAN_K8S_NAMES[$i]}"
+    local n_svc="${entry%%|*}"
+    if [[ "$n_svc" == "$svc" ]]; then
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
 }
 
 # Look up original k8s deployment name for a service

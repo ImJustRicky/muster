@@ -403,7 +403,29 @@ _setup_noninteractive() {
       ordered_services[${#ordered_services[@]}]="$s"
     done
   else
-    ordered_services=("${selected_services[@]}")
+    # Smart ordering: infra services first, then app services
+    local _infra_order=()
+    local _app_order=()
+    local _si=0
+    while (( _si < ${#selected_services[@]} )); do
+      if _is_infra_service "${selected_services[$_si]}"; then
+        _infra_order[${#_infra_order[@]}]="${selected_services[$_si]}"
+      else
+        _app_order[${#_app_order[@]}]="${selected_services[$_si]}"
+      fi
+      _si=$((_si + 1))
+    done
+    # Infra first, then app services
+    local _oi=0
+    while (( _oi < ${#_infra_order[@]} )); do
+      ordered_services[${#ordered_services[@]}]="${_infra_order[$_oi]}"
+      _oi=$((_oi + 1))
+    done
+    _oi=0
+    while (( _oi < ${#_app_order[@]} )); do
+      ordered_services[${#ordered_services[@]}]="${_app_order[$_oi]}"
+      _oi=$((_oi + 1))
+    done
   fi
 
   # ── Project name ──
@@ -590,6 +612,7 @@ _setup_noninteractive() {
 
     # Build k8s config block if stack is k8s
     local k8s_json=""
+    local skip_deploy_json=""
     if [[ "$stack" == "k8s" ]]; then
       local _k8s_deploy _k8s_ns
       _k8s_deploy=$(scan_get_k8s_name "$svc")
@@ -597,10 +620,17 @@ _setup_noninteractive() {
       [[ -z "$_k8s_deploy" || "$_k8s_deploy" == "$key" ]] && _k8s_deploy="$svc"
       _k8s_ns="${_SCAN_K8S_NS:-${flag_namespace:-default}}"
       k8s_json=",\"k8s\":{\"deployment\":\"${_k8s_deploy}\",\"namespace\":\"${_k8s_ns}\"}"
+
+      # Auto skip_deploy if live scan ran but didn't find this service as a deployment
+      if [[ ${#_SCAN_K8S_NAMES[@]} -gt 0 ]]; then
+        if ! scan_has_k8s_deployment "$svc" && ! scan_has_k8s_deployment "$key"; then
+          skip_deploy_json=",\"skip_deploy\":true"
+        fi
+      fi
     fi
 
     [[ "$first" == "true" ]] && first=false || services_json+=","
-    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${remote_json}${k8s_json}}"
+    services_json+="\"${key}\":{\"name\":\"${display_name}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${remote_json}${k8s_json}${skip_deploy_json}}"
     deploy_order_json+="\"${key}\","
   done
 
