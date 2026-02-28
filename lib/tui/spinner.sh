@@ -16,6 +16,8 @@ start_spinner() {
   ) &
   SPINNER_PID=$!
   disown "$SPINNER_PID" 2>/dev/null
+  trap 'stop_spinner; exit 130' INT
+  trap 'stop_spinner' EXIT
 }
 
 stop_spinner() {
@@ -25,4 +27,5 @@ stop_spinner() {
     SPINNER_PID=""
     printf "\r\033[K"
   fi
+  trap - INT EXIT 2>/dev/null || true
 }
