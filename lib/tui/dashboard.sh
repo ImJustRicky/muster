@@ -5,10 +5,23 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/updater.sh"
 
+_HEALTH_CACHE_DIR="${HOME}/.muster/.health_cache"
+
 _dashboard_pause() {
   echo ""
   echo -e "  ${DIM}Press any key to continue...${RESET}"
   IFS= read -rsn1 || true
+}
+
+_dashboard_print_svc_line() {
+  local status_icon="$1" status_color="$2" display_name="$3" pad="$4" cred_warn="$5"
+  if [[ -n "$cred_warn" ]]; then
+    printf '  %b│%b  %b%s%b %s%s %b%s%b%b│%b\n' \
+      "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" "$display_name" "$pad" "${YELLOW}" "$cred_warn" "${RESET}" "${ACCENT}" "${RESET}"
+  else
+    printf '  %b│%b  %b%s%b %s%s%b│%b\n' \
+      "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" "$display_name" "$pad" "${ACCENT}" "${RESET}"
+  fi
 }
 
 _dashboard_header() {
@@ -23,7 +36,6 @@ _dashboard_header() {
   print_platform
   echo ""
 
-  # Health check all services
   local services
   services=$(config_services)
 
@@ -31,6 +43,44 @@ _dashboard_header() {
   (( w > 50 )) && w=50
   (( w < 10 )) && w=10
   local inner=$(( w - 2 ))
+
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+
+  # Start all health checks in parallel
+  local _hc_dir
+  _hc_dir=$(mktemp -d)
+  local _svc_keys=()
+  local _svc_pids=()
+
+  while IFS= read -r svc; do
+    [[ -z "$svc" ]] && continue
+    _svc_keys[${#_svc_keys[@]}]="$svc"
+
+    local hook_dir="${project_dir}/.muster/hooks/${svc}"
+    local health_enabled
+    health_enabled=$(config_get ".services.${svc}.health.enabled")
+
+    if [[ "$health_enabled" == "false" ]]; then
+      printf 'disabled' > "${_hc_dir}/${svc}"
+      _svc_pids[${#_svc_pids[@]}]=0
+    elif [[ -x "${hook_dir}/health.sh" ]]; then
+      (
+        mkdir -p "$_HEALTH_CACHE_DIR"
+        if "${hook_dir}/health.sh" &>/dev/null; then
+          printf 'healthy' > "${_hc_dir}/${svc}"
+          printf 'healthy' > "${_HEALTH_CACHE_DIR}/${svc}"
+        else
+          printf 'unhealthy' > "${_hc_dir}/${svc}"
+          printf 'unhealthy' > "${_HEALTH_CACHE_DIR}/${svc}"
+        fi
+      ) &
+      _svc_pids[${#_svc_pids[@]}]=$!
+    else
+      printf 'disabled' > "${_hc_dir}/${svc}"
+      _svc_pids[${#_svc_pids[@]}]=0
+    fi
+  done <<< "$services"
 
   # Top border with "Services" label
   local label="Services"
@@ -40,35 +90,51 @@ _dashboard_header() {
   label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
-  while IFS= read -r svc; do
-    [[ -z "$svc" ]] && continue
-    local name status_icon status_color
+  # Render each service line progressively as health checks complete
+  local _idx=0
+  while (( _idx < ${#_svc_keys[@]} )); do
+    local svc="${_svc_keys[$_idx]}"
+    local pid="${_svc_pids[$_idx]}"
 
+    # Wait for this service's health check (poll with 2s timeout)
+    if [[ "$pid" -ne 0 ]]; then
+      local _pw=0
+      while [[ ! -f "${_hc_dir}/${svc}" ]] && (( _pw < 10 )); do
+        sleep 0.2
+        _pw=$((_pw + 1))
+      done
+    fi
+
+    # Determine status
+    local status_icon status_color
+    if [[ -f "${_hc_dir}/${svc}" ]]; then
+      local _result
+      _result=$(cat "${_hc_dir}/${svc}")
+      case "$_result" in
+        healthy)   status_icon="●"; status_color="$GREEN" ;;
+        unhealthy) status_icon="●"; status_color="$RED" ;;
+        *)         status_icon="○"; status_color="$GRAY" ;;
+      esac
+    elif [[ -f "${_HEALTH_CACHE_DIR}/${svc}" ]]; then
+      # Timed out — fall back to persistent cache
+      local _cached
+      _cached=$(cat "${_HEALTH_CACHE_DIR}/${svc}")
+      case "$_cached" in
+        healthy)   status_icon="●"; status_color="$GREEN" ;;
+        unhealthy) status_icon="●"; status_color="$RED" ;;
+        *)         status_icon="○"; status_color="$GRAY" ;;
+      esac
+    else
+      # No data yet — loading
+      status_icon="○"
+      status_color="$YELLOW"
+    fi
+
+    # Format service line
+    local name
     name=$(config_get ".services.${svc}.name")
     local cred_enabled
     cred_enabled=$(config_get ".services.${svc}.credentials.enabled")
-
-    local hook_dir
-    hook_dir="$(dirname "$CONFIG_FILE")/.muster/hooks/${svc}"
-
-    local health_enabled
-    health_enabled=$(config_get ".services.${svc}.health.enabled")
-
-    if [[ "$health_enabled" == "false" ]]; then
-      status_icon="○"
-      status_color="$GRAY"
-    elif [[ -x "${hook_dir}/health.sh" ]]; then
-      if "${hook_dir}/health.sh" &>/dev/null; then
-        status_icon="●"
-        status_color="$GREEN"
-      else
-        status_icon="●"
-        status_color="$RED"
-      fi
-    else
-      status_icon="○"
-      status_color="$GRAY"
-    fi
 
     local cred_warn=""
     local cred_extra=0
@@ -91,19 +157,18 @@ _dashboard_header() {
     local pad
     pad=$(printf '%*s' "$pad_len" "")
 
-    if [[ -n "$cred_warn" ]]; then
-      printf '  %b│%b  %b%s%b %s%s %b%s%b%b│%b\n' \
-        "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" "$display_name" "$pad" "${YELLOW}" "$cred_warn" "${RESET}" "${ACCENT}" "${RESET}"
-    else
-      printf '  %b│%b  %b%s%b %s%s%b│%b\n' \
-        "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" "$display_name" "$pad" "${ACCENT}" "${RESET}"
-    fi
-  done <<< "$services"
+    _dashboard_print_svc_line "$status_icon" "$status_color" "$display_name" "$pad" "$cred_warn"
+
+    _idx=$((_idx + 1))
+  done
 
   local bottom
   bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
   echo ""
+
+  # Clean up temp dir after any remaining bg checks finish
+  ( wait 2>/dev/null; rm -rf "$_hc_dir" ) &
 }
 
 cmd_dashboard() {
