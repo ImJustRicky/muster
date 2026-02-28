@@ -11,11 +11,12 @@ cmd_skill() {
       echo "Manage addon skills."
       echo ""
       echo "Commands:"
-      echo "  add <url>       Install a skill from a git URL or local path"
-      echo "  create <name>   Scaffold a new skill"
-      echo "  remove <name>   Remove an installed skill"
-      echo "  list            List installed skills"
-      echo "  run <name>      Run a skill manually"
+      echo "  add <url>            Install a skill from a git URL or local path"
+      echo "  create <name>        Scaffold a new skill"
+      echo "  remove <name>        Remove an installed skill"
+      echo "  list                 List installed skills"
+      echo "  run <name>           Run a skill manually"
+      echo "  marketplace [query]  Browse and install skills from the official registry"
       return 0
       ;;
   esac
@@ -39,9 +40,12 @@ cmd_skill() {
     run)
       skill_run "$@"
       ;;
+    marketplace|browse|search)
+      skill_marketplace "$@"
+      ;;
     *)
       err "Unknown skill command: ${action}"
-      echo "Usage: muster skill [add|create|remove|list|run]"
+      echo "Usage: muster skill [add|create|remove|list|run|marketplace]"
       exit 1
       ;;
   esac
@@ -300,4 +304,191 @@ print('yes' if sys.argv[2] in d.get('hooks',[]) else 'no')
       unset MUSTER_PROJECT_DIR MUSTER_CONFIG_FILE MUSTER_SERVICE MUSTER_HOOK 2>/dev/null
     fi
   done
+}
+
+# ---------------------------------------------------------------------------
+# Skill Marketplace — browse and install from the official registry
+# ---------------------------------------------------------------------------
+
+SKILL_REGISTRY_URL="https://raw.githubusercontent.com/ImJustRicky/muster-skills/main/registry.json"
+
+skill_marketplace() {
+  source "$MUSTER_ROOT/lib/tui/checklist.sh"
+  source "$MUSTER_ROOT/lib/tui/spinner.sh"
+
+  if ! has_cmd jq; then
+    err "The marketplace requires jq. Install it first: https://jqlang.github.io/jq/download/"
+    return 1
+  fi
+
+  local tmp_file
+  tmp_file=$(mktemp)
+
+  start_spinner "Fetching skill registry..."
+  if ! curl -fsSL "$SKILL_REGISTRY_URL" -o "$tmp_file" 2>/dev/null; then
+    stop_spinner
+    err "Failed to fetch skill registry"
+    rm -f "$tmp_file"
+    return 1
+  fi
+  stop_spinner
+
+  local query="${1:-}"
+
+  if [[ -n "$query" ]]; then
+    _marketplace_search "$tmp_file" "$query"
+  else
+    _marketplace_browse "$tmp_file"
+  fi
+
+  rm -f "$tmp_file"
+}
+
+_marketplace_search() {
+  local registry="$1"
+  local query="$2"
+
+  local matches
+  matches=$(jq -r --arg q "$query" \
+    '[.skills[] | select((.name | ascii_downcase | contains($q | ascii_downcase)) or (.description | ascii_downcase | contains($q | ascii_downcase)))]' \
+    "$registry")
+
+  local match_count
+  match_count=$(printf '%s' "$matches" | jq 'length')
+
+  if [[ "$match_count" -eq 0 ]]; then
+    echo ""
+    warn "No skills matching '${query}'"
+    echo ""
+    return 0
+  fi
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Marketplace results for '${query}'${RESET}"
+  echo ""
+
+  local i=0
+  local names=()
+  while [[ "$i" -lt "$match_count" ]]; do
+    local name desc version installed_tag=""
+    name=$(printf '%s' "$matches" | jq -r ".[$i].name")
+    desc=$(printf '%s' "$matches" | jq -r ".[$i].description // \"\"")
+    version=$(printf '%s' "$matches" | jq -r ".[$i].version // \"0.0.0\"")
+
+    if [[ -d "${SKILLS_DIR}/${name}" ]]; then
+      installed_tag=" ${GREEN}(installed)${RESET}"
+    fi
+
+    printf '%b\n' "  ${BOLD}${name}${RESET}${installed_tag}  ${DIM}${desc}${RESET}  ${ACCENT}v${version}${RESET}"
+    names[${#names[@]}]="$name"
+    i=$((i + 1))
+  done
+  echo ""
+
+  if [[ "$match_count" -eq 1 ]]; then
+    local single_name="${names[0]}"
+    if [[ -d "${SKILLS_DIR}/${single_name}" ]]; then
+      info "Skill '${single_name}' is already installed"
+      return 0
+    fi
+    printf '%b' "  Install ${BOLD}${single_name}${RESET}? (y/n) "
+    local answer=""
+    read -rsn1 answer
+    echo ""
+    if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+      skill_marketplace_install "$single_name"
+    fi
+  else
+    # Build checklist items with descriptions
+    local items=()
+    i=0
+    while [[ "$i" -lt "$match_count" ]]; do
+      local item_name
+      item_name=$(printf '%s' "$matches" | jq -r ".[$i].name")
+      items[${#items[@]}]="$item_name"
+      i=$((i + 1))
+    done
+
+    checklist_select "Select skills to install" "${items[@]}"
+
+    if [[ -n "$CHECKLIST_RESULT" ]]; then
+      local IFS=$'\n'
+      local selected
+      for selected in $CHECKLIST_RESULT; do
+        if [[ -d "${SKILLS_DIR}/${selected}" ]]; then
+          info "Skill '${selected}' is already installed, skipping"
+        else
+          skill_marketplace_install "$selected"
+        fi
+      done
+    fi
+  fi
+}
+
+_marketplace_browse() {
+  local registry="$1"
+
+  local skill_count
+  skill_count=$(jq '.skills | length' "$registry")
+
+  if [[ "$skill_count" -eq 0 ]]; then
+    echo ""
+    info "No skills available in the registry"
+    echo ""
+    return 0
+  fi
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Skill Marketplace${RESET}"
+  echo ""
+
+  local i=0
+  local items=()
+  while [[ "$i" -lt "$skill_count" ]]; do
+    local name desc version installed_tag=""
+    name=$(jq -r ".skills[$i].name" "$registry")
+    desc=$(jq -r ".skills[$i].description // \"\"" "$registry")
+    version=$(jq -r ".skills[$i].version // \"0.0.0\"" "$registry")
+
+    if [[ -d "${SKILLS_DIR}/${name}" ]]; then
+      installed_tag=" (installed)"
+    fi
+
+    printf '%b\n' "  ${ACCENT}${name}${RESET}${installed_tag}  ${DIM}${desc}${RESET}  ${DIM}v${version}${RESET}"
+    items[${#items[@]}]="$name"
+    i=$((i + 1))
+  done
+  echo ""
+
+  checklist_select "Select skills to install" "${items[@]}"
+
+  if [[ -n "$CHECKLIST_RESULT" ]]; then
+    local IFS=$'\n'
+    local selected
+    for selected in $CHECKLIST_RESULT; do
+      if [[ -d "${SKILLS_DIR}/${selected}" ]]; then
+        info "Skill '${selected}' is already installed, skipping"
+      else
+        skill_marketplace_install "$selected"
+      fi
+    done
+  fi
+}
+
+skill_marketplace_install() {
+  local name="$1"
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+
+  start_spinner "Installing ${name}..."
+  git clone --quiet --depth 1 https://github.com/ImJustRicky/muster-skills.git "$tmp_dir" 2>/dev/null
+  stop_spinner
+
+  if [[ -d "${tmp_dir}/${name}" && -f "${tmp_dir}/${name}/skill.json" ]]; then
+    skill_add "${tmp_dir}/${name}"
+  else
+    err "Skill '${name}' not found in registry"
+  fi
+
+  rm -rf "$tmp_dir"
 }
