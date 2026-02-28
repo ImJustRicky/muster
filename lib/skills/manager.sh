@@ -335,6 +335,14 @@ skill_marketplace() {
 
   local query="${1:-}"
 
+  if [[ -z "$query" && -t 0 ]]; then
+    echo ""
+    printf '%b\n' "  ${BOLD}Skill Marketplace${RESET}"
+    echo ""
+    printf '%b' "  ${DIM}Search (or press enter to browse all):${RESET} "
+    read -r query
+  fi
+
   if [[ -n "$query" ]]; then
     _marketplace_search "$tmp_file" "$query"
   else
@@ -409,7 +417,7 @@ _marketplace_search() {
       i=$((i + 1))
     done
 
-    checklist_select "Select skills to install" "${items[@]}"
+    checklist_select --none "Select skills to install" "${items[@]}"
 
     if [[ -n "$CHECKLIST_RESULT" ]]; then
       local IFS=$'\n'
@@ -460,7 +468,7 @@ _marketplace_browse() {
   done
   echo ""
 
-  checklist_select "Select skills to install" "${items[@]}"
+  checklist_select --none "Select skills to install" "${items[@]}"
 
   if [[ -n "$CHECKLIST_RESULT" ]]; then
     local IFS=$'\n'

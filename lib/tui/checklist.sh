@@ -11,6 +11,12 @@ checklist_select() {
     return 1
   fi
 
+  local _cl_default=1
+  if [[ "${1:-}" == "--none" ]]; then
+    _cl_default=0
+    shift
+  fi
+
   local title="$1"
   shift
   local items=("$@")
@@ -19,7 +25,7 @@ checklist_select() {
   local checked=()
 
   local i=0
-  while (( i < count )); do checked[$i]=1; i=$((i + 1)); done
+  while (( i < count )); do checked[$i]=$_cl_default; i=$((i + 1)); done
 
   muster_tui_enter
   tput civis
