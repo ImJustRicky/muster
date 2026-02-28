@@ -6,6 +6,10 @@
   Universal deploy framework with a beautiful TUI. Pure bash, zero dependencies, fully modular.
 </p>
 
+<p align="center">
+  <a href="https://getmuster.dev">Website</a> · <a href="https://github.com/ImJustRicky/muster">GitHub</a> · <a href="https://github.com/ImJustRicky/muster/issues">Issues</a>
+</p>
+
 ---
 
 **muster** gives any project a polished deploy experience — interactive dashboard, health checks, rollback, log streaming — regardless of stack. It doesn't know how to deploy your app. It knows how to run your scripts beautifully and verify everything works.

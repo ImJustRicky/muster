@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # muster — Universal deploy framework
 # Copyright 2026 Ricky Eipper. Licensed under Apache 2.0.
-# https://github.com/ImJustRicky/muster
+# https://getmuster.dev | https://github.com/ImJustRicky/muster
 set -uo pipefail
 
 MUSTER_VERSION="0.3.1"
