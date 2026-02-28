@@ -297,17 +297,99 @@ Add to `.claude/settings.json`:
 
 An LLM can scan your project, create the config, write all the hook scripts, then deploy — all through conversation. Requires `jq`.
 
+## Supported Platforms
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **macOS** (Intel & Apple Silicon) | Fully supported | Primary development platform. Uses built-in bash 3.2. Keychain integration via `security` command. |
+| **Linux** (x86_64, arm64, armv7) | Fully supported | Any distro with bash 3.2+. Keychain via `secret-tool` or `pass`. |
+| **FreeBSD** | Supported | Requires bash 3.2+ installed. |
+| **Windows (WSL)** | Fully supported | Runs natively in WSL1/WSL2 — same as Linux. |
+| **Windows (Git Bash / MSYS2)** | Partial | Core commands work. TUI features (menu, checklist, spinners) may render incorrectly. No keychain. |
+| **Windows (native)** | Not supported | Requires a Unix shell — use WSL instead. |
+
+### Requirements
+
+- **bash 3.2+** — no newer features required (works with macOS default bash)
+- **jq** or **python3** — for reading deploy.json (jq preferred, python3 as fallback)
+- **curl** — for HTTP health checks and skill installs
+
+Optional tools (detected automatically, features degrade gracefully without them):
+
+| Tool | Used for |
+|------|----------|
+| `docker` | Docker/Compose stack deploys, dev stack infra services |
+| `kubectl` | Kubernetes deploys, health checks, diagnostics |
+| `ssh` | Remote deployment over SSH |
+| `jq` | Config read/write (required for `muster settings --global` writes) |
+| `security` (macOS) | Keychain credential storage |
+| `secret-tool` / `pass` (Linux) | Keychain credential storage |
+
+### Tested shells
+
+muster runs in bash but is invoked from any shell — `zsh`, `fish`, `dash`, etc. The entry point (`bin/muster`) has a bash shebang and does not depend on the user's login shell.
+
+## Dev Stack
+
+For local development. App services run as PID-managed background processes, infra services run via docker compose.
+
+```bash
+muster setup --stack dev --scan   # detect dev commands from project files
+muster dev                        # deploy all + watch health every 5s (Ctrl+C to cleanup)
+```
+
+The scanner detects start commands from project files: `package.json` → `npm start`, `go.mod` → `go run .`, `requirements.txt` → Django/FastAPI/Flask detection, etc.
+
+## Deploy Failure Recovery
+
+When a deploy fails, muster doesn't just abort — it shows interactive recovery options:
+
+1. **Retry** — run the same deploy again (fresh log file)
+2. **Rollback** — run the service's rollback hook
+3. **Rollback & restart** — undo k8s image change + restart pods (k8s update mode only)
+4. **Skip and continue** — move on to the next service
+5. **Abort** — stop everything
+
+On k8s services, muster auto-diagnoses failures before showing the menu — inspecting pod events, logs, and matching 7 known error patterns (ImagePullBackOff, OOMKilled, CrashLoopBackOff, Unschedulable, missing secrets/PVCs, version mismatch).
+
+## Doctor
+
+Run diagnostics on your project:
+
+```bash
+muster doctor         # check everything
+muster doctor --fix   # auto-fix what it can
+```
+
+Checks: deploy.json validity, hook existence and permissions, tool availability, stale PID files, old logs, credential health, remote SSH connectivity, and more.
+
+## History
+
+```bash
+muster history              # recent deploy/rollback events
+muster history --all        # full log
+muster history api          # filter by service
+```
+
 ## Philosophy
 
-- **Pure bash** — zero runtime dependencies, runs anywhere
+- **Pure bash** — zero runtime dependencies, runs anywhere bash runs
 - **Modular** — each file does one thing
 - **Your scripts, your way** — muster orchestrates, you decide how things deploy
 - **Stack agnostic** — Docker, k8s, bare metal, cloud — if you can script it, muster can run it
 - **Beautiful by default** — spinners, progress bars, live log boxes, color-coded everything
+- **Graceful degradation** — missing tools disable features, never crash
 
 ## Contributing
 
 PRs welcome. The codebase is modular by design — each file in `lib/` is self-contained.
+
+### Running tests
+
+```bash
+brew install bats-core   # or your package manager
+./test/run.sh
+```
 
 ## License
 
