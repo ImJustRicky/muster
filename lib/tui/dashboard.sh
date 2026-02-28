@@ -172,6 +172,8 @@ cmd_dashboard() {
       done
     fi
 
+    actions[${#actions[@]}]="Skill Marketplace"
+
     if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
       actions[${#actions[@]}]="Update muster"
     fi
@@ -239,6 +241,11 @@ cmd_dashboard() {
           skill_run "$_run_name"
           _dashboard_pause
         fi
+        ;;
+      "Skill Marketplace")
+        source "$MUSTER_ROOT/lib/skills/manager.sh"
+        skill_marketplace
+        _dashboard_pause
         ;;
       "Update muster")
         update_apply
