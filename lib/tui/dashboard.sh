@@ -219,7 +219,7 @@ cmd_dashboard() {
     local _registry_cache="${HOME}/.muster/.registry_cache.json"
     local _registry_stale="true"
 
-    # Fetch registry if cache is missing or older than 1 hour
+    # Fetch registry if cache is missing or older than 5 minutes
     if [[ -f "$_registry_cache" ]]; then
       local _cache_age=0
       if has_cmd stat; then
@@ -228,7 +228,7 @@ cmd_dashboard() {
         _now=$(date +%s)
         _cache_age=$(( _now - _cache_mtime ))
       fi
-      if (( _cache_age < 3600 )); then
+      if (( _cache_age < 300 )); then
         _registry_stale="false"
       fi
     fi
