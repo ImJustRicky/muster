@@ -47,11 +47,9 @@ _dashboard_header() {
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
 
-  # Start all health checks in parallel
-  local _hc_dir
-  _hc_dir=$(mktemp -d)
+  # Launch health checks in background (write to persistent cache)
+  mkdir -p "$_HEALTH_CACHE_DIR"
   local _svc_keys=()
-  local _svc_pids=()
 
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
@@ -62,23 +60,17 @@ _dashboard_header() {
     health_enabled=$(config_get ".services.${svc}.health.enabled")
 
     if [[ "$health_enabled" == "false" ]]; then
-      printf 'disabled' > "${_hc_dir}/${svc}"
-      _svc_pids[${#_svc_pids[@]}]=0
+      printf 'disabled' > "${_HEALTH_CACHE_DIR}/${svc}"
     elif [[ -x "${hook_dir}/health.sh" ]]; then
       (
-        mkdir -p "$_HEALTH_CACHE_DIR"
         if "${hook_dir}/health.sh" &>/dev/null; then
-          printf 'healthy' > "${_hc_dir}/${svc}"
           printf 'healthy' > "${_HEALTH_CACHE_DIR}/${svc}"
         else
-          printf 'unhealthy' > "${_hc_dir}/${svc}"
           printf 'unhealthy' > "${_HEALTH_CACHE_DIR}/${svc}"
         fi
       ) &
-      _svc_pids[${#_svc_pids[@]}]=$!
     else
-      printf 'disabled' > "${_hc_dir}/${svc}"
-      _svc_pids[${#_svc_pids[@]}]=0
+      printf 'disabled' > "${_HEALTH_CACHE_DIR}/${svc}"
     fi
   done <<< "$services"
 
@@ -90,42 +82,24 @@ _dashboard_header() {
   label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
-  # Render each service line progressively as health checks complete
+  # Render each service from cached health status
   local _idx=0
   while (( _idx < ${#_svc_keys[@]} )); do
     local svc="${_svc_keys[$_idx]}"
-    local pid="${_svc_pids[$_idx]}"
 
-    # Wait for this service's health check (poll with 2s timeout)
-    if [[ "$pid" -ne 0 ]]; then
-      local _pw=0
-      while [[ ! -f "${_hc_dir}/${svc}" ]] && (( _pw < 10 )); do
-        sleep 0.2
-        _pw=$((_pw + 1))
-      done
-    fi
-
-    # Determine status
+    # Read from persistent cache
     local status_icon status_color
-    if [[ -f "${_hc_dir}/${svc}" ]]; then
+    if [[ -f "${_HEALTH_CACHE_DIR}/${svc}" ]]; then
       local _result
-      _result=$(cat "${_hc_dir}/${svc}")
+      _result=$(cat "${_HEALTH_CACHE_DIR}/${svc}")
       case "$_result" in
         healthy)   status_icon="●"; status_color="$GREEN" ;;
         unhealthy) status_icon="●"; status_color="$RED" ;;
-        *)         status_icon="○"; status_color="$GRAY" ;;
-      esac
-    elif [[ -f "${_HEALTH_CACHE_DIR}/${svc}" ]]; then
-      # Timed out — fall back to persistent cache
-      local _cached
-      _cached=$(cat "${_HEALTH_CACHE_DIR}/${svc}")
-      case "$_cached" in
-        healthy)   status_icon="●"; status_color="$GREEN" ;;
-        unhealthy) status_icon="●"; status_color="$RED" ;;
-        *)         status_icon="○"; status_color="$GRAY" ;;
+        disabled)  status_icon="○"; status_color="$GRAY" ;;
+        *)         status_icon="○"; status_color="$YELLOW" ;;
       esac
     else
-      # No data yet — loading
+      # No cache yet — first run
       status_icon="○"
       status_color="$YELLOW"
     fi
@@ -166,9 +140,6 @@ _dashboard_header() {
   bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
   echo ""
-
-  # Clean up temp dir after health checks have time to finish
-  ( sleep 5; rm -rf "$_hc_dir" ) &
 }
 
 cmd_dashboard() {
@@ -294,9 +265,14 @@ cmd_dashboard() {
     fi
     actions[${#actions[@]}]="Quit"
 
+    MENU_TIMEOUT=20
     menu_select "Actions" "${actions[@]}"
+    MENU_TIMEOUT=0
 
     case "$MENU_RESULT" in
+      "__timeout__")
+        continue
+        ;;
       Deploy)
         source "$MUSTER_ROOT/lib/commands/deploy.sh"
         cmd_deploy

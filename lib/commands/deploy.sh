@@ -298,6 +298,10 @@ ${_k8s_env_lines}"
 
           k8s_diagnose_failure "$svc"
 
+          # Notify skills immediately so team knows action is needed
+          export MUSTER_DEPLOY_STATUS="failed"
+          run_skill_hooks "post-deploy" "$svc"
+
           # Build menu options (add "Rollback & restart" for k8s update deploys)
           local _fail_opts=()
           _fail_opts[0]="Retry"
@@ -324,8 +328,6 @@ ${_k8s_env_lines}"
               stop_spinner
               ok "${name} rolled back & restarted"
               _history_log_event "$svc" "rollback" "ok"
-              export MUSTER_DEPLOY_STATUS="failed"
-              run_skill_hooks "post-deploy" "$svc"
               break
               ;;
             "Rollback ${name}")
@@ -343,8 +345,6 @@ ${_k8s_env_lines}"
               else
                 err "No rollback hook for ${name}"
               fi
-              export MUSTER_DEPLOY_STATUS="failed"
-              run_skill_hooks "post-deploy" "$svc"
               break
               ;;
             "Skip and continue")
@@ -354,8 +354,6 @@ ${_k8s_env_lines}"
               break
               ;;
             "Abort")
-              export MUSTER_DEPLOY_STATUS="failed"
-              run_skill_hooks "post-deploy" "$svc"
               _unload_env_file
               return 1
               ;;

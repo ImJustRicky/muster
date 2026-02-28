@@ -48,8 +48,16 @@ menu_select() {
   }
 
   _menu_read_key() {
-    local key
-    IFS= read -rsn1 key || true
+    local key _rc=0
+    if [[ "${MENU_TIMEOUT:-0}" -gt 0 ]]; then
+      IFS= read -rsn1 -t "$MENU_TIMEOUT" key || _rc=$?
+      if [[ "$_rc" -ne 0 && -z "$key" ]]; then
+        REPLY="__timeout__"
+        return
+      fi
+    else
+      IFS= read -rsn1 key || true
+    fi
     if [[ "$key" == $'\x1b' ]]; then
       local seq1 seq2
       IFS= read -rsn1 -t 1 seq1 || true
@@ -74,6 +82,13 @@ menu_select() {
     fi
 
     case "$REPLY" in
+      "__timeout__")
+        # Timeout — return for caller to refresh
+        _menu_clear
+        tput cnorm
+        MENU_RESULT="__timeout__"
+        return 0
+        ;;
       $'\x1b[A')
         (( selected > 0 )) && selected=$((selected - 1))
         ;;
