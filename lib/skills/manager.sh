@@ -16,6 +16,7 @@ cmd_skill() {
       echo "  remove <name>        Remove an installed skill"
       echo "  list                 List installed skills"
       echo "  run <name>           Run a skill manually"
+      echo "  configure <name>     Configure a skill (API keys, webhooks, etc.)"
       echo "  marketplace [query]  Browse and install skills from the official registry"
       return 0
       ;;
@@ -40,12 +41,15 @@ cmd_skill() {
     run)
       skill_run "$@"
       ;;
+    configure|config)
+      skill_configure "$@"
+      ;;
     marketplace|browse|search)
       skill_marketplace "$@"
       ;;
     *)
       err "Unknown skill command: ${action}"
-      echo "Usage: muster skill [add|create|remove|list|run|marketplace]"
+      echo "Usage: muster skill [add|create|remove|list|run|configure|marketplace]"
       exit 1
       ;;
   esac
@@ -222,6 +226,142 @@ skill_list() {
   echo ""
 }
 
+# Load a skill's config.env into the environment
+# Usage: _skill_load_config "slack"
+_SKILL_CONFIG_KEYS=""
+_skill_load_config() {
+  local name="$1"
+  local config_file="${SKILLS_DIR}/${name}/config.env"
+  _SKILL_CONFIG_KEYS=""
+  [[ ! -f "$config_file" ]] && return 0
+  while IFS='=' read -r _ck _cv; do
+    [[ -z "$_ck" ]] && continue
+    [[ "$_ck" == \#* ]] && continue
+    # Don't override existing env vars
+    if [[ -z "${!_ck:-}" ]]; then
+      export "$_ck=$_cv"
+      if [[ -n "$_SKILL_CONFIG_KEYS" ]]; then
+        _SKILL_CONFIG_KEYS="${_SKILL_CONFIG_KEYS} ${_ck}"
+      else
+        _SKILL_CONFIG_KEYS="$_ck"
+      fi
+    fi
+  done < "$config_file"
+}
+
+# Unload skill config vars
+_skill_unload_config() {
+  local _ck
+  for _ck in $_SKILL_CONFIG_KEYS; do
+    unset "$_ck" 2>/dev/null
+  done
+  _SKILL_CONFIG_KEYS=""
+}
+
+# Configure a skill interactively
+# Reads config[] from skill.json, prompts for each value, saves to config.env
+skill_configure() {
+  local name="${1:-}"
+
+  if [[ -z "$name" ]]; then
+    err "Usage: muster skill configure <name>"
+    return 1
+  fi
+
+  local skill_dir="${SKILLS_DIR}/${name}"
+  local skill_json="${skill_dir}/skill.json"
+
+  if [[ ! -f "$skill_json" ]]; then
+    err "Skill '${name}' not found"
+    return 1
+  fi
+
+  if ! has_cmd jq; then
+    err "jq required for skill configuration"
+    return 1
+  fi
+
+  local config_count
+  config_count=$(jq '.config // [] | length' "$skill_json")
+
+  if [[ "$config_count" -eq 0 ]]; then
+    info "Skill '${name}' has no configurable options"
+    return 0
+  fi
+
+  local config_file="${skill_dir}/config.env"
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Configure: ${name}${RESET}"
+  echo ""
+
+  local i=0
+  local new_config=""
+  while (( i < config_count )); do
+    local key label hint is_secret current_val
+    key=$(jq -r ".config[$i].key" "$skill_json")
+    label=$(jq -r ".config[$i].label // .config[$i].key" "$skill_json")
+    hint=$(jq -r ".config[$i].hint // \"\"" "$skill_json")
+    is_secret=$(jq -r ".config[$i].secret // false" "$skill_json")
+
+    # Read current value from config.env if exists
+    current_val=""
+    if [[ -f "$config_file" ]]; then
+      current_val=$(grep "^${key}=" "$config_file" 2>/dev/null | head -1 | cut -d= -f2-)
+    fi
+
+    printf '%b\n' "  ${ACCENT}${label}${RESET}"
+    if [[ -n "$hint" ]]; then
+      printf '%b\n' "  ${DIM}${hint}${RESET}"
+    fi
+
+    if [[ -n "$current_val" ]]; then
+      if [[ "$is_secret" == "true" ]]; then
+        local masked="${current_val:0:4}$(printf '%*s' $(( ${#current_val} - 4 )) '' | tr ' ' '*')"
+        if (( ${#current_val} <= 4 )); then
+          masked="****"
+        fi
+        printf '%b' "  ${DIM}Current: ${masked}${RESET}\n"
+      else
+        printf '%b' "  ${DIM}Current: ${current_val}${RESET}\n"
+      fi
+    fi
+
+    printf '%b' "  > "
+    local input=""
+    if [[ "$is_secret" == "true" ]]; then
+      read -rs input
+      echo ""
+    else
+      read -r input
+    fi
+
+    # Keep current value if user just pressed enter
+    if [[ -z "$input" && -n "$current_val" ]]; then
+      input="$current_val"
+    fi
+
+    if [[ -n "$input" ]]; then
+      if [[ -n "$new_config" ]]; then
+        new_config="${new_config}"$'\n'"${key}=${input}"
+      else
+        new_config="${key}=${input}"
+      fi
+    fi
+
+    echo ""
+    i=$((i + 1))
+  done
+
+  # Write config.env
+  if [[ -n "$new_config" ]]; then
+    printf '%s\n' "$new_config" > "$config_file"
+    ok "Configuration saved for '${name}'"
+  else
+    warn "No configuration values provided"
+  fi
+}
+
 skill_run() {
   local name="${1:-}"
   shift 2>/dev/null || true
@@ -245,10 +385,12 @@ skill_run() {
   fi
 
   _load_env_file
+  _skill_load_config "$name"
 
   "$run_script" "$@"
   local rc=$?
 
+  _skill_unload_config
   _unload_env_file
   unset MUSTER_PROJECT_DIR MUSTER_CONFIG_FILE 2>/dev/null
   return $rc
@@ -297,10 +439,15 @@ print('yes' if sys.argv[2] in d.get('hooks',[]) else 'no')
       export MUSTER_SERVICE="$svc_name"
       export MUSTER_HOOK="$hook_name"
 
+      _load_env_file
+      _skill_load_config "$skill_name"
+
       "${skill_dir}/run.sh" 2>&1 || {
         warn "Skill '${skill_name}' failed on ${hook_name} (non-fatal)"
       }
 
+      _skill_unload_config
+      _unload_env_file
       unset MUSTER_PROJECT_DIR MUSTER_CONFIG_FILE MUSTER_SERVICE MUSTER_HOOK 2>/dev/null
     fi
   done

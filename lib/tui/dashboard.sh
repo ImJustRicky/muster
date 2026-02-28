@@ -280,6 +280,7 @@ cmd_dashboard() {
           # Build submenu
           local _skill_opts=()
           _skill_opts[0]="Run"
+          _skill_opts[${#_skill_opts[@]}]="Configure"
           if [[ "$_has_update" == "true" ]]; then
             _skill_opts[${#_skill_opts[@]}]="Update"
           fi
@@ -291,6 +292,10 @@ cmd_dashboard() {
           case "$MENU_RESULT" in
             "Run")
               skill_run "$_run_name"
+              _dashboard_pause
+              ;;
+            "Configure")
+              skill_configure "$_run_name"
               _dashboard_pause
               ;;
             "Update")
