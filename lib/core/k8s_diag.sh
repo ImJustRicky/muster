@@ -76,10 +76,20 @@ ${pod_prev_logs}"
 
   # ── Match known error patterns ──
 
-  if printf '%s' "$all_output" | grep -qi "ImagePullBackOff\|ErrImagePull"; then
+  if printf '%s' "$all_output" | grep -qi "ErrImageNeverPull"; then
+    _diag_matched=true
+    _diag_show "Image not found locally and pull policy is Never" \
+      "Push the image to the node or change imagePullPolicy"
+  elif printf '%s' "$all_output" | grep -qi "ImagePullBackOff\|ErrImagePull"; then
     _diag_matched=true
     _diag_show "Can't pull container image" \
       "Check registry auth, image name, and tag"
+  fi
+
+  if printf '%s' "$all_output" | grep -qi "InvalidImageName"; then
+    _diag_matched=true
+    _diag_show "Invalid image name in deployment spec" \
+      "Check the image field in your deployment YAML"
   fi
 
   if printf '%s' "$all_output" | grep -qi "OOMKilled"; then
@@ -92,6 +102,18 @@ ${pod_prev_logs}"
     _diag_matched=true
     _diag_show "Container keeps crashing (CrashLoopBackOff)" \
       "Check application logs and entrypoint config"
+  fi
+
+  if printf '%s' "$all_output" | grep -qi "CreateContainerConfigError"; then
+    _diag_matched=true
+    _diag_show "Container config error (missing ConfigMap or Secret mount)" \
+      "Check that all referenced ConfigMaps and Secrets exist"
+  fi
+
+  if printf '%s' "$all_output" | grep -qi "RunContainerError"; then
+    _diag_matched=true
+    _diag_show "Container failed to start" \
+      "Check entrypoint, command, and volume mounts in deployment spec"
   fi
 
   if printf '%s' "$all_output" | grep -qi "Unschedulable"; then
@@ -124,6 +146,15 @@ ${pod_prev_logs}"
       echo -e "  ${DIM}Inspect: kubectl describe pod ${pod_name} -n ${namespace}${RESET}"
     else
       echo -e "  ${DIM}Inspect: kubectl describe deployment ${deployment} -n ${namespace}${RESET}"
+    fi
+  fi
+
+  # Show the pod status line so user sees the exact state
+  if [[ -n "$pod_name" ]]; then
+    local _pod_status_line
+    _pod_status_line=$(_diag_run_kubectl "$svc" "kubectl get pod ${pod_name} -n ${namespace} --no-headers")
+    if [[ -n "$_pod_status_line" ]]; then
+      echo -e "  ${DIM}Pod status: ${_pod_status_line}${RESET}"
     fi
   fi
 
