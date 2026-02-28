@@ -165,7 +165,9 @@ k8s_env_for_service() {
   [[ "$namespace" == "null" || -z "$namespace" ]] && namespace="default"
   echo "MUSTER_K8S_DEPLOYMENT=${deployment}"
   echo "MUSTER_K8S_NAMESPACE=${namespace}"
-  echo "MUSTER_K8S_SERVICE=${svc}"
+  # K8s names use hyphens, not underscores
+  local _k8s_svc="${svc//_/-}"
+  echo "MUSTER_K8S_SERVICE=${_k8s_svc}"
   local deploy_timeout
   deploy_timeout=$(config_get ".services.${svc}.deploy_timeout")
   if [[ -n "$deploy_timeout" && "$deploy_timeout" != "null" ]]; then
