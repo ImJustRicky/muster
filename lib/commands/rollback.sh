@@ -87,6 +87,8 @@ cmd_rollback() {
     done <<< "$_k8s_env_lines"
   fi
 
+  export MUSTER_DEPLOY_STATUS=""
+  export MUSTER_SERVICE_NAME="$name"
   run_skill_hooks "pre-rollback" "$target"
 
   if remote_is_enabled "$target"; then
@@ -111,6 +113,7 @@ ${_k8s_env_lines}"
     if (( rc == 0 )); then
       ok "${name} rolled back successfully"
       _history_log_event "$target" "rollback" "ok"
+      export MUSTER_DEPLOY_STATUS="success"
       run_skill_hooks "post-rollback" "$target"
       break
     else
@@ -149,6 +152,8 @@ ${_k8s_env_lines}"
           fi
           ;; # loop continues with rollback retry
         "Abort")
+          export MUSTER_DEPLOY_STATUS="failed"
+          run_skill_hooks "post-rollback" "$target"
           break
           ;;
       esac

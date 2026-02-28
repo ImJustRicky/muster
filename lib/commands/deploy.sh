@@ -199,6 +199,8 @@ cmd_deploy() {
         done <<< "$_k8s_env_lines"
       fi
 
+      export MUSTER_DEPLOY_STATUS=""
+      export MUSTER_SERVICE_NAME="$name"
       run_skill_hooks "pre-deploy" "$svc"
 
       progress_bar "$current" "$total" "Deploying ${name}..."
@@ -230,6 +232,7 @@ ${_k8s_env_lines}"
         if (( rc == 0 )); then
           ok "${name} deployed"
           _history_log_event "$svc" "deploy" "ok"
+          export MUSTER_DEPLOY_STATUS="success"
           run_skill_hooks "post-deploy" "$svc"
 
           # Run health check
@@ -321,6 +324,8 @@ ${_k8s_env_lines}"
               stop_spinner
               ok "${name} rolled back & restarted"
               _history_log_event "$svc" "rollback" "ok"
+              export MUSTER_DEPLOY_STATUS="failed"
+              run_skill_hooks "post-deploy" "$svc"
               break
               ;;
             "Rollback ${name}")
@@ -338,13 +343,19 @@ ${_k8s_env_lines}"
               else
                 err "No rollback hook for ${name}"
               fi
+              export MUSTER_DEPLOY_STATUS="failed"
+              run_skill_hooks "post-deploy" "$svc"
               break
               ;;
             "Skip and continue")
               warn "Skipping ${name}, continuing with next service"
+              export MUSTER_DEPLOY_STATUS="skipped"
+              run_skill_hooks "post-deploy" "$svc"
               break
               ;;
             "Abort")
+              export MUSTER_DEPLOY_STATUS="failed"
+              run_skill_hooks "post-deploy" "$svc"
               _unload_env_file
               return 1
               ;;
