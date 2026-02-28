@@ -13,7 +13,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ImJustRicky/muster/main/install.sh | bash
+curl -fsSL https://getmuster.dev/install.sh | bash
 ```
 
 Or clone manually:
