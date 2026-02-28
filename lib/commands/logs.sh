@@ -4,6 +4,20 @@
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 
 cmd_logs() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster logs <service>"
+      echo ""
+      echo "Stream logs for a service."
+      return 0
+      ;;
+    --*)
+      err "Unknown flag: $1"
+      echo "Run 'muster logs --help' for usage."
+      return 1
+      ;;
+  esac
+
   load_config
 
   local target="${1:-}"

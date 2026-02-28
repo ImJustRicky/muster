@@ -5,6 +5,20 @@ source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 
 cmd_status() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster status"
+      echo ""
+      echo "Check health of all services."
+      return 0
+      ;;
+    --*)
+      err "Unknown flag: $1"
+      echo "Run 'muster status --help' for usage."
+      return 1
+      ;;
+  esac
+
   load_config
 
   local project

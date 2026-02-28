@@ -4,6 +4,22 @@
 SKILLS_DIR="${HOME}/.muster/skills"
 
 cmd_skill() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster skill <command> [args]"
+      echo ""
+      echo "Manage addon skills."
+      echo ""
+      echo "Commands:"
+      echo "  add <url>       Install a skill from a git URL or local path"
+      echo "  create <name>   Scaffold a new skill"
+      echo "  remove <name>   Remove an installed skill"
+      echo "  list            List installed skills"
+      echo "  run <name>      Run a skill manually"
+      return 0
+      ;;
+  esac
+
   local action="${1:-list}"
   shift 2>/dev/null || true
 

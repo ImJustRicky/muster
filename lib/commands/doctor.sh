@@ -5,8 +5,22 @@ cmd_doctor() {
   local fix=false
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
+      --help|-h)
+        echo "Usage: muster doctor [flags]"
+        echo ""
+        echo "Run project diagnostics. Checks config, hooks, permissions, tools, and more."
+        echo ""
+        echo "Flags:"
+        echo "  --fix           Auto-fix issues where possible"
+        echo "  -h, --help      Show this help"
+        return 0
+        ;;
       --fix) fix=true; shift ;;
-      *) shift ;;
+      *)
+        err "Unknown flag: $1"
+        echo "Run 'muster doctor --help' for usage."
+        return 1
+        ;;
     esac
   done
 

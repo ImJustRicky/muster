@@ -10,6 +10,20 @@ source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
 cmd_rollback() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster rollback [service]"
+      echo ""
+      echo "Rollback a service to its previous state. Without a service name, pick interactively."
+      return 0
+      ;;
+    --*)
+      err "Unknown flag: $1"
+      echo "Run 'muster rollback --help' for usage."
+      return 1
+      ;;
+  esac
+
   load_config
   _load_env_file
 

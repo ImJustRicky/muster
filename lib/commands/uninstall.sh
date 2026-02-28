@@ -4,6 +4,21 @@
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 
 cmd_uninstall() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster uninstall"
+      echo ""
+      echo "Remove muster configuration from the current project."
+      echo "Deletes deploy.json and .muster/ directory."
+      return 0
+      ;;
+    --*)
+      err "Unknown flag: $1"
+      echo "Run 'muster uninstall --help' for usage."
+      return 1
+      ;;
+  esac
+
   load_config
 
   local project_dir

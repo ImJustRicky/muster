@@ -143,6 +143,21 @@ _dev_show_status() {
 }
 
 cmd_dev() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster dev"
+      echo ""
+      echo "Deploy all services, then watch health every 5 seconds."
+      echo "Press Ctrl+C to stop and clean up all services."
+      return 0
+      ;;
+    --*)
+      err "Unknown flag: $1"
+      echo "Run 'muster dev --help' for usage."
+      return 1
+      ;;
+  esac
+
   load_config
 
   local project

@@ -4,6 +4,20 @@
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 
 cmd_cleanup() {
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster cleanup"
+      echo ""
+      echo "Clean up stuck processes and old log files."
+      return 0
+      ;;
+    --*)
+      err "Unknown flag: $1"
+      echo "Run 'muster cleanup --help' for usage."
+      return 1
+      ;;
+  esac
+
   load_config
 
   local project_dir

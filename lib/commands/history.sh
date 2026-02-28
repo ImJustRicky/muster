@@ -26,8 +26,27 @@ cmd_history() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --help|-h)
+        echo "Usage: muster history [flags] [service]"
+        echo ""
+        echo "Show deploy and rollback event history."
+        echo ""
+        echo "Flags:"
+        echo "  --all, -a       Show full history (not just recent)"
+        echo "  -h, --help      Show this help"
+        echo ""
+        echo "Examples:"
+        echo "  muster history             Recent events"
+        echo "  muster history --all       Full history"
+        echo "  muster history api         Events for api only"
+        return 0
+        ;;
       --all|-a) show_all=true; shift ;;
-      --*) shift ;;
+      --*)
+        err "Unknown flag: $1"
+        echo "Run 'muster history --help' for usage."
+        return 1
+        ;;
       *)
         filter="$1"
         shift

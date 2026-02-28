@@ -16,8 +16,27 @@ cmd_deploy() {
   local dry_run=false
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
+      --help|-h)
+        echo "Usage: muster deploy [flags] [service]"
+        echo ""
+        echo "Deploy services. Without a service name, choose interactively."
+        echo ""
+        echo "Flags:"
+        echo "  --dry-run       Preview deploy plan without executing"
+        echo "  -h, --help      Show this help"
+        echo ""
+        echo "Examples:"
+        echo "  muster deploy              Interactive: pick all or select services"
+        echo "  muster deploy api          Deploy just the api service"
+        echo "  muster deploy --dry-run    Preview all services"
+        return 0
+        ;;
       --dry-run) dry_run=true; shift ;;
-      *) shift ;;
+      *)
+        err "Unknown flag: $1"
+        echo "Run 'muster deploy --help' for usage."
+        return 1
+        ;;
     esac
   done
 

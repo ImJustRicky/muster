@@ -484,11 +484,38 @@ _settings_muster_extras() {
 }
 
 cmd_settings() {
+  # Handle --help flag
+  case "${1:-}" in
+    --help|-h)
+      echo "Usage: muster settings [flags]"
+      echo ""
+      echo "Interactive project and global settings editor."
+      echo ""
+      echo "Flags:"
+      echo "  --global [key] [value]    View or set global settings"
+      echo "  -h, --help                Show this help"
+      echo ""
+      echo "Examples:"
+      echo "  muster settings                          Interactive editor"
+      echo "  muster settings --global                 Dump all global settings"
+      echo "  muster settings --global color_mode      Get a setting"
+      echo "  muster settings --global color_mode never  Set a setting"
+      return 0
+      ;;
+  esac
+
   # Handle --global flag for non-interactive use
   if [[ "${1:-}" == "--global" ]]; then
     shift
     _settings_global_cli "$@"
     return $?
+  fi
+
+  # Reject unknown flags
+  if [[ "${1:-}" == --* ]]; then
+    err "Unknown flag: $1"
+    echo "Run 'muster settings --help' for usage."
+    return 1
   fi
 
   load_config
