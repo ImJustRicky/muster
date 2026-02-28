@@ -81,7 +81,7 @@ Edit via `muster settings` (TUI) or `muster settings --global <key> <value>` (sc
 
 Service keys map to hook directories. Health types: `http`, `tcp`, `command`; disabled via `"enabled": false`. `deploy_order` controls sequencing (infra services auto-sorted first when no explicit `--order`). `skip_deploy: true` excludes a service from `muster deploy` (auto-set for file-detected services not found as k8s deployments). Credential modes: `off`, `save` (keychain), `session` (memory), `always` (prompt every time) — never stored in config or git. Service keys with hyphens work (jq bracket notation via `_jq_quote()`).
 
-K8s config: per-service `"k8s": {"deployment": "waity-api", "namespace": "waity"}`. Hooks read `MUSTER_K8S_DEPLOYMENT`, `MUSTER_K8S_NAMESPACE`, `MUSTER_K8S_SERVICE` env vars at runtime (exported by deploy/status/rollback commands from deploy.json). Change deployment name in config, all hooks update automatically. Optional `"deploy_timeout": 300` per-service (default 120) → exported as `MUSTER_DEPLOY_TIMEOUT`, used in k8s templates for `kubectl rollout status --timeout`.
+K8s config: per-service `"k8s": {"deployment": "waity-api", "namespace": "waity"}`. Hooks read `MUSTER_K8S_DEPLOYMENT`, `MUSTER_K8S_NAMESPACE`, `MUSTER_K8S_SERVICE` env vars at runtime (exported by deploy/status/rollback commands from deploy.json). `MUSTER_K8S_SERVICE` auto-converts underscores to hyphens (e.g., service key `api_v1` → `MUSTER_K8S_SERVICE=api-v1`) since k8s doesn't allow underscores in resource names. Change deployment name in config, all hooks update automatically. Optional `"deploy_timeout": 300` per-service (default 120) → exported as `MUSTER_DEPLOY_TIMEOUT`, used in k8s templates. Optional `"deploy_mode"` per-service → exported as `MUSTER_DEPLOY_MODE`.
 
 K8s infra services use `kubectl rollout restart` (not `kubectl set image`) — they deploy whatever image version is in the YAML manifest, avoiding accidental `:latest` pulls.
 
@@ -103,11 +103,15 @@ Both modes generate real hooks from stack templates. Infrastructure services (re
 
 Deploy and rollback failures show interactive recovery menus instead of aborting:
 
-**Deploy failure:** Shows last 5 log lines → k8s diagnostics (if applicable) → menu: Retry / Rollback / Skip and continue / Abort. Retry loops the same service with a fresh log file. The entire deploy execution is wrapped in a `while true` retry loop in `lib/commands/deploy.sh`.
+**Deploy failure:** Shows last 5 log lines → k8s diagnostics (if applicable) → fires skill hooks immediately with `MUSTER_DEPLOY_STATUS=failed` (so notifications like Discord go out before the user responds) → menu: Retry / Rollback / Skip and continue / Abort. Retry loops the same service with a fresh log file. The entire deploy execution is wrapped in a `while true` retry loop in `lib/commands/deploy.sh`.
 
 **Rollback failure:** Same pattern → menu: Retry / Force cleanup and retry / Abort. "Force cleanup" runs the cleanup hook first, then retries rollback.
 
-**K8s diagnostics** (`lib/core/k8s_diag.sh`): Auto-runs after deploy/rollback failure for k8s services. Inspects deployment → finds new ReplicaSet → finds failing pod → describes pod + gets logs. Matches 7 known error patterns (ImagePullBackOff, OOMKilled, CrashLoopBackOff, Unschedulable, missing secrets, missing PVCs, version mismatch). Handles both local and remote kubectl via `_diag_run_kubectl`. Silently skips for non-k8s services.
+**K8s diagnostics** (`lib/core/k8s_diag.sh`): Auto-runs after deploy/rollback failure for k8s services. Inspects deployment → finds new ReplicaSet → finds failing pod → describes pod + gets logs. Matches 11 known error patterns (ImagePullBackOff, ErrImagePull, ErrImageNeverPull, InvalidImageName, OOMKilled, CrashLoopBackOff, CreateContainerConfigError, RunContainerError, Unschedulable, missing secrets, missing PVCs, version mismatch). Shows pod status line after diagnostics. Handles both local and remote kubectl via `_diag_run_kubectl`. Silently skips for non-k8s services.
+
+**K8s smart rollout wait** (`_k8s_smart_wait()` in k8s deploy templates): Replaces bare `kubectl rollout status --timeout`. Starts rollout in background, polls pod status every 5s, prints progress (`"2/3 pods ready (15s)"`), and detects terminal errors immediately (ErrImageNeverPull, ImagePullBackOff, CrashLoopBackOff, OOMKilled, CreateContainerConfigError, RunContainerError, InvalidImageName). On terminal error: prints error, shows pod events/logs, kills rollout wait, exits non-zero. Uses deployment's label selector for pod matching.
+
+**Dashboard** (`lib/tui/dashboard.sh`): Services panel auto-refreshes every 20s via `MENU_TIMEOUT=20` in menu.sh. Health check results are cached persistently in `~/.muster/.health_cache/` (not temp dir) so status survives across renders.
 
 **Interactive service selection:** `muster deploy` with >1 service in a TTY shows "All services" / "Select services" menu. "Select services" opens a checklist (`lib/tui/checklist.sh`). Non-interactive (scripts, CI) deploys all as before.
 

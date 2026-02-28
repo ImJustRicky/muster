@@ -57,7 +57,7 @@ muster setup --help                                     # see all flags
 
 | Command | Description |
 |---------|-------------|
-| `muster` | Dashboard — live health/status view with action menu + installed skills |
+| `muster` | Dashboard — live health/status view (auto-refreshes every 20s) with action menu + installed skills |
 | `muster setup` | Guided setup wizard, or use flags for non-interactive (`--help`) |
 | `muster setup --force` | Overwrite existing deploy.json |
 | `muster deploy` | Deploy all services (respects deploy order) |
@@ -149,7 +149,7 @@ Clean, human-readable config:
 }
 ```
 
-The `k8s` block is config-driven — change `deployment` or `namespace` in deploy.json and all hooks update automatically (hooks read `MUSTER_K8S_*` env vars at runtime). `deploy_order` controls sequencing — infra services are auto-sorted first by the scanner.
+The `k8s` block is config-driven — change `deployment` or `namespace` in deploy.json and all hooks update automatically (hooks read `MUSTER_K8S_*` env vars at runtime). Service keys with underscores are auto-converted to hyphens for k8s names (e.g., `api_v1` → `MUSTER_K8S_SERVICE=api-v1`). `deploy_order` controls sequencing — infra services are auto-sorted first by the scanner.
 
 Operations without hooks are silently skipped — no errors, no empty menu items.
 
@@ -354,7 +354,9 @@ When a deploy fails, muster doesn't just abort — it shows interactive recovery
 4. **Skip and continue** — move on to the next service
 5. **Abort** — stop everything
 
-On k8s services, muster auto-diagnoses failures before showing the menu — inspecting pod events, logs, and matching 7 known error patterns (ImagePullBackOff, OOMKilled, CrashLoopBackOff, Unschedulable, missing secrets/PVCs, version mismatch).
+On k8s services, muster auto-diagnoses failures before showing the menu — inspecting pod events, logs, and matching 11 known error patterns (ImagePullBackOff, ErrImagePull, ErrImageNeverPull, InvalidImageName, OOMKilled, CrashLoopBackOff, CreateContainerConfigError, RunContainerError, Unschedulable, missing secrets/PVCs, version mismatch). K8s deploy hooks also detect terminal errors early (within ~10s) instead of waiting for the full rollout timeout, and show rolling progress (`"2/3 pods ready"`).
+
+Skills with `post-deploy` hooks (like Discord notifications) fire immediately when a deploy fails — before the recovery menu appears — so your team gets alerted right away.
 
 ## Doctor
 
