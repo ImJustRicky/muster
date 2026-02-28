@@ -393,4 +393,6 @@ brew install bats-core   # or your package manager
 
 ## License
 
-MIT
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
+
+Copyright 2026 Ricky Eipper. You must retain copyright and attribution notices in any copy or derivative work.
