@@ -149,26 +149,61 @@ cmd_dashboard() {
     actions[${#actions[@]}]="Cleanup"
     actions[${#actions[@]}]="Settings"
 
-    # Add installed skills
+    # Add installed skills (check for updates via cached registry)
     local _skills_dir="${HOME}/.muster/skills"
+    local _registry_cache="${HOME}/.muster/.registry_cache.json"
+    local _registry_stale="true"
+
+    # Fetch registry if cache is missing or older than 1 hour
+    if [[ -f "$_registry_cache" ]]; then
+      local _cache_age=0
+      if has_cmd stat; then
+        local _cache_mtime _now
+        _cache_mtime=$(stat -c %Y "$_registry_cache" 2>/dev/null || stat -f %m "$_registry_cache" 2>/dev/null || echo 0)
+        _now=$(date +%s)
+        _cache_age=$(( _now - _cache_mtime ))
+      fi
+      if (( _cache_age < 3600 )); then
+        _registry_stale="false"
+      fi
+    fi
+    if [[ "$_registry_stale" == "true" ]]; then
+      curl -fsSL "https://raw.githubusercontent.com/ImJustRicky/muster-skills/main/registry.json" \
+        -o "$_registry_cache" 2>/dev/null || true
+    fi
+
     if [[ -d "$_skills_dir" ]]; then
       for _skill_dir in "${_skills_dir}"/*/; do
         [[ ! -d "$_skill_dir" ]] && continue
         local _sname _sdisplay
         _sname=$(basename "$_skill_dir")
         _sdisplay="$_sname"
+        local _local_ver=""
         if [[ -f "${_skill_dir}/skill.json" ]]; then
           local _jname=""
           if has_cmd jq; then
             _jname=$(jq -r '.name // ""' "${_skill_dir}/skill.json")
+            _local_ver=$(jq -r '.version // ""' "${_skill_dir}/skill.json")
           elif has_cmd python3; then
             _jname=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('name',''))" "${_skill_dir}/skill.json" 2>/dev/null)
+            _local_ver=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('version',''))" "${_skill_dir}/skill.json" 2>/dev/null)
           fi
           if [[ -n "$_jname" ]]; then
             _sdisplay="$_jname"
           fi
         fi
-        actions[${#actions[@]}]="Skill: ${_sdisplay}"
+
+        # Check registry for newer version
+        local _update_tag=""
+        if [[ -f "$_registry_cache" ]] && has_cmd jq && [[ -n "$_local_ver" ]]; then
+          local _remote_ver=""
+          _remote_ver=$(jq -r --arg n "$_sdisplay" '.skills[] | select(.name == $n) | .version // ""' "$_registry_cache" 2>/dev/null)
+          if [[ -n "$_remote_ver" && "$_remote_ver" != "$_local_ver" ]]; then
+            _update_tag=" <- update"
+          fi
+        fi
+
+        actions[${#actions[@]}]="Skill: ${_sdisplay}${_update_tag}"
       done
     fi
 
@@ -212,8 +247,12 @@ cmd_dashboard() {
         ;;
       Skill:\ *)
         local _selected_display="${MENU_RESULT#Skill: }"
+        # Strip update tag if present
+        _selected_display="${_selected_display% <- update}"
+        local _has_update="false"
+        [[ "$MENU_RESULT" == *"<- update"* ]] && _has_update="true"
+
         local _run_name=""
-        local _si=0
         for _skill_dir in "${_skills_dir}"/*/; do
           [[ ! -d "$_skill_dir" ]] && continue
           local _cname _cdisplay
@@ -234,12 +273,37 @@ cmd_dashboard() {
             _run_name="$_cname"
             break
           fi
-          _si=$(( _si + 1 ))
         done
+
         if [[ -n "$_run_name" ]]; then
           source "$MUSTER_ROOT/lib/skills/manager.sh"
-          skill_run "$_run_name"
-          _dashboard_pause
+          # Build submenu
+          local _skill_opts=()
+          _skill_opts[0]="Run"
+          if [[ "$_has_update" == "true" ]]; then
+            _skill_opts[${#_skill_opts[@]}]="Update"
+          fi
+          _skill_opts[${#_skill_opts[@]}]="Remove"
+          _skill_opts[${#_skill_opts[@]}]="Back"
+
+          menu_select "${_selected_display}" "${_skill_opts[@]}"
+
+          case "$MENU_RESULT" in
+            "Run")
+              skill_run "$_run_name"
+              _dashboard_pause
+              ;;
+            "Update")
+              skill_marketplace_install "$_run_name"
+              _dashboard_pause
+              ;;
+            "Remove")
+              skill_remove "$_run_name"
+              _dashboard_pause
+              ;;
+            "Back")
+              ;;
+          esac
         fi
         ;;
       "Skill Marketplace")
