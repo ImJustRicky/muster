@@ -543,7 +543,13 @@ _marketplace_search() {
   if [[ "$match_count" -eq 1 ]]; then
     local single_name="${names[0]}"
     if [[ -d "${SKILLS_DIR}/${single_name}" ]]; then
-      info "Skill '${single_name}' is already installed"
+      printf '%b' "  Uninstall ${BOLD}${single_name}${RESET}? (y/n) "
+      local answer=""
+      read -rsn1 answer
+      echo ""
+      if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+        skill_remove "$single_name"
+      fi
       return 0
     fi
     printf '%b' "  Install ${BOLD}${single_name}${RESET}? (y/n) "
@@ -564,14 +570,20 @@ _marketplace_search() {
       i=$((i + 1))
     done
 
-    checklist_select --none "Select skills to install" "${items[@]}"
+    checklist_select --none "Select skills to install or uninstall" "${items[@]}"
 
     if [[ -n "$CHECKLIST_RESULT" ]]; then
       local IFS=$'\n'
       local selected
       for selected in $CHECKLIST_RESULT; do
         if [[ -d "${SKILLS_DIR}/${selected}" ]]; then
-          info "Skill '${selected}' is already installed, skipping"
+          printf '%b' "  Uninstall ${BOLD}${selected}${RESET}? (y/n) "
+          local _uans=""
+          read -rsn1 _uans
+          echo ""
+          if [[ "$_uans" == "y" || "$_uans" == "Y" ]]; then
+            skill_remove "$selected"
+          fi
         else
           skill_marketplace_install "$selected"
         fi
@@ -615,14 +627,20 @@ _marketplace_browse() {
   done
   echo ""
 
-  checklist_select --none "Select skills to install" "${items[@]}"
+  checklist_select --none "Select skills to install or uninstall" "${items[@]}"
 
   if [[ -n "$CHECKLIST_RESULT" ]]; then
     local IFS=$'\n'
     local selected
     for selected in $CHECKLIST_RESULT; do
       if [[ -d "${SKILLS_DIR}/${selected}" ]]; then
-        info "Skill '${selected}' is already installed, skipping"
+        printf '%b' "  Uninstall ${BOLD}${selected}${RESET}? (y/n) "
+        local _uans=""
+        read -rsn1 _uans
+        echo ""
+        if [[ "$_uans" == "y" || "$_uans" == "Y" ]]; then
+          skill_remove "$selected"
+        fi
       else
         skill_marketplace_install "$selected"
       fi
