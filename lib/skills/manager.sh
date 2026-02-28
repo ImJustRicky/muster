@@ -17,6 +17,8 @@ cmd_skill() {
       echo "  list                 List installed skills"
       echo "  run <name>           Run a skill manually"
       echo "  configure <name>     Configure a skill (API keys, webhooks, etc.)"
+      echo "  enable <name>        Enable auto-run on deploy/rollback hooks"
+      echo "  disable <name>       Disable auto-run (manual only)"
       echo "  marketplace [query]  Browse and install skills from the official registry"
       return 0
       ;;
@@ -44,12 +46,18 @@ cmd_skill() {
     configure|config)
       skill_configure "$@"
       ;;
+    enable)
+      skill_enable "$@"
+      ;;
+    disable)
+      skill_disable "$@"
+      ;;
     marketplace|browse|search)
       skill_marketplace "$@"
       ;;
     *)
       err "Unknown skill command: ${action}"
-      echo "Usage: muster skill [add|create|remove|list|run|configure|marketplace]"
+      echo "Usage: muster skill [add|create|remove|list|run|configure|enable|disable|marketplace]"
       exit 1
       ;;
   esac
@@ -213,15 +221,28 @@ skill_list() {
     [[ ! -d "$skill_dir" ]] && continue
     local name
     name=$(basename "$skill_dir")
-    local desc=""
+    local desc="" hooks_raw=""
 
     if [[ -f "${skill_dir}/skill.json" ]]; then
       if has_cmd jq; then
         desc=$(jq -r '.description // ""' "${skill_dir}/skill.json")
+        hooks_raw=$(jq -r '(.hooks // []) | join(", ")' "${skill_dir}/skill.json")
       fi
     fi
 
-    echo -e "  ${ACCENT}*${RESET} ${BOLD}${name}${RESET}  ${DIM}${desc}${RESET}"
+    local _mode_tag=""
+    if [[ -z "$hooks_raw" ]]; then
+      _mode_tag="${DIM}manual only${RESET}"
+    elif [[ -f "${skill_dir}/.enabled" ]]; then
+      # Shorten hook names for display
+      local _hooks_short
+      _hooks_short=$(printf '%s' "$hooks_raw" | sed 's/post-//g; s/pre-/pre-/g')
+      _mode_tag="${GREEN}on ${_hooks_short}${RESET}"
+    else
+      _mode_tag="${DIM}disabled${RESET}"
+    fi
+
+    echo -e "  ${ACCENT}*${RESET} ${BOLD}${name}${RESET}  ${_mode_tag}  ${DIM}${desc}${RESET}"
   done
   echo ""
 }
@@ -281,19 +302,26 @@ skill_configure() {
     return 1
   fi
 
-  local config_count
+  local config_count hooks_raw hooks_short
   config_count=$(jq '.config // [] | length' "$skill_json")
-
-  if [[ "$config_count" -eq 0 ]]; then
-    info "Skill '${name}' has no configurable options"
-    return 0
-  fi
+  hooks_raw=$(jq -r '(.hooks // []) | join(", ")' "$skill_json")
+  hooks_short=$(printf '%s' "$hooks_raw" | sed 's/post-//g; s/pre-/pre-/g')
 
   local config_file="${skill_dir}/config.env"
 
   echo ""
   printf '%b\n' "  ${BOLD}Configure: ${name}${RESET}"
+  if [[ -n "$hooks_raw" ]]; then
+    printf '%b\n' "  ${DIM}Runs on: ${hooks_short}${RESET}"
+  else
+    printf '%b\n' "  ${DIM}Manual only (no hooks)${RESET}"
+  fi
   echo ""
+
+  if [[ "$config_count" -eq 0 && -z "$hooks_raw" ]]; then
+    info "Skill '${name}' has no configurable options"
+    return 0
+  fi
 
   local i=0
   local new_config=""
@@ -357,8 +385,32 @@ skill_configure() {
   if [[ -n "$new_config" ]]; then
     printf '%s\n' "$new_config" > "$config_file"
     ok "Configuration saved for '${name}'"
-  else
+  elif [[ "$config_count" -gt 0 ]]; then
     warn "No configuration values provided"
+  fi
+
+  # Prompt to enable/disable if skill has hooks
+  if [[ -n "$hooks_raw" ]]; then
+    echo ""
+    if [[ -f "${skill_dir}/.enabled" ]]; then
+      printf '%b\n' "  ${DIM}Status: enabled (runs on ${hooks_short})${RESET}"
+      printf '%b' "  Disable auto-run? (y/n) "
+      local _toggle=""
+      read -rsn1 _toggle
+      echo ""
+      if [[ "$_toggle" == "y" || "$_toggle" == "Y" ]]; then
+        skill_disable "$name"
+      fi
+    else
+      printf '%b\n' "  ${DIM}This skill can run on: ${hooks_short}${RESET}"
+      printf '%b' "  Enable auto-run? (y/n) "
+      local _toggle=""
+      read -rsn1 _toggle
+      echo ""
+      if [[ "$_toggle" == "y" || "$_toggle" == "Y" ]]; then
+        skill_enable "$name"
+      fi
+    fi
   fi
 }
 
@@ -410,6 +462,9 @@ run_skill_hooks() {
     [[ ! -d "$skill_dir" ]] && continue
     [[ ! -f "${skill_dir}/skill.json" ]] && continue
     [[ ! -x "${skill_dir}/run.sh" ]] && continue
+
+    # Only auto-run skills that are enabled
+    [[ ! -f "${skill_dir}/.enabled" ]] && continue
 
     # Check if this skill declares the hook
     local has_hook="false"
@@ -659,9 +714,44 @@ skill_marketplace_install() {
 
   if [[ -d "${tmp_dir}/${name}" && -f "${tmp_dir}/${name}/skill.json" ]]; then
     skill_add "${tmp_dir}/${name}"
+    # Refresh registry cache from the cloned repo
+    if [[ -f "${tmp_dir}/registry.json" ]]; then
+      mkdir -p "${HOME}/.muster"
+      cp "${tmp_dir}/registry.json" "${HOME}/.muster/.registry_cache.json"
+    fi
   else
     err "Skill '${name}' not found in registry"
   fi
 
   rm -rf "$tmp_dir"
+}
+
+# Enable a skill to auto-run on deploy/rollback hooks
+skill_enable() {
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    err "Usage: muster skill enable <name>"
+    return 1
+  fi
+  if [[ ! -d "${SKILLS_DIR}/${name}" ]]; then
+    err "Skill '${name}' not found"
+    return 1
+  fi
+  touch "${SKILLS_DIR}/${name}/.enabled"
+  ok "Skill '${name}' enabled — will auto-run on deploy/rollback hooks"
+}
+
+# Disable a skill from auto-running on hooks
+skill_disable() {
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    err "Usage: muster skill disable <name>"
+    return 1
+  fi
+  if [[ ! -d "${SKILLS_DIR}/${name}" ]]; then
+    err "Skill '${name}' not found"
+    return 1
+  fi
+  rm -f "${SKILLS_DIR}/${name}/.enabled"
+  ok "Skill '${name}' disabled — will not auto-run on hooks"
 }

@@ -268,7 +268,22 @@ cmd_dashboard() {
           fi
         fi
 
-        actions[${#actions[@]}]="Skill: ${_sdisplay}${_update_tag}"
+        local _mode_tag=""
+        if [[ -f "${_skill_dir}/.enabled" ]]; then
+          local _hooks_raw=""
+          if has_cmd jq && [[ -f "${_skill_dir}/skill.json" ]]; then
+            _hooks_raw=$(jq -r '(.hooks // []) | join(", ")' "${_skill_dir}/skill.json")
+          fi
+          if [[ -n "$_hooks_raw" ]]; then
+            local _hooks_short
+            _hooks_short=$(printf '%s' "$_hooks_raw" | sed 's/post-//g; s/pre-/pre-/g')
+            _mode_tag=" (${_hooks_short})"
+          else
+            _mode_tag=" (active)"
+          fi
+        fi
+
+        actions[${#actions[@]}]="Skill: ${_sdisplay}${_mode_tag}${_update_tag}"
       done
     fi
 
@@ -312,8 +327,10 @@ cmd_dashboard() {
         ;;
       Skill:\ *)
         local _selected_display="${MENU_RESULT#Skill: }"
-        # Strip update tag if present
+        # Strip tags
         _selected_display="${_selected_display% <- update}"
+        # Strip mode/hooks tag: " (deploy, rollback)" or " (active)"
+        _selected_display="${_selected_display%% (*}"
         local _has_update="false"
         [[ "$MENU_RESULT" == *"<- update"* ]] && _has_update="true"
 
@@ -346,6 +363,11 @@ cmd_dashboard() {
           local _skill_opts=()
           _skill_opts[0]="Run"
           _skill_opts[${#_skill_opts[@]}]="Configure"
+          if [[ -f "${_skills_dir}/${_run_name}/.enabled" ]]; then
+            _skill_opts[${#_skill_opts[@]}]="Disable"
+          else
+            _skill_opts[${#_skill_opts[@]}]="Enable"
+          fi
           if [[ "$_has_update" == "true" ]]; then
             _skill_opts[${#_skill_opts[@]}]="Update"
           fi
@@ -361,6 +383,14 @@ cmd_dashboard() {
               ;;
             "Configure")
               skill_configure "$_run_name"
+              _dashboard_pause
+              ;;
+            "Enable")
+              skill_enable "$_run_name"
+              _dashboard_pause
+              ;;
+            "Disable")
+              skill_disable "$_run_name"
               _dashboard_pause
               ;;
             "Update")
