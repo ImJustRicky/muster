@@ -118,10 +118,20 @@ skill_add() {
 
     if [[ -d "${SKILLS_DIR}/${skill_name}" ]]; then
       warn "Skill '${skill_name}' already installed. Updating..."
+      # Preserve user config and state across update
+      local _tmp_preserve
+      _tmp_preserve=$(mktemp -d)
+      [[ -f "${SKILLS_DIR}/${skill_name}/config.env" ]] && cp "${SKILLS_DIR}/${skill_name}/config.env" "$_tmp_preserve/"
+      [[ -f "${SKILLS_DIR}/${skill_name}/.enabled" ]] && touch "$_tmp_preserve/.enabled"
       rm -rf "${SKILLS_DIR}/${skill_name}"
+      cp -r "$source" "${SKILLS_DIR}/${skill_name}"
+      # Restore preserved files
+      [[ -f "$_tmp_preserve/config.env" ]] && cp "$_tmp_preserve/config.env" "${SKILLS_DIR}/${skill_name}/"
+      [[ -f "$_tmp_preserve/.enabled" ]] && touch "${SKILLS_DIR}/${skill_name}/.enabled"
+      rm -rf "$_tmp_preserve"
+    else
+      cp -r "$source" "${SKILLS_DIR}/${skill_name}"
     fi
-
-    cp -r "$source" "${SKILLS_DIR}/${skill_name}"
     ok "Skill '${skill_name}' installed from local path"
   fi
 }
