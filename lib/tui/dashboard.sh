@@ -167,8 +167,8 @@ _dashboard_header() {
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
   echo ""
 
-  # Clean up temp dir after any remaining bg checks finish
-  ( wait 2>/dev/null; rm -rf "$_hc_dir" ) &
+  # Clean up temp dir after health checks have time to finish
+  ( sleep 5; rm -rf "$_hc_dir" ) &
 }
 
 cmd_dashboard() {
