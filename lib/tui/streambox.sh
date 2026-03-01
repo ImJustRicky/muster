@@ -6,9 +6,7 @@
 # Prints the colored line (no newline). Respects log_color_mode setting.
 _colorize_log_line() {
   local _cl_line="$1"
-  local _cl_mode=""
-  _cl_mode=$(global_config_get "log_color_mode" 2>/dev/null)
-  : "${_cl_mode:=auto}"
+  local _cl_mode="${_LOG_COLOR_MODE:-auto}"
 
   case "$_cl_mode" in
     none)
@@ -46,6 +44,10 @@ _colorize_log_line() {
 # Usage: _log_viewer "Title" "logfile" [pid]
 _log_viewer() {
   local _lv_title="$1" _lv_log="$2" _lv_pid="${3:-}"
+
+  # Cache log color mode for the session (avoid spawning jq per line)
+  _LOG_COLOR_MODE=$(global_config_get "log_color_mode" 2>/dev/null)
+  : "${_LOG_COLOR_MODE:=auto}"
 
   tput smcup
   tput civis 2>/dev/null  # hide cursor
