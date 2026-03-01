@@ -62,6 +62,11 @@ _log_viewer() {
   local _lv_offset=0
   local _lv_follow="true"
   local _lv_total=0
+  local _lv_lines_loaded="false"
+
+  # Cached lines array (shared via dynamic scoping)
+  # Bash 3.2: no local -a, but we can declare and use it
+  _lv_lines=()
 
   # ── Draw helpers ──
 
@@ -98,19 +103,22 @@ _log_viewer() {
     printf '\033[48;5;236m\033[38;5;250m%s%s%*s%s\033[0m' "$_ft_left" "$_ft_mid" "$_ft_pad" "" "$_ft_right"
   }
 
-  _lv_draw_content() {
-    # Read log lines into array
-    local _lv_lines=()
+  # Load log file into _lv_lines array (expensive — call only when needed)
+  _lv_load_lines() {
+    _lv_lines=()
     if [[ -f "$_lv_log" ]]; then
       local _ll=""
       while IFS= read -r _ll || [[ -n "$_ll" ]]; do
-        # Strip ANSI codes for display
         _ll=$(printf '%s' "$_ll" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
         _lv_lines[${#_lv_lines[@]}]="$_ll"
       done < "$_lv_log"
     fi
     _lv_total=${#_lv_lines[@]}
+    _lv_lines_loaded="true"
+  }
 
+  # Render visible lines from cached _lv_lines (cheap — just tput + printf)
+  _lv_draw_content() {
     # Auto-follow: jump to bottom
     if [[ "$_lv_follow" == "true" ]]; then
       _lv_offset=$(( _lv_total - _lv_content_h ))
@@ -152,6 +160,7 @@ _log_viewer() {
 
   # ── Initial draw ──
   tput clear
+  _lv_load_lines
   _lv_draw_header
   _lv_draw_content
   _lv_draw_footer
@@ -160,6 +169,7 @@ _log_viewer() {
   while true; do
     _lv_read_key
     local _k="$REPLY"
+    local _lv_need_reload="false"
 
     case "$_k" in
       $'\x0f')
@@ -167,12 +177,12 @@ _log_viewer() {
         break
         ;;
       $'\x1b[A'|k)
-        # Scroll up
+        # Scroll up — no reload needed
         _lv_follow="false"
         (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
         ;;
       $'\x1b[B'|j)
-        # Scroll down
+        # Scroll down — no reload needed
         local _lv_max=$(( _lv_total - _lv_content_h ))
         (( _lv_max < 0 )) && _lv_max=0
         if (( _lv_offset < _lv_max )); then
@@ -183,17 +193,28 @@ _log_viewer() {
         fi
         ;;
       g)
-        # Jump to top
+        # Jump to top — no reload needed
         _lv_follow="false"
         _lv_offset=0
         ;;
       G)
-        # Jump to bottom
+        # Jump to bottom — reload to get latest
         _lv_follow="true"
+        _lv_need_reload="true"
+        ;;
+      "")
+        # Timeout (no key pressed) — reload if following live output
+        if [[ "$_lv_follow" == "true" ]]; then
+          _lv_need_reload="true"
+        fi
         ;;
     esac
 
-    # Redraw header (sticky) + content + footer
+    # Only re-read file when needed (follow mode timeout or G)
+    if [[ "$_lv_need_reload" == "true" ]]; then
+      _lv_load_lines
+    fi
+
     _lv_draw_header
     _lv_draw_content
     _lv_draw_footer

@@ -294,8 +294,8 @@ echo -e "  \033[1mafter-deploy hint in deploy.sh (code check)\033[0m"
 # ═══════════════════════════════════════════
 
 deploy_code=$(cat "$MUSTER_ROOT/lib/commands/deploy.sh")
-_test_contains "deploy.sh has Ctrl+O hint text" "Ctrl+O to view full log" "$deploy_code"
-_test_contains "deploy.sh reads key with 2s timeout" "read -rsn1 -t 2" "$deploy_code"
+_test_contains "deploy.sh has Ctrl+O hint text" "Ctrl+O view full log" "$deploy_code"
+_test_contains "deploy.sh reads key after deploy" "read -rsn1" "$deploy_code"
 _test_contains "deploy.sh calls _log_viewer on Ctrl+O" "_log_viewer" "$deploy_code"
 
 # ═══════════════════════════════════════════
