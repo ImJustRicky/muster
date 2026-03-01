@@ -152,6 +152,7 @@ _git_current_sha() {
 # Returns: short SHA string, or empty if none tracked
 _git_prev_deploy_sha() {
   local svc="$1"
+  [[ -z "${CONFIG_FILE:-}" ]] && return 0
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
   local tracker="${project_dir}/.muster/deploy-commits.json"
@@ -172,6 +173,7 @@ print(data.get('${svc}', ''))
 # Usage: _git_save_deploy_sha "api" "abc1234"
 _git_save_deploy_sha() {
   local svc="$1" sha="$2"
+  [[ -z "${CONFIG_FILE:-}" ]] && return 0
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
   local tracker="${project_dir}/.muster/deploy-commits.json"
@@ -225,7 +227,6 @@ _git_deploy_diff() {
   echo -e "    ${DIM}Changes since last deploy (${total_commits} commit$( (( total_commits != 1 )) && echo "s")):${RESET}"
 
   # Show up to 5 commit one-liners
-  local shown=0
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     # Truncate to 72 chars
@@ -233,7 +234,6 @@ _git_deploy_diff() {
       line="${line:0:69}..."
     fi
     echo -e "      ${DIM}${line}${RESET}"
-    shown=$(( shown + 1 ))
   done < <(git log --oneline "${prev}..${curr}" --max-count=5 2>/dev/null)
 
   if (( total_commits > 5 )); then
