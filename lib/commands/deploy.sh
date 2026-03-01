@@ -304,14 +304,22 @@ ${_k8s_env_lines}"
             fi
           fi
 
-          # After-deploy hint: offer log viewer
+          # After-deploy: offer log viewer, then wait for keypress
           if [[ -f "$log_file" && -t 0 ]]; then
-            printf '\n  %bCtrl+O to view full log%b ' "${DIM}" "${RESET}"
-            local _post_key=""
-            IFS= read -rsn1 -t 2 _post_key 2>/dev/null || true
-            if [[ "$_post_key" == $'\x0f' ]]; then
-              _log_viewer "$name deploy log" "$log_file"
-            fi
+            echo ""
+            printf '  %bCtrl+O view full log  •  any key to continue%b ' "${DIM}" "${RESET}"
+            while true; do
+              local _post_key=""
+              IFS= read -rsn1 _post_key 2>/dev/null || true
+              if [[ "$_post_key" == $'\x0f' ]]; then
+                _log_viewer "$name deploy log" "$log_file"
+                # After viewer closes, show hint again
+                printf '  %bCtrl+O view full log  •  any key to continue%b ' "${DIM}" "${RESET}"
+              else
+                # Any other key — continue
+                break
+              fi
+            done
             # Clear the hint line
             printf '\r'
             tput el 2>/dev/null || true
