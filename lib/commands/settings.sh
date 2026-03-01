@@ -216,10 +216,10 @@ _settings_global_cli() {
 
   # Validate key
   case "$key" in
-    color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check) ;;
+    color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check) ;;
     *)
       err "Unknown global setting: ${key}"
-      echo "  Valid keys: color_mode, log_retention_days, default_stack,"
+      echo "  Valid keys: color_mode, log_color_mode, log_retention_days, default_stack,"
       echo "              default_health_timeout, scanner_exclude, update_check"
       return 1
       ;;
@@ -295,6 +295,13 @@ _settings_global_cli() {
       esac
       global_config_set "$key" "\"$value\""
       ;;
+    log_color_mode)
+      case "$value" in
+        auto|raw|none) ;;
+        *) err "log_color_mode must be auto, raw, or none"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
+      ;;
     log_retention_days|default_health_timeout)
       case "$value" in
         *[!0-9]*) err "${key} must be a number"; return 1 ;;
@@ -325,10 +332,12 @@ _settings_global_cli() {
 
 _settings_muster_global() {
   while true; do
-    local color_mode log_retention default_stack health_timeout update_check scanner_ex
+    local color_mode log_color_mode log_retention default_stack health_timeout update_check scanner_ex
 
     color_mode=$(global_config_get "color_mode" 2>/dev/null)
     : "${color_mode:=auto}"
+    log_color_mode=$(global_config_get "log_color_mode" 2>/dev/null)
+    : "${log_color_mode:=auto}"
     log_retention=$(global_config_get "log_retention_days" 2>/dev/null)
     : "${log_retention:=7}"
     default_stack=$(global_config_get "default_stack" 2>/dev/null)
@@ -356,39 +365,53 @@ _settings_muster_global() {
       *)      _TOG_STATES[0]=0 ;;
     esac
 
+    # Log color mode: auto / raw / none
+    _TOG_LABELS[1]="Log color mode"
+    _TOG_OPTIONS[1]="auto|raw|none"
+    case "$log_color_mode" in
+      raw)  _TOG_STATES[1]=1 ;;
+      none) _TOG_STATES[1]=2 ;;
+      *)    _TOG_STATES[1]=0 ;;
+    esac
+
     # Update check: on / off
-    _TOG_LABELS[1]="Update check"
-    _TOG_OPTIONS[1]="on|off"
+    _TOG_LABELS[2]="Update check"
+    _TOG_OPTIONS[2]="on|off"
     case "$update_check" in
-      off) _TOG_STATES[1]=1 ;;
-      *)   _TOG_STATES[1]=0 ;;
+      off) _TOG_STATES[2]=1 ;;
+      *)   _TOG_STATES[2]=0 ;;
     esac
 
     # Default stack: bare / docker / compose / k8s
-    _TOG_LABELS[2]="Default stack"
-    _TOG_OPTIONS[2]="bare|docker|compose|k8s"
+    _TOG_LABELS[3]="Default stack"
+    _TOG_OPTIONS[3]="bare|docker|compose|k8s"
     case "$default_stack" in
-      docker)  _TOG_STATES[2]=1 ;;
-      compose) _TOG_STATES[2]=2 ;;
-      k8s)     _TOG_STATES[2]=3 ;;
-      *)       _TOG_STATES[2]=0 ;;
+      docker)  _TOG_STATES[3]=1 ;;
+      compose) _TOG_STATES[3]=2 ;;
+      k8s)     _TOG_STATES[3]=3 ;;
+      *)       _TOG_STATES[3]=0 ;;
     esac
 
     echo ""
     _toggle_select "Muster Settings"
 
     # Read back chosen values
-    local new_color new_update new_stack
+    local new_color new_log_color new_update new_stack
     case $(( _TOG_STATES[0] )) in
       1) new_color="always" ;;
       2) new_color="never" ;;
       *) new_color="auto" ;;
     esac
     case $(( _TOG_STATES[1] )) in
+      1) new_log_color="raw" ;;
+      2) new_log_color="none" ;;
+      *) new_log_color="auto" ;;
+    esac
+    case $(( _TOG_STATES[2] )) in
       1) new_update="off" ;;
       *) new_update="on" ;;
     esac
-    case $(( _TOG_STATES[2] )) in
+    case $(( _TOG_STATES[3] )) in
       1) new_stack="docker" ;;
       2) new_stack="compose" ;;
       3) new_stack="k8s" ;;
@@ -397,6 +420,7 @@ _settings_muster_global() {
 
     # Save toggleable settings
     global_config_set "color_mode" "\"$new_color\""
+    global_config_set "log_color_mode" "\"$new_log_color\""
     global_config_set "update_check" "\"$new_update\""
     global_config_set "default_stack" "\"$new_stack\""
 

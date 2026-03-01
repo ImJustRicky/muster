@@ -1,6 +1,47 @@
 #!/usr/bin/env bash
 # muster/lib/tui/streambox.sh — Live-scrolling log box
 
+# Colorize a log line based on pattern matching
+# Usage: _colorize_log_line "line text"
+# Prints the colored line (no newline). Respects log_color_mode setting.
+_colorize_log_line() {
+  local _cl_line="$1"
+  local _cl_mode=""
+  _cl_mode=$(global_config_get "log_color_mode" 2>/dev/null)
+  : "${_cl_mode:=auto}"
+
+  case "$_cl_mode" in
+    none)
+      printf '%s' "$_cl_line"
+      return
+      ;;
+    raw)
+      # Pass through as-is (caller should not strip ANSI)
+      printf '%s' "$_cl_line"
+      return
+      ;;
+  esac
+
+  # auto mode: pattern-match coloring
+  case "$_cl_line" in
+    *[Ee][Rr][Rr][Oo][Rr]*|*[Ff][Aa][Tt][Aa][Ll]*)
+      printf '%b%s%b' "${RED}" "$_cl_line" "${RESET}"
+      ;;
+    *[Ww][Aa][Rr][Nn]*|*WARNING*)
+      printf '%b%s%b' "${YELLOW}" "$_cl_line" "${RESET}"
+      ;;
+    *[Ss]uccess*|*[Ss]uccessfully*|*built*|*healthy*|*[Cc]omplete*)
+      printf '%b%s%b' "${GREEN}" "$_cl_line" "${RESET}"
+      ;;
+    *Step\ *|*"--->"*|*"-->"*)
+      printf '%b%s%b' "${ACCENT}" "$_cl_line" "${RESET}"
+      ;;
+    *)
+      printf '%b%s%b' "${DIM}" "$_cl_line" "${RESET}"
+      ;;
+  esac
+}
+
 # Full-screen log viewer (called on Ctrl+O)
 # Usage: _log_viewer "Title" "logfile" [pid]
 _log_viewer() {
@@ -85,7 +126,8 @@ _log_viewer() {
         if (( ${#_vl} > _max )); then
           _vl="${_vl:0:$(( _max - 3 ))}..."
         fi
-        printf ' %s' "$_vl"
+        printf ' '
+        _colorize_log_line "$_vl"
       fi
       tput el  # clear to end of line
       _vi=$(( _vi + 1 ))

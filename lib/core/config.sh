@@ -10,6 +10,7 @@ GLOBAL_CONFIG_FILE="$HOME/.muster/settings.json"
 
 _GLOBAL_DEFAULTS='{
   "color_mode": "auto",
+  "log_color_mode": "auto",
   "log_retention_days": 7,
   "default_stack": "bare",
   "default_health_timeout": 10,
