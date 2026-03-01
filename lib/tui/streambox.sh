@@ -41,35 +41,20 @@ _colorize_log_line() {
 }
 
 # Full-screen log viewer (called on Ctrl+O)
+# Shows latest lines, auto-refreshes every second. Ctrl+O to close.
 # Usage: _log_viewer "Title" "logfile" [pid]
 _log_viewer() {
   local _lv_title="$1" _lv_log="$2" _lv_pid="${3:-}"
 
-  # Cache log color mode for the session (avoid spawning jq per line)
+  # Cache log color mode (avoid spawning jq per line)
   _LOG_COLOR_MODE=$(global_config_get "log_color_mode" 2>/dev/null)
   : "${_LOG_COLOR_MODE:=auto}"
 
   tput smcup
   tput civis 2>/dev/null  # hide cursor
 
-  # Terminal dimensions (updated every frame)
-  local _lv_rows=0
-  local _lv_cols=0
-  local _lv_content_h=1
+  local _lv_rows=0 _lv_cols=0 _lv_content_h=1
 
-  # State
-  local _lv_offset=0
-  local _lv_follow="true"
-  local _lv_total=0
-  local _lv_lines_loaded="false"
-
-  # Cached lines array (shared via dynamic scoping)
-  # Bash 3.2: no local -a, but we can declare and use it
-  _lv_lines=()
-
-  # ── Draw helpers ──
-
-  # Refresh terminal dimensions (call before each frame)
   _lv_update_size() {
     update_term_size
     _lv_rows=$TERM_ROWS
@@ -78,68 +63,35 @@ _log_viewer() {
     (( _lv_content_h < 1 )) && _lv_content_h=1
   }
 
-  _lv_draw_header() {
+  _lv_draw() {
+    # Header
     tput cup 0 0
-    # Yellow background header bar
     local _hdr_left="  // muster  ${_lv_title}"
     local _hdr_right="Ctrl+O close  "
     local _hdr_pad=$(( _lv_cols - ${#_hdr_left} - ${#_hdr_right} ))
     (( _hdr_pad < 1 )) && _hdr_pad=1
     printf '\033[48;5;178m\033[38;5;0m\033[1m%s%*s%s\033[0m' "$_hdr_left" "$_hdr_pad" "" "$_hdr_right"
+
     # Separator
     tput cup 1 0
-    local _sep=""
-    _sep=$(printf '%*s' "$_lv_cols" "" | sed 's/ /─/g')
-    printf '%b%s%b' "${DIM}" "$_sep" "${RESET}"
-  }
+    printf '%b%s%b' "${DIM}" "$(printf '%*s' "$_lv_cols" "" | sed 's/ /─/g')" "${RESET}"
 
-  _lv_draw_footer() {
-    tput cup $(( _lv_rows - 1 )) 0
-    local _ft_left="  up/dn/jk scroll  g/G top/bottom"
-    local _ft_mode=""
-    if [[ "$_lv_follow" == "true" ]]; then
-      _ft_mode="following"
-    else
-      local _lv_bot=$(( _lv_offset + _lv_content_h ))
-      (( _lv_bot > _lv_total )) && _lv_bot=$_lv_total
-      _ft_mode="line $(( _lv_offset + 1 ))-${_lv_bot}/${_lv_total}"
-    fi
-    local _ft_right="Ctrl+O close  "
-    local _ft_mid="  •  ${_ft_mode}"
-    local _ft_pad=$(( _lv_cols - ${#_ft_left} - ${#_ft_mid} - ${#_ft_right} ))
-    (( _ft_pad < 1 )) && _ft_pad=1
-    printf '\033[48;5;236m\033[38;5;250m%s%s%*s%s\033[0m' "$_ft_left" "$_ft_mid" "$_ft_pad" "" "$_ft_right"
-  }
-
-  # Load log file into _lv_lines array (expensive — call only when needed)
-  _lv_load_lines() {
-    _lv_lines=()
+    # Content — read last N lines from log file
+    local _lv_lines=()
     if [[ -f "$_lv_log" ]]; then
       local _ll=""
       while IFS= read -r _ll || [[ -n "$_ll" ]]; do
         _ll=$(printf '%s' "$_ll" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
         _lv_lines[${#_lv_lines[@]}]="$_ll"
-      done < "$_lv_log"
+      done < <(tail -n "$_lv_content_h" "$_lv_log" 2>/dev/null)
     fi
-    _lv_total=${#_lv_lines[@]}
-    _lv_lines_loaded="true"
-  }
+    local _lv_total=${#_lv_lines[@]}
 
-  # Render visible lines from cached _lv_lines (cheap — just tput + printf)
-  _lv_draw_content() {
-    # Auto-follow: jump to bottom
-    if [[ "$_lv_follow" == "true" ]]; then
-      _lv_offset=$(( _lv_total - _lv_content_h ))
-      (( _lv_offset < 0 )) && _lv_offset=0
-    fi
-
-    # Render visible lines
     local _vi=0
     while (( _vi < _lv_content_h )); do
       tput cup $(( _vi + 2 )) 0
-      local _idx=$(( _lv_offset + _vi ))
-      if (( _idx < _lv_total )); then
-        local _vl="${_lv_lines[$_idx]}"
+      if (( _vi < _lv_total )); then
+        local _vl="${_lv_lines[$_vi]}"
         local _max=$(( _lv_cols - 2 ))
         if (( ${#_vl} > _max )); then
           _vl="${_vl:0:$(( _max - 3 ))}..."
@@ -147,97 +99,45 @@ _log_viewer() {
         printf ' '
         _colorize_log_line "$_vl"
       fi
-      tput el  # clear to end of line
+      tput el
       _vi=$(( _vi + 1 ))
     done
-  }
 
-  # Read a key, concatenating escape sequences into one string
-  # Sets REPLY to the key (e.g. $'\x1b[A' for up arrow, "j", $'\x0f' for Ctrl+O)
-  _lv_read_key() {
-    local _rk=""
-    IFS= read -rsn1 -t 1 _rk 2>/dev/null || true
-    if [[ "$_rk" == $'\x1b' ]]; then
-      local _rk2="" _rk3=""
-      IFS= read -rsn1 -t 1 _rk2 2>/dev/null || true
-      IFS= read -rsn1 -t 1 _rk3 2>/dev/null || true
-      _rk="${_rk}${_rk2}${_rk3}"
-    fi
-    REPLY="$_rk"
+    # Footer
+    tput cup $(( _lv_rows - 1 )) 0
+    local _ft_right="Ctrl+O close  "
+    local _ft_pad=$(( _lv_cols - ${#_ft_right} ))
+    (( _ft_pad < 1 )) && _ft_pad=1
+    printf '\033[48;5;236m\033[38;5;250m%*s%s\033[0m' "$_ft_pad" "" "$_ft_right"
   }
 
   # ── Initial draw ──
   _lv_update_size
   tput clear
-  _lv_load_lines
-  _lv_draw_header
-  _lv_draw_content
-  _lv_draw_footer
+  _lv_draw
 
-  # ── Key loop ──
-  local _lv_prev_rows=$_lv_rows
-  local _lv_prev_cols=$_lv_cols
+  # ── Refresh loop — Ctrl+O to close ──
+  local _lv_prev_rows=$_lv_rows _lv_prev_cols=$_lv_cols
 
   while true; do
-    _lv_read_key
-    local _k="$REPLY"
-    local _lv_need_reload="false"
-
-    case "$_k" in
-      $'\x0f')
-        # Ctrl+O — close viewer
-        break
-        ;;
-      $'\x1b[A'|k)
-        # Scroll up — no reload needed
-        _lv_follow="false"
-        (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
-        ;;
-      $'\x1b[B'|j)
-        # Scroll down — no reload needed
-        local _lv_max=$(( _lv_total - _lv_content_h ))
-        (( _lv_max < 0 )) && _lv_max=0
-        if (( _lv_offset < _lv_max )); then
-          _lv_offset=$(( _lv_offset + 1 ))
-        fi
-        if (( _lv_offset >= _lv_max )); then
-          _lv_follow="true"
-        fi
-        ;;
-      g)
-        # Jump to top — no reload needed
-        _lv_follow="false"
-        _lv_offset=0
-        ;;
-      G)
-        # Jump to bottom — reload to get latest
-        _lv_follow="true"
-        _lv_need_reload="true"
-        ;;
-      "")
-        # Timeout (no key pressed) — reload if following live output
-        if [[ "$_lv_follow" == "true" ]]; then
-          _lv_need_reload="true"
-        fi
-        ;;
-    esac
-
-    # Only re-read file when needed (follow mode timeout or G)
-    if [[ "$_lv_need_reload" == "true" ]]; then
-      _lv_load_lines
+    local _k=""
+    IFS= read -rsn1 -t 1 _k 2>/dev/null || true
+    # Consume any remaining escape sequence bytes
+    if [[ "$_k" == $'\x1b' ]]; then
+      local _discard=""
+      IFS= read -rsn1 -t 1 _discard 2>/dev/null || true
+      IFS= read -rsn1 -t 1 _discard 2>/dev/null || true
     fi
 
-    # Detect terminal resize — full clear if size changed
+    [[ "$_k" == $'\x0f' ]] && break
+
     _lv_update_size
     if (( _lv_rows != _lv_prev_rows || _lv_cols != _lv_prev_cols )); then
       tput clear
       _lv_prev_rows=$_lv_rows
       _lv_prev_cols=$_lv_cols
     fi
-
-    _lv_draw_header
-    _lv_draw_content
-    _lv_draw_footer
+    _lv_draw
   done
 
   tput cnorm 2>/dev/null  # show cursor
