@@ -134,3 +134,119 @@ find_config() {
   done
   return 1
 }
+
+# ── Git deploy tracking ──
+
+# Check if current directory is inside a git work tree
+_git_is_repo() {
+  git rev-parse --is-inside-work-tree &>/dev/null
+}
+
+# Get short SHA of current HEAD (empty string if not a git repo)
+_git_current_sha() {
+  git rev-parse --short HEAD 2>/dev/null || echo ""
+}
+
+# Read the previously deployed SHA for a service from .muster/deploy-commits.json
+# Usage: _git_prev_deploy_sha "api"
+# Returns: short SHA string, or empty if none tracked
+_git_prev_deploy_sha() {
+  local svc="$1"
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+  local tracker="${project_dir}/.muster/deploy-commits.json"
+  [[ -f "$tracker" ]] || return 0
+  if has_cmd jq; then
+    jq -r ".\"${svc}\" // empty" "$tracker" 2>/dev/null
+  elif has_cmd python3; then
+    python3 -c "
+import json
+with open('${tracker}') as f:
+    data = json.load(f)
+print(data.get('${svc}', ''))
+" 2>/dev/null
+  fi
+}
+
+# Save the current SHA as the deployed commit for a service
+# Usage: _git_save_deploy_sha "api" "abc1234"
+_git_save_deploy_sha() {
+  local svc="$1" sha="$2"
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+  local tracker="${project_dir}/.muster/deploy-commits.json"
+  mkdir -p "$(dirname "$tracker")"
+
+  if [[ ! -f "$tracker" ]]; then
+    printf '{}' > "$tracker"
+  fi
+
+  if has_cmd jq; then
+    local tmp="${tracker}.tmp"
+    jq ".\"${svc}\" = \"${sha}\"" "$tracker" > "$tmp" && mv "$tmp" "$tracker"
+  elif has_cmd python3; then
+    python3 -c "
+import json
+with open('${tracker}') as f:
+    data = json.load(f)
+data['${svc}'] = '${sha}'
+with open('${tracker}', 'w') as f:
+    json.dump(data, f, indent=2)
+"
+  fi
+}
+
+# Print a formatted diff summary between two SHAs
+# Usage: _git_deploy_diff "prev_sha" "current_sha"
+# If prev_sha is empty, prints "Initial deploy" message
+_git_deploy_diff() {
+  local prev="$1" curr="$2"
+
+  if [[ -z "$prev" ]]; then
+    echo -e "    ${DIM}Initial deploy (no previous version tracked)${RESET}"
+    return 0
+  fi
+
+  # Verify previous SHA is reachable
+  if ! git cat-file -t "$prev" &>/dev/null; then
+    echo -e "    ${DIM}Previous commit ${prev} not reachable (history rewritten?)${RESET}"
+    return 0
+  fi
+
+  # Count total commits
+  local total_commits
+  total_commits=$(git rev-list --count "${prev}..${curr}" 2>/dev/null || echo "0")
+
+  if [[ "$total_commits" == "0" ]]; then
+    echo -e "    ${DIM}No new commits${RESET}"
+    return 0
+  fi
+
+  echo -e "    ${DIM}Changes since last deploy (${total_commits} commit$( (( total_commits != 1 )) && echo "s")):${RESET}"
+
+  # Show up to 5 commit one-liners
+  local shown=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    # Truncate to 72 chars
+    if (( ${#line} > 72 )); then
+      line="${line:0:69}..."
+    fi
+    echo -e "      ${DIM}${line}${RESET}"
+    shown=$(( shown + 1 ))
+  done < <(git log --oneline "${prev}..${curr}" --max-count=5 2>/dev/null)
+
+  if (( total_commits > 5 )); then
+    local remaining=$(( total_commits - 5 ))
+    echo -e "      ${DIM}...and ${remaining} more${RESET}"
+  fi
+
+  # Diffstat summary
+  local shortstat
+  shortstat=$(git diff --shortstat "${prev}..${curr}" 2>/dev/null)
+  if [[ -n "$shortstat" ]]; then
+    # Trim leading whitespace
+    shortstat="${shortstat#"${shortstat%%[![:space:]]*}"}"
+    echo -e "    ${DIM}${shortstat}${RESET}"
+  fi
+}
