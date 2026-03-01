@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 # muster/lib/tui/streambox.sh — Live-scrolling log box
 
+# Full-screen log viewer (called on Ctrl+O)
+# Usage: _log_viewer "Title" "logfile" [pid]
+_log_viewer() {
+  local _lv_title="$1" _lv_log="$2" _lv_pid="${3:-}"
+  # Placeholder — Task 2 implements the full viewer
+  # For now, just pause and wait for Ctrl+O to return
+  tput smcup
+  tput clear
+  echo "  Log viewer: $_lv_title (press Ctrl+O to close)"
+  echo ""
+  cat "$_lv_log" 2>/dev/null
+  while true; do
+    local _k=""
+    IFS= read -rsn1 _k 2>/dev/null || true
+    [[ "$_k" == $'\x0f' ]] && break
+  done
+  tput rmcup
+}
+
 # Usage: stream_in_box "Title" "logfile" command arg1 arg2...
 stream_in_box() {
   local title="$1"
@@ -74,7 +93,22 @@ stream_in_box() {
       r=$((r + 1))
     done
     printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
-    sleep 0.3
+    local _key=""
+    IFS= read -rsn1 -t 1 _key 2>/dev/null || true
+    if [[ "$_key" == $'\x0f' ]]; then
+      # Ctrl+O pressed — open log viewer (placeholder for Task 2)
+      _log_viewer "$title" "$log_file" "$cmd_pid"
+      # After viewer returns, redraw the collapsed box
+      printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$tcut" "${RESET}${ACCENT}" "$pad" "${RESET}"
+      r=0
+      while (( r < box_lines )); do
+        local empty_pad
+        empty_pad=$(printf '%*s' "$((inner - 1))" "")
+        printf '  %b│%b %s %b│%b\n' "${ACCENT}" "${RESET}" "$empty_pad" "${ACCENT}" "${RESET}"
+        r=$((r + 1))
+      done
+      printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
+    fi
   done
 
   wait "$cmd_pid"
