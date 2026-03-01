@@ -136,6 +136,20 @@ _log_viewer() {
     done
   }
 
+  # Read a key, concatenating escape sequences into one string
+  # Sets REPLY to the key (e.g. $'\x1b[A' for up arrow, "j", $'\x0f' for Ctrl+O)
+  _lv_read_key() {
+    local _rk=""
+    IFS= read -rsn1 -t 1 _rk 2>/dev/null || true
+    if [[ "$_rk" == $'\x1b' ]]; then
+      local _rk2="" _rk3=""
+      IFS= read -rsn1 -t 1 _rk2 2>/dev/null || true
+      IFS= read -rsn1 -t 1 _rk3 2>/dev/null || true
+      _rk="${_rk}${_rk2}${_rk3}"
+    fi
+    REPLY="$_rk"
+  }
+
   # ── Initial draw ──
   tput clear
   _lv_draw_header
@@ -144,66 +158,43 @@ _log_viewer() {
 
   # ── Key loop ──
   while true; do
-    local _k=""
-    IFS= read -rsn1 -t 1 _k 2>/dev/null || true
+    _lv_read_key
+    local _k="$REPLY"
 
-    # Check if command process is still running (for live-follow refresh)
-    local _lv_live="false"
-    if [[ -n "$_lv_pid" ]] && kill -0 "$_lv_pid" 2>/dev/null; then
-      _lv_live="true"
-    fi
-
-    if [[ "$_k" == $'\x0f' ]]; then
-      # Ctrl+O — close viewer
-      break
-    elif [[ "$_k" == $'\x1b' ]]; then
-      # Escape sequence — read 2 more chars for arrow keys
-      local _k2="" _k3=""
-      IFS= read -rsn1 -t 1 _k2 2>/dev/null || true
-      IFS= read -rsn1 -t 1 _k3 2>/dev/null || true
-      if [[ "$_k2" == "[" ]]; then
-        case "$_k3" in
-          A)  # Up arrow
-            _lv_follow="false"
-            (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
-            ;;
-          B)  # Down arrow
-            local _lv_max=$(( _lv_total - _lv_content_h ))
-            (( _lv_max < 0 )) && _lv_max=0
-            if (( _lv_offset < _lv_max )); then
-              _lv_offset=$(( _lv_offset + 1 ))
-            fi
-            # Re-enable follow if at bottom
-            if (( _lv_offset >= _lv_max )); then
-              _lv_follow="true"
-            fi
-            ;;
-        esac
-      fi
-    elif [[ "$_k" == "k" ]]; then
-      # Scroll up
-      _lv_follow="false"
-      (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
-    elif [[ "$_k" == "j" ]]; then
-      # Scroll down
-      local _lv_max=$(( _lv_total - _lv_content_h ))
-      (( _lv_max < 0 )) && _lv_max=0
-      if (( _lv_offset < _lv_max )); then
-        _lv_offset=$(( _lv_offset + 1 ))
-      fi
-      if (( _lv_offset >= _lv_max )); then
+    case "$_k" in
+      $'\x0f')
+        # Ctrl+O — close viewer
+        break
+        ;;
+      $'\x1b[A'|k)
+        # Scroll up
+        _lv_follow="false"
+        (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
+        ;;
+      $'\x1b[B'|j)
+        # Scroll down
+        local _lv_max=$(( _lv_total - _lv_content_h ))
+        (( _lv_max < 0 )) && _lv_max=0
+        if (( _lv_offset < _lv_max )); then
+          _lv_offset=$(( _lv_offset + 1 ))
+        fi
+        if (( _lv_offset >= _lv_max )); then
+          _lv_follow="true"
+        fi
+        ;;
+      g)
+        # Jump to top
+        _lv_follow="false"
+        _lv_offset=0
+        ;;
+      G)
+        # Jump to bottom
         _lv_follow="true"
-      fi
-    elif [[ "$_k" == "g" ]]; then
-      # Jump to top
-      _lv_follow="false"
-      _lv_offset=0
-    elif [[ "$_k" == "G" ]]; then
-      # Jump to bottom
-      _lv_follow="true"
-    fi
+        ;;
+    esac
 
-    # Redraw content + footer (header stays)
+    # Redraw header (sticky) + content + footer
+    _lv_draw_header
     _lv_draw_content
     _lv_draw_footer
   done
