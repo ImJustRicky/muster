@@ -303,6 +303,20 @@ ${_k8s_env_lines}"
               esac
             fi
           fi
+
+          # After-deploy hint: offer log viewer
+          if [[ -f "$log_file" && -t 0 ]]; then
+            printf '\n  %bCtrl+O to view full log%b ' "${DIM}" "${RESET}"
+            local _post_key=""
+            IFS= read -rsn1 -t 2 _post_key 2>/dev/null || true
+            if [[ "$_post_key" == $'\x0f' ]]; then
+              _log_viewer "$name deploy log" "$log_file"
+            fi
+            # Clear the hint line
+            printf '\r'
+            tput el 2>/dev/null || true
+          fi
+
           break
         else
           err "${name} deploy failed (exit code ${rc})"
