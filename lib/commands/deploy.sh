@@ -201,6 +201,16 @@ cmd_deploy() {
 
       export MUSTER_DEPLOY_STATUS=""
       export MUSTER_SERVICE_NAME="$name"
+
+      # Capture git info for diff tracking
+      local _git_sha="" _git_prev_sha=""
+      if _git_is_repo; then
+        _git_sha=$(_git_current_sha)
+        _git_prev_sha=$(_git_prev_deploy_sha "$svc")
+        export MUSTER_GIT_COMMIT="$_git_sha"
+        export MUSTER_GIT_PREV_COMMIT="$_git_prev_sha"
+      fi
+
       run_skill_hooks "pre-deploy" "$svc"
 
       progress_bar "$current" "$total" "Deploying ${name}..."
@@ -231,7 +241,15 @@ ${_k8s_env_lines}"
 
         if (( rc == 0 )); then
           ok "${name} deployed"
-          _history_log_event "$svc" "deploy" "ok"
+
+          # Show deploy diff (git projects only)
+          if [[ -n "$_git_sha" ]]; then
+            echo ""
+            _git_deploy_diff "$_git_prev_sha" "$_git_sha"
+            _git_save_deploy_sha "$svc" "$_git_sha"
+          fi
+
+          _history_log_event "$svc" "deploy" "ok" "$_git_sha"
           export MUSTER_DEPLOY_STATUS="success"
           run_skill_hooks "post-deploy" "$svc"
 
@@ -285,7 +303,7 @@ ${_k8s_env_lines}"
           break
         else
           err "${name} deploy failed (exit code ${rc})"
-          _history_log_event "$svc" "deploy" "failed"
+          _history_log_event "$svc" "deploy" "failed" "$_git_sha"
 
           # Show last few lines of log for context
           echo ""
@@ -376,6 +394,7 @@ ${_k8s_env_lines}"
           unset "$_ek"
         done <<< "$_k8s_env_lines"
       fi
+      unset MUSTER_GIT_COMMIT MUSTER_GIT_PREV_COMMIT
 
       echo ""
     fi
