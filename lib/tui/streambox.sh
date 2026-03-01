@@ -227,8 +227,12 @@ stream_in_box() {
     if [[ "$_key" == $'\x0f' ]]; then
       # Ctrl+O pressed — open log viewer
       _log_viewer "$title" "$log_file" "$cmd_pid"
-      # Viewer cleared the screen; redraw full box so refresh loop works
+      # Viewer cleared the screen; redraw context + box
       tput clear
+      # Call preamble callback if set (prints banner, progress, etc.)
+      if [[ -n "${_SIB_REDRAW_FN:-}" ]]; then
+        "$_SIB_REDRAW_FN"
+      fi
       printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$tcut" "${RESET}${ACCENT}" "$pad" "${RESET}"
       r=0
       while (( r < box_lines )); do

@@ -215,6 +215,16 @@ cmd_deploy() {
       progress_bar "$current" "$total" "Deploying ${name}..."
       echo ""
 
+      # Preamble callback for stream_in_box to redraw context after viewer
+      _deploy_redraw_preamble() {
+        echo ""
+        printf '  %b%bDeploying%b %b%s%b\n' "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" "${WHITE}" "$project" "${RESET}"
+        echo ""
+        progress_bar "$current" "$total" "Deploying ${name}..."
+        echo ""
+      }
+      _SIB_REDRAW_FN="_deploy_redraw_preamble"
+
       while true; do
         local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
 
@@ -236,6 +246,7 @@ ${_k8s_env_lines}"
 
           stream_in_box "$name" "$log_file" "$hook"
         fi
+        unset _SIB_REDRAW_FN
         local rc=$?
 
         if (( rc == 0 )); then
