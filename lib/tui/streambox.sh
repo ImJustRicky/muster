@@ -5,18 +5,166 @@
 # Usage: _log_viewer "Title" "logfile" [pid]
 _log_viewer() {
   local _lv_title="$1" _lv_log="$2" _lv_pid="${3:-}"
-  # Placeholder — Task 2 implements the full viewer
-  # For now, just pause and wait for Ctrl+O to return
+
   tput smcup
+  tput civis 2>/dev/null  # hide cursor
+
+  update_term_size
+  local _lv_rows=$TERM_ROWS
+  local _lv_cols=$TERM_COLS
+  local _lv_content_h=$(( _lv_rows - 3 ))  # header + separator + footer
+  (( _lv_content_h < 1 )) && _lv_content_h=1
+
+  # State
+  local _lv_offset=0
+  local _lv_follow="true"
+  local _lv_total=0
+
+  # ── Draw helpers ──
+
+  _lv_draw_header() {
+    tput cup 0 0
+    # Yellow background header bar
+    local _hdr_left="  // muster  ${_lv_title}"
+    local _hdr_right="Ctrl+O close  "
+    local _hdr_pad=$(( _lv_cols - ${#_hdr_left} - ${#_hdr_right} ))
+    (( _hdr_pad < 1 )) && _hdr_pad=1
+    printf '\033[48;5;178m\033[38;5;0m\033[1m%s%*s%s\033[0m' "$_hdr_left" "$_hdr_pad" "" "$_hdr_right"
+    # Separator
+    tput cup 1 0
+    local _sep=""
+    _sep=$(printf '%*s' "$_lv_cols" "" | sed 's/ /─/g')
+    printf '%b%s%b' "${DIM}" "$_sep" "${RESET}"
+  }
+
+  _lv_draw_footer() {
+    tput cup $(( _lv_rows - 1 )) 0
+    local _ft_left="  ↑↓/jk scroll  g/G top/bottom"
+    local _ft_mode=""
+    if [[ "$_lv_follow" == "true" ]]; then
+      _ft_mode="following"
+    else
+      local _lv_bot=$(( _lv_offset + _lv_content_h ))
+      (( _lv_bot > _lv_total )) && _lv_bot=$_lv_total
+      _ft_mode="line $(( _lv_offset + 1 ))–${_lv_bot}/${_lv_total}"
+    fi
+    local _ft_right="Ctrl+O close  "
+    local _ft_mid="  •  ${_ft_mode}"
+    local _ft_pad=$(( _lv_cols - ${#_ft_left} - ${#_ft_mid} - ${#_ft_right} ))
+    (( _ft_pad < 1 )) && _ft_pad=1
+    printf '\033[48;5;236m\033[38;5;250m%s%s%*s%s\033[0m' "$_ft_left" "$_ft_mid" "$_ft_pad" "" "$_ft_right"
+  }
+
+  _lv_draw_content() {
+    # Read log lines into array
+    local _lv_lines=()
+    if [[ -f "$_lv_log" ]]; then
+      local _ll=""
+      while IFS= read -r _ll || [[ -n "$_ll" ]]; do
+        # Strip ANSI codes for display
+        _ll=$(printf '%s' "$_ll" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
+        _lv_lines[${#_lv_lines[@]}]="$_ll"
+      done < "$_lv_log"
+    fi
+    _lv_total=${#_lv_lines[@]}
+
+    # Auto-follow: jump to bottom
+    if [[ "$_lv_follow" == "true" ]]; then
+      _lv_offset=$(( _lv_total - _lv_content_h ))
+      (( _lv_offset < 0 )) && _lv_offset=0
+    fi
+
+    # Render visible lines
+    local _vi=0
+    while (( _vi < _lv_content_h )); do
+      tput cup $(( _vi + 2 )) 0
+      local _idx=$(( _lv_offset + _vi ))
+      if (( _idx < _lv_total )); then
+        local _vl="${_lv_lines[$_idx]}"
+        local _max=$(( _lv_cols - 2 ))
+        if (( ${#_vl} > _max )); then
+          _vl="${_vl:0:$(( _max - 3 ))}..."
+        fi
+        printf ' %s' "$_vl"
+      fi
+      tput el  # clear to end of line
+      _vi=$(( _vi + 1 ))
+    done
+  }
+
+  # ── Initial draw ──
   tput clear
-  echo "  Log viewer: $_lv_title (press Ctrl+O to close)"
-  echo ""
-  cat "$_lv_log" 2>/dev/null
+  _lv_draw_header
+  _lv_draw_content
+  _lv_draw_footer
+
+  # ── Key loop ──
   while true; do
     local _k=""
-    IFS= read -rsn1 _k 2>/dev/null || true
-    [[ "$_k" == $'\x0f' ]] && break
+    IFS= read -rsn1 -t 1 _k 2>/dev/null || true
+
+    # Check if command process is still running (for live-follow refresh)
+    local _lv_live="false"
+    if [[ -n "$_lv_pid" ]] && kill -0 "$_lv_pid" 2>/dev/null; then
+      _lv_live="true"
+    fi
+
+    if [[ "$_k" == $'\x0f' ]]; then
+      # Ctrl+O — close viewer
+      break
+    elif [[ "$_k" == $'\x1b' ]]; then
+      # Escape sequence — read 2 more chars for arrow keys
+      local _k2="" _k3=""
+      IFS= read -rsn1 -t 0 _k2 2>/dev/null || true
+      IFS= read -rsn1 -t 0 _k3 2>/dev/null || true
+      if [[ "$_k2" == "[" ]]; then
+        case "$_k3" in
+          A)  # Up arrow
+            _lv_follow="false"
+            (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
+            ;;
+          B)  # Down arrow
+            local _lv_max=$(( _lv_total - _lv_content_h ))
+            (( _lv_max < 0 )) && _lv_max=0
+            if (( _lv_offset < _lv_max )); then
+              _lv_offset=$(( _lv_offset + 1 ))
+            fi
+            # Re-enable follow if at bottom
+            if (( _lv_offset >= _lv_max )); then
+              _lv_follow="true"
+            fi
+            ;;
+        esac
+      fi
+    elif [[ "$_k" == "k" ]]; then
+      # Scroll up
+      _lv_follow="false"
+      (( _lv_offset > 0 )) && _lv_offset=$(( _lv_offset - 1 ))
+    elif [[ "$_k" == "j" ]]; then
+      # Scroll down
+      local _lv_max=$(( _lv_total - _lv_content_h ))
+      (( _lv_max < 0 )) && _lv_max=0
+      if (( _lv_offset < _lv_max )); then
+        _lv_offset=$(( _lv_offset + 1 ))
+      fi
+      if (( _lv_offset >= _lv_max )); then
+        _lv_follow="true"
+      fi
+    elif [[ "$_k" == "g" ]]; then
+      # Jump to top
+      _lv_follow="false"
+      _lv_offset=0
+    elif [[ "$_k" == "G" ]]; then
+      # Jump to bottom
+      _lv_follow="true"
+    fi
+
+    # Redraw content + footer (header stays)
+    _lv_draw_content
+    _lv_draw_footer
   done
+
+  tput cnorm 2>/dev/null  # show cursor
   tput rmcup
 }
 
