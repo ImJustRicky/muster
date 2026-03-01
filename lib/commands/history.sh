@@ -7,14 +7,14 @@
 #   action: deploy | rollback
 #   status: ok | failed
 _history_log_event() {
-  local svc="$1" action="$2" status="$3"
+  local svc="$1" action="$2" status="$3" commit="${4:-}"
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
   local log_dir="${project_dir}/.muster/logs"
   mkdir -p "$log_dir"
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
-  echo "${ts}|${svc}|${action}|${status}" >> "${log_dir}/deploy-events.log"
+  echo "${ts}|${svc}|${action}|${status}|${commit}" >> "${log_dir}/deploy-events.log"
 }
 
 # ── History display ──
@@ -68,20 +68,30 @@ cmd_history() {
   local services=()
   local actions=()
   local statuses=()
+  local commits=()
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
 
     local ts="" svc="" action="" status=""
 
+    local commit=""
+
     if [[ "$line" == *"|"* ]]; then
-      # New format: YYYY-MM-DD HH:MM:SS|service|action|status
+      # Format: YYYY-MM-DD HH:MM:SS|service|action|status[|commit]
       ts="${line%%|*}"
       local rest="${line#*|}"
       svc="${rest%%|*}"
       rest="${rest#*|}"
       action="${rest%%|*}"
-      status="${rest#*|}"
+      rest="${rest#*|}"
+      # status may be followed by |commit
+      if [[ "$rest" == *"|"* ]]; then
+        status="${rest%%|*}"
+        commit="${rest#*|}"
+      else
+        status="$rest"
+      fi
     elif [[ "$line" =~ ^\[([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\]\ ([A-Z]+)\ ([A-Z]+):\ (.+) ]]; then
       # Legacy format: [YYYY-MM-DD HH:MM:SS] ACTION STATUS: service
       ts="${BASH_REMATCH[1]}"
@@ -107,6 +117,7 @@ cmd_history() {
     services[${#services[@]}]="$svc"
     actions[${#actions[@]}]="$action"
     statuses[${#statuses[@]}]="$status"
+    commits[${#commits[@]}]="$commit"
   done < "$log_file"
 
   local count=${#timestamps[@]}
@@ -137,8 +148,8 @@ cmd_history() {
   echo ""
 
   # Table header
-  printf "  ${BOLD}%-20s  %-12s  %-10s  %-8s${RESET}\n" "TIMESTAMP" "SERVICE" "ACTION" "STATUS"
-  printf "  ${DIM}%-20s  %-12s  %-10s  %-8s${RESET}\n" "--------------------" "------------" "----------" "--------"
+  printf "  ${BOLD}%-20s  %-12s  %-10s  %-8s  %-9s${RESET}\n" "TIMESTAMP" "SERVICE" "ACTION" "STATUS" "COMMIT"
+  printf "  ${DIM}%-20s  %-12s  %-10s  %-8s  %-9s${RESET}\n" "--------------------" "------------" "----------" "--------" "---------"
 
   local i
   for (( i = start; i < count; i++ )); do
@@ -146,6 +157,7 @@ cmd_history() {
     local svc="${services[$i]}"
     local action="${actions[$i]}"
     local st="${statuses[$i]}"
+    local cm="${commits[$i]}"
 
     local color="$RESET"
     if [[ "$st" == "ok" ]]; then
@@ -154,7 +166,7 @@ cmd_history() {
       color="$RED"
     fi
 
-    printf "  %-20s  %-12s  %-10s  ${color}%-8s${RESET}\n" "$ts" "$svc" "$action" "$st"
+    printf "  %-20s  %-12s  %-10s  ${color}%-8s${RESET}  ${DIM}%-9s${RESET}\n" "$ts" "$svc" "$action" "$st" "$cm"
   done
 
   echo ""
