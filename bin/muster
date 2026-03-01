@@ -42,6 +42,14 @@ case "${1:-}" in
     shift
     source "$MUSTER_ROOT/lib/commands/deploy.sh"
     cmd_deploy "$@"
+    # Return to dashboard if interactive
+    if [[ -t 0 ]]; then
+      echo ""
+      echo -e "  ${DIM}Press any key to continue...${RESET}"
+      IFS= read -rsn1 || true
+      source "$MUSTER_ROOT/lib/tui/dashboard.sh"
+      cmd_dashboard
+    fi
     ;;
   status)
     source "$MUSTER_ROOT/lib/commands/status.sh"
