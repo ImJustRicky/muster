@@ -202,12 +202,11 @@ cmd_deploy() {
       export MUSTER_DEPLOY_STATUS=""
       export MUSTER_SERVICE_NAME="$name"
 
-      # Capture git info for diff tracking
-      local _git_sha="" _git_prev_sha=""
+      # Load previous deploy SHA (before hook runs, which may git pull)
+      local _git_in_repo="" _git_sha="" _git_prev_sha=""
       if _git_is_repo; then
-        _git_sha=$(_git_current_sha)
+        _git_in_repo="true"
         _git_prev_sha=$(_git_prev_deploy_sha "$svc")
-        export MUSTER_GIT_COMMIT="$_git_sha"
         export MUSTER_GIT_PREV_COMMIT="$_git_prev_sha"
       fi
 
@@ -242,8 +241,10 @@ ${_k8s_env_lines}"
         if (( rc == 0 )); then
           ok "${name} deployed"
 
-          # Show deploy diff (git projects only, skip first deploy)
-          if [[ -n "$_git_sha" ]]; then
+          # Capture SHA after hook (hook may have done git pull)
+          if [[ "$_git_in_repo" == "true" ]]; then
+            _git_sha=$(_git_current_sha)
+            export MUSTER_GIT_COMMIT="$_git_sha"
             if [[ -n "$_git_prev_sha" ]]; then
               echo ""
               _git_deploy_diff "$_git_prev_sha" "$_git_sha"
@@ -305,6 +306,11 @@ ${_k8s_env_lines}"
           break
         else
           err "${name} deploy failed (exit code ${rc})"
+          # Re-capture SHA after hook (may have done git pull before failing)
+          if [[ "$_git_in_repo" == "true" ]]; then
+            _git_sha=$(_git_current_sha)
+            export MUSTER_GIT_COMMIT="$_git_sha"
+          fi
           _history_log_event "$svc" "deploy" "failed" "$_git_sha"
 
           # Show last few lines of log for context
