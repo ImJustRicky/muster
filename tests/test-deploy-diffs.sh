@@ -145,7 +145,7 @@ new_sha=$(_git_current_sha)
 output=$(_git_deploy_diff "$prev_sha" "$new_sha")
 _test_contains "shows commit count" "3 commit" "$output"
 _test_contains "shows commit message" "Add file1" "$output"
-_test_contains "shows diffstat" "file" "$output"
+_test_contains "shows diffstat with file count" "file" "$output"
 
 # More than 5 commits (truncation)
 echo "f4" > f4.txt && git add f4.txt && git commit -q -m "Add f4"

@@ -224,14 +224,16 @@ _git_deploy_diff() {
 
   echo -e "    ${DIM}Changes since last deploy (${total_commits} commit$( (( total_commits != 1 )) && echo "s")):${RESET}"
 
-  # Show up to 5 commit one-liners
+  # Show up to 5 commit one-liners (hash in accent, message dimmed)
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    # Truncate to 72 chars
-    if (( ${#line} > 72 )); then
-      line="${line:0:69}..."
+    local sha="${line%% *}"
+    local msg="${line#* }"
+    # Truncate message to 64 chars
+    if (( ${#msg} > 64 )); then
+      msg="${msg:0:61}..."
     fi
-    echo -e "      ${DIM}${line}${RESET}"
+    echo -e "      ${ACCENT}${sha}${RESET} ${DIM}${msg}${RESET}"
   done < <(git log --oneline "${prev}..${curr}" --max-count=5 2>/dev/null)
 
   if (( total_commits > 5 )); then
@@ -239,12 +241,18 @@ _git_deploy_diff() {
     echo -e "      ${DIM}...and ${remaining} more${RESET}"
   fi
 
-  # Diffstat summary
+  # Diffstat summary with colored +/-
   local shortstat
   shortstat=$(git diff --shortstat "${prev}..${curr}" 2>/dev/null)
   if [[ -n "$shortstat" ]]; then
-    # Trim leading whitespace
-    shortstat="${shortstat#"${shortstat%%[![:space:]]*}"}"
-    echo -e "    ${DIM}${shortstat}${RESET}"
+    local ins="" del=""
+    ins=$(echo "$shortstat" | grep -o '[0-9]* insertion' | grep -o '[0-9]*')
+    del=$(echo "$shortstat" | grep -o '[0-9]* deletion' | grep -o '[0-9]*')
+    local files=""
+    files=$(echo "$shortstat" | grep -o '[0-9]* file' | grep -o '[0-9]*')
+    local stat_line="${files} file$( (( files != 1 )) && echo "s") changed"
+    [[ -n "$ins" ]] && stat_line="${stat_line}, ${GREEN}+${ins}${RESET}"
+    [[ -n "$del" ]] && stat_line="${stat_line}, ${RED}-${del}${RESET}"
+    echo -e "    ${DIM}${stat_line}${RESET}"
   fi
 }
