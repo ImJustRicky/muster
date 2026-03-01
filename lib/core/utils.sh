@@ -204,10 +204,8 @@ with open('${tracker}', 'w') as f:
 _git_deploy_diff() {
   local prev="$1" curr="$2"
 
-  if [[ -z "$prev" ]]; then
-    echo -e "    ${DIM}Initial deploy (no previous version tracked)${RESET}"
-    return 0
-  fi
+  # No previous deploy — nothing to diff, skip silently
+  [[ -z "$prev" ]] && return 0
 
   # Verify previous SHA is reachable
   if ! git cat-file -t "$prev" &>/dev/null; then

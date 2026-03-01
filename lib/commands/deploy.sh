@@ -242,10 +242,12 @@ ${_k8s_env_lines}"
         if (( rc == 0 )); then
           ok "${name} deployed"
 
-          # Show deploy diff (git projects only)
+          # Show deploy diff (git projects only, skip first deploy)
           if [[ -n "$_git_sha" ]]; then
-            echo ""
-            _git_deploy_diff "$_git_prev_sha" "$_git_sha"
+            if [[ -n "$_git_prev_sha" ]]; then
+              echo ""
+              _git_deploy_diff "$_git_prev_sha" "$_git_sha"
+            fi
             _git_save_deploy_sha "$svc" "$_git_sha"
           fi
 
