@@ -159,8 +159,8 @@ _log_viewer() {
     elif [[ "$_k" == $'\x1b' ]]; then
       # Escape sequence — read 2 more chars for arrow keys
       local _k2="" _k3=""
-      IFS= read -rsn1 -t 0 _k2 2>/dev/null || true
-      IFS= read -rsn1 -t 0 _k3 2>/dev/null || true
+      IFS= read -rsn1 -t 1 _k2 2>/dev/null || true
+      IFS= read -rsn1 -t 1 _k3 2>/dev/null || true
       if [[ "$_k2" == "[" ]]; then
         case "$_k3" in
           A)  # Up arrow
@@ -240,6 +240,11 @@ stream_in_box() {
   local pad
   pad=$(printf '%*s' "$pad_len" "" | sed 's/ /─/g')
 
+  # Ctrl+O hint line
+  local _hint="Ctrl+O expand"
+  local _hint_pad=$(( box_w - ${#_hint} + 1 ))
+  (( _hint_pad < 0 )) && _hint_pad=0
+
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$tcut" "${RESET}${ACCENT}" "$pad" "${RESET}"
   local r=0
   while (( r < box_lines )); do
@@ -249,14 +254,15 @@ stream_in_box() {
     r=$((r + 1))
   done
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
+  printf '  %b%*s%s%b\n' "${DIM}" "$_hint_pad" "" "$_hint" "${RESET}"
 
   # Run command in background
   "$@" >> "$log_file" 2>&1 &
   local cmd_pid=$!
 
-  # Live-refresh
+  # Live-refresh (box_lines + bottom border + hint = box_lines + 2)
   while kill -0 "$cmd_pid" 2>/dev/null; do
-    printf "\033[%dA" $((box_lines + 1))
+    printf "\033[%dA" $((box_lines + 2))
     local tl_0="" tl_1="" tl_2="" tl_3=""
     local tl_i=0
     while IFS= read -r l; do
@@ -285,6 +291,7 @@ stream_in_box() {
       r=$((r + 1))
     done
     printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
+    printf '  %b%*s%s%b\n' "${DIM}" "$_hint_pad" "" "$_hint" "${RESET}"
     local _key=""
     IFS= read -rsn1 -t 1 _key 2>/dev/null || true
     if [[ "$_key" == $'\x0f' ]]; then
@@ -300,6 +307,7 @@ stream_in_box() {
         r=$((r + 1))
       done
       printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
+      printf '  %b%*s%s%b\n' "${DIM}" "$_hint_pad" "" "$_hint" "${RESET}"
     fi
   done
 
