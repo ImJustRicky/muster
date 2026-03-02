@@ -399,57 +399,79 @@ _fleet_build_opts() {
   fi
 }
 
-# Execute command on machine (SSH transport only for now)
+# Execute command on machine
 fleet_exec() {
   local machine="$1" cmd="$2"
   _fleet_load_machine "$machine"
-  if [[ "$_FM_TRANSPORT" != "ssh" ]]; then
-    err "Transport '${_FM_TRANSPORT}' not yet supported (machine: ${machine})"
-    return 1
-  fi
-  _fleet_build_opts
-  ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "$cmd"
+  case "$_FM_TRANSPORT" in
+    ssh)
+      _fleet_build_opts
+      ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "$cmd"
+      ;;
+    cloud)
+      source "$MUSTER_ROOT/lib/core/cloud.sh"
+      _fleet_cloud_exec "$machine" "$cmd"
+      ;;
+    *)
+      err "Unknown transport: ${_FM_TRANSPORT} (machine: ${machine})"
+      return 1
+      ;;
+  esac
 }
 
-# Pipe hook script via SSH (mirrors remote_exec_stdout)
+# Pipe hook script to machine
 fleet_push_hook() {
   local machine="$1" hook_file="$2" env_lines="${3:-}"
   _fleet_load_machine "$machine"
-  if [[ "$_FM_TRANSPORT" != "ssh" ]]; then
-    err "Transport '${_FM_TRANSPORT}' not yet supported for push mode (machine: ${machine})"
-    return 1
-  fi
-  _fleet_build_opts
+  case "$_FM_TRANSPORT" in
+    ssh)
+      _fleet_build_opts
+      {
+        # Export env vars
+        if [[ -n "$env_lines" ]]; then
+          while IFS= read -r _env_line; do
+            [[ -z "$_env_line" ]] && continue
+            printf 'export %s\n' "$_env_line"
+          done <<< "$env_lines"
+        fi
 
-  {
-    # Export env vars
-    if [[ -n "$env_lines" ]]; then
-      while IFS= read -r _env_line; do
-        [[ -z "$_env_line" ]] && continue
-        printf 'export %s\n' "$_env_line"
-      done <<< "$env_lines"
-    fi
+        # cd to project directory if set
+        if [[ -n "$_FM_PROJECT_DIR" ]]; then
+          printf 'cd %s || exit 1\n' "$_FM_PROJECT_DIR"
+        fi
 
-    # cd to project directory if set
-    if [[ -n "$_FM_PROJECT_DIR" ]]; then
-      printf 'cd %s || exit 1\n' "$_FM_PROJECT_DIR"
-    fi
-
-    # Pipe the hook script
-    cat "$hook_file"
-  } | ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "bash -s"
+        # Pipe the hook script
+        cat "$hook_file"
+      } | ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "bash -s"
+      ;;
+    cloud)
+      source "$MUSTER_ROOT/lib/core/cloud.sh"
+      _fleet_cloud_push "$machine" "$hook_file" "$env_lines"
+      ;;
+    *)
+      err "Unknown transport: ${_FM_TRANSPORT} (machine: ${machine})"
+      return 1
+      ;;
+  esac
 }
 
 # Connectivity test
 fleet_check() {
   local machine="$1"
   _fleet_load_machine "$machine"
-  if [[ "$_FM_TRANSPORT" != "ssh" ]]; then
-    # Cloud transport: not yet implemented
-    return 1
-  fi
-  _fleet_build_opts
-  ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "echo ok" &>/dev/null
+  case "$_FM_TRANSPORT" in
+    ssh)
+      _fleet_build_opts
+      ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "echo ok" &>/dev/null
+      ;;
+    cloud)
+      source "$MUSTER_ROOT/lib/core/cloud.sh"
+      _fleet_cloud_check "$machine"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 # Display string: user@host:port

@@ -58,7 +58,6 @@ cmd_fleet() {
       _fleet_cmd_help
       ;;
     "")
-      # No subcommand — show interactive manager if TTY, else help
       if [[ -t 0 ]]; then
         _fleet_cmd_manager
       else
@@ -108,96 +107,34 @@ _fleet_cmd_help() {
 
 _fleet_cmd_manager() {
   if ! fleet_load_config; then
-    info "No remotes.json found."
+    info "No remotes.json found. Set up fleet via CLI:"
     echo ""
-    menu_select "Fleet Setup" "Initialize fleet (create remotes.json)" "Back"
-    case "$MENU_RESULT" in
-      "Initialize fleet (create remotes.json)")
-        fleet_init
-        echo ""
-        echo -e "  ${DIM}Press any key to continue...${RESET}"
-        IFS= read -rsn1 || true
-        _fleet_cmd_manager
-        ;;
-    esac
+    echo -e "  ${DIM}muster fleet init${RESET}"
+    echo -e "  ${DIM}muster fleet add <name> user@host [--mode muster|push]${RESET}"
+    echo -e "  ${DIM}muster fleet --help${RESET}"
+    echo ""
     return 0
   fi
 
   while true; do
-    # Show fleet status header
-    echo ""
-    echo -e "  ${BOLD}${ACCENT_BRIGHT}Fleet Manager${RESET}"
-    echo ""
+    # Show fleet overview using list TUI
+    _fleet_cmd_list
 
-    # Show machines with live connectivity
     local machines
     machines=$(fleet_machines)
 
-    if [[ -n "$machines" ]]; then
-      local _fm_count=0
-      while IFS= read -r _fm; do
-        [[ -z "$_fm" ]] && continue
-        _fleet_load_machine "$_fm"
-
-        local _fm_host="${_FM_USER}@${_FM_HOST}"
-        [[ "$_FM_PORT" != "22" ]] && _fm_host="${_fm_host}:${_FM_PORT}"
-
-        local _status_icon _status_color
-        if fleet_check "$_fm" 2>/dev/null; then
-          _status_icon="●"
-          _status_color="$GREEN"
-        else
-          _status_icon="●"
-          _status_color="$RED"
-        fi
-
-        local _pair_tag=""
-        if [[ "$_FM_MODE" == "muster" ]]; then
-          local _tok
-          _tok=$(fleet_token_get "$_fm")
-          if [[ -z "$_tok" ]]; then
-            _pair_tag=" ${YELLOW}(unpaired)${RESET}"
-          fi
-        fi
-
-        printf '  %b%s%b %-14s  %b%s%b  %s%b\n' \
-          "$_status_color" "$_status_icon" "$RESET" \
-          "$_fm" "${DIM}" "$_fm_host" "$RESET" "$_FM_MODE" "$_pair_tag"
-        _fm_count=$(( _fm_count + 1 ))
-      done <<< "$machines"
-
-      # Show groups
-      local groups
-      groups=$(fleet_groups)
-      if [[ -n "$groups" ]]; then
-        echo ""
-        echo -e "  ${DIM}Groups:${RESET}"
-        while IFS= read -r _grp; do
-          [[ -z "$_grp" ]] && continue
-          local _members
-          _members=$(fleet_group_machines "$_grp" | tr '\n' ', ' | sed 's/,$//')
-          printf '  %b%-14s%b  %b%s%b\n' "${WHITE}" "$_grp" "${RESET}" "${DIM}" "$_members" "${RESET}"
-        done <<< "$groups"
-      fi
-    else
-      echo -e "  ${DIM}No machines configured yet.${RESET}"
+    if [[ -z "$machines" ]]; then
+      echo -e "  ${DIM}Add machines via CLI: muster fleet add <name> user@host${RESET}"
+      echo ""
+      return 0
     fi
 
-    echo ""
-
-    # Build actions menu
+    # Operations menu (no CRUD — that's CLI only)
     local actions=()
-    if [[ -n "$machines" ]]; then
-      actions[${#actions[@]}]="Deploy"
-      actions[${#actions[@]}]="Status"
-      actions[${#actions[@]}]="Test connections"
-      actions[${#actions[@]}]="Rollback"
-    fi
-    actions[${#actions[@]}]="Add machine"
-    if [[ -n "$machines" ]]; then
-      actions[${#actions[@]}]="Remove machine"
-      actions[${#actions[@]}]="Manage groups"
-    fi
+    actions[${#actions[@]}]="Deploy"
+    actions[${#actions[@]}]="Status"
+    actions[${#actions[@]}]="Test connections"
+    actions[${#actions[@]}]="Rollback"
     actions[${#actions[@]}]="Back"
 
     menu_select "Fleet" "${actions[@]}"
@@ -227,130 +164,11 @@ _fleet_cmd_manager() {
         echo -e "  ${DIM}Press any key to continue...${RESET}"
         IFS= read -rsn1 || true
         ;;
-      "Add machine")
-        _fleet_manager_add
-        ;;
-      "Remove machine")
-        _fleet_manager_remove
-        ;;
-      "Manage groups")
-        _fleet_manager_groups
-        ;;
       "Back")
         return 0
         ;;
     esac
   done
-}
-
-# Interactive add machine
-_fleet_manager_add() {
-  echo ""
-  echo -e "  ${BOLD}Add Machine${RESET}"
-  echo ""
-  echo -e "  ${DIM}Enter machine details (or press Ctrl+C to cancel):${RESET}"
-  echo ""
-
-  local name="" userhost="" mode=""
-  printf '  Name: '
-  read -r name
-  [[ -z "$name" ]] && return
-
-  printf '  user@host: '
-  read -r userhost
-  [[ -z "$userhost" ]] && return
-
-  menu_select "Deploy mode" "muster (remote has muster)" "push (pipe hooks via SSH)"
-  case "$MENU_RESULT" in
-    "muster"*) mode="muster" ;;
-    *) mode="push" ;;
-  esac
-
-  _fleet_cmd_add "$name" "$userhost" --mode "$mode"
-  echo ""
-  echo -e "  ${DIM}Press any key to continue...${RESET}"
-  IFS= read -rsn1 || true
-}
-
-# Interactive remove machine
-_fleet_manager_remove() {
-  local machines
-  machines=$(fleet_machines)
-  [[ -z "$machines" ]] && return
-
-  local opts=()
-  while IFS= read -r m; do
-    [[ -z "$m" ]] && continue
-    opts[${#opts[@]}]="$m"
-  done <<< "$machines"
-  opts[${#opts[@]}]="Cancel"
-
-  menu_select "Remove which machine?" "${opts[@]}"
-  if [[ "$MENU_RESULT" != "Cancel" ]]; then
-    fleet_remove_machine "$MENU_RESULT"
-    echo ""
-    echo -e "  ${DIM}Press any key to continue...${RESET}"
-    IFS= read -rsn1 || true
-  fi
-}
-
-# Interactive group management
-_fleet_manager_groups() {
-  menu_select "Groups" "Create/update group" "Remove group" "Back"
-  case "$MENU_RESULT" in
-    "Create/update group")
-      echo ""
-      printf '  Group name: '
-      local gname=""
-      read -r gname
-      [[ -z "$gname" ]] && return
-
-      echo -e "  ${DIM}Select machines for this group:${RESET}"
-      local machines
-      machines=$(fleet_machines)
-      [[ -z "$machines" ]] && return
-
-      # Use checklist for multi-select
-      source "$MUSTER_ROOT/lib/tui/checklist.sh"
-      local mopts=()
-      while IFS= read -r m; do
-        [[ -z "$m" ]] && continue
-        mopts[${#mopts[@]}]="$m"
-      done <<< "$machines"
-
-      checklist_select "Select machines:" "${mopts[@]}"
-      if [[ -n "$CHECKLIST_RESULT" ]]; then
-        local gargs=()
-        gargs[0]="$gname"
-        while IFS= read -r sel; do
-          [[ -z "$sel" ]] && continue
-          gargs[${#gargs[@]}]="$sel"
-        done <<< "$CHECKLIST_RESULT"
-        fleet_set_group "${gargs[@]}"
-      fi
-      echo ""
-      echo -e "  ${DIM}Press any key to continue...${RESET}"
-      IFS= read -rsn1 || true
-      ;;
-    "Remove group")
-      local groups
-      groups=$(fleet_groups)
-      [[ -z "$groups" ]] && return
-      local gopts=()
-      while IFS= read -r g; do
-        [[ -z "$g" ]] && continue
-        gopts[${#gopts[@]}]="$g"
-      done <<< "$groups"
-      gopts[${#gopts[@]}]="Cancel"
-      menu_select "Remove which group?" "${gopts[@]}"
-      if [[ "$MENU_RESULT" != "Cancel" ]]; then
-        fleet_remove_group "$MENU_RESULT"
-        echo ""
-        echo -e "  ${DIM}Press any key to continue...${RESET}"
-        IFS= read -rsn1 || true
-      fi
-      ;;
-  esac
 }
 
 # ── init ──
@@ -362,7 +180,7 @@ _fleet_cmd_init() {
 # ── add ──
 
 _fleet_cmd_add() {
-  local name="" userhost="" mode="push" port="22" path="" key=""
+  local name="" userhost="" mode="push" port="22" path="" key="" transport="ssh"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -370,18 +188,24 @@ _fleet_cmd_add() {
       --port|-p) port="$2"; shift 2 ;;
       --path) path="$2"; shift 2 ;;
       --key|-k) key="$2"; shift 2 ;;
+      --transport|-t) transport="$2"; shift 2 ;;
       --help|-h)
         echo "Usage: muster fleet add <name> user@host [options]"
         echo ""
         echo "Options:"
-        echo "  --mode, -m <muster|push>  Deploy mode (default: push)"
-        echo "  --port, -p <N>            SSH port (default: 22)"
-        echo "  --path <dir>              Project directory on remote"
-        echo "  --key, -k <file>          SSH identity file"
+        echo "  --mode, -m <muster|push>    Deploy mode (default: push)"
+        echo "  --transport, -t <ssh|cloud>  Transport layer (default: ssh)"
+        echo "  --port, -p <N>              SSH port (default: 22)"
+        echo "  --path <dir>                Project directory on remote"
+        echo "  --key, -k <file>            SSH identity file"
         echo ""
         echo "Modes:"
         echo "  muster   Remote has muster installed (SSH + muster deploy)"
         echo "  push     Pipe hook scripts over SSH (no muster needed)"
+        echo ""
+        echo "Transports:"
+        echo "  ssh      Direct SSH connection (default)"
+        echo "  cloud    Connect via muster-tunnel relay"
         return 0
         ;;
       --*)
@@ -403,7 +227,7 @@ _fleet_cmd_add() {
   done
 
   if [[ -z "$name" || -z "$userhost" ]]; then
-    err "Usage: muster fleet add <name> user@host [--mode muster|push]"
+    err "Usage: muster fleet add <name> user@host [--mode muster|push] [--transport ssh|cloud]"
     return 1
   fi
 
@@ -423,24 +247,48 @@ _fleet_cmd_add() {
     return 1
   fi
 
-  fleet_add_machine "$name" "$host" "$user" "$port" "$key" "$path" "$mode" || return 1
+  fleet_add_machine "$name" "$host" "$user" "$port" "$key" "$path" "$mode" "$transport" || return 1
 
-  # Test SSH connectivity
-  echo ""
-  start_spinner "Testing SSH connectivity..."
-  if fleet_check "$name"; then
-    stop_spinner
-    ok "SSH connection to ${user}@${host}:${port} succeeded"
-  else
-    stop_spinner
-    warn "SSH connection to ${user}@${host}:${port} failed"
-    echo -e "  ${DIM}Machine added but not reachable. Check SSH config and try: muster fleet test ${name}${RESET}"
-  fi
+  if [[ "$transport" == "cloud" ]]; then
+    # Cloud transport: check for muster-tunnel, validate cloud config
+    source "$MUSTER_ROOT/lib/core/cloud.sh"
 
-  # Auto-pair for muster mode
-  if [[ "$mode" == "muster" ]]; then
+    if ! _fleet_cloud_available; then
+      echo ""
+      warn "muster-tunnel not installed"
+      echo -e "  ${DIM}Install: curl -sSL https://getmuster.dev/cloud | bash${RESET}"
+    fi
+
+    # Check if remotes.json has a cloud section
+    local _relay
+    _relay=$(fleet_get '.cloud.relay // ""')
+    if [[ -z "$_relay" || "$_relay" == "null" ]]; then
+      echo ""
+      warn "No cloud config in remotes.json"
+      echo -e "  ${DIM}Add a \"cloud\" section with relay URL and org_id to remotes.json${RESET}"
+    fi
+
     echo ""
-    fleet_auto_pair "$name"
+    info "Cloud machine added. Deploy via: muster fleet deploy ${name}"
+    echo -e "  ${DIM}Ensure muster-agent is running on the remote and connected to the relay.${RESET}"
+  else
+    # SSH transport: test connectivity
+    echo ""
+    start_spinner "Testing SSH connectivity..."
+    if fleet_check "$name"; then
+      stop_spinner
+      ok "SSH connection to ${user}@${host}:${port} succeeded"
+    else
+      stop_spinner
+      warn "SSH connection to ${user}@${host}:${port} failed"
+      echo -e "  ${DIM}Machine added but not reachable. Check SSH config and try: muster fleet test ${name}${RESET}"
+    fi
+
+    # Auto-pair for muster mode
+    if [[ "$mode" == "muster" ]]; then
+      echo ""
+      fleet_auto_pair "$name"
+    fi
   fi
 }
 
@@ -575,7 +423,10 @@ _fleet_cmd_list() {
       [[ "$_FM_PORT" != "22" ]] && host_str="${host_str}:${_FM_PORT}"
 
       local status_icon status_color tag=""
-      if [[ "$_FM_MODE" == "muster" ]]; then
+      if [[ "$_FM_TRANSPORT" == "cloud" ]]; then
+        status_icon="●"; status_color="$BLUE"
+        tag=" cloud"
+      elif [[ "$_FM_MODE" == "muster" ]]; then
         local token
         token=$(fleet_token_get "$machine")
         if [[ -n "$token" ]]; then
@@ -588,7 +439,9 @@ _fleet_cmd_list() {
         status_icon="●"; status_color="$GREEN"
       fi
 
-      local display="${machine}: ${host_str} (${_FM_MODE})"
+      local _transport_label=""
+      [[ "$_FM_TRANSPORT" == "cloud" ]] && _transport_label=", cloud"
+      local display="${machine}: ${host_str} (${_FM_MODE}${_transport_label})"
       local tag_len=${#tag}
       local max_display=$(( inner - 4 - tag_len ))
       (( max_display < 5 )) && max_display=5
@@ -727,8 +580,25 @@ _fleet_cmd_test() {
 
     local status_icon status_color tag=""
 
-    # SSH test
-    if fleet_check "$machine"; then
+    if [[ "$_FM_TRANSPORT" == "cloud" ]]; then
+      # Cloud transport test
+      if fleet_check "$machine"; then
+        status_icon="●"; status_color="$GREEN"
+        tag=" cloud ok"
+        pass=$(( pass + 1 ))
+      else
+        source "$MUSTER_ROOT/lib/core/cloud.sh"
+        if ! _fleet_cloud_available; then
+          status_icon="●"; status_color="$YELLOW"
+          tag=" no tunnel"
+        else
+          status_icon="●"; status_color="$RED"
+          tag=" cloud fail"
+        fi
+        fail=$(( fail + 1 ))
+      fi
+    elif fleet_check "$machine"; then
+      # SSH test passed
       status_icon="●"; status_color="$GREEN"
       tag=" SSH ok"
 

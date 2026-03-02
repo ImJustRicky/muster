@@ -565,6 +565,11 @@ cmd_dashboard() {
     menu_select "Actions" "${actions[@]}"
     MENU_TIMEOUT=0
 
+    # Escape from main menu returns to dashboard
+    if [[ "$MENU_RESULT" == "__back__" ]]; then
+      continue
+    fi
+
     case "$MENU_RESULT" in
       "__timeout__")
         continue
@@ -572,7 +577,7 @@ cmd_dashboard() {
       Deploy)
         source "$MUSTER_ROOT/lib/commands/deploy.sh"
         cmd_deploy
-        _dashboard_pause
+        [[ $? -ne 2 ]] && _dashboard_pause
         ;;
       Status)
         source "$MUSTER_ROOT/lib/commands/status.sh"
@@ -582,11 +587,12 @@ cmd_dashboard() {
       Logs)
         source "$MUSTER_ROOT/lib/commands/logs.sh"
         cmd_logs
+        [[ $? -ne 2 ]] && _dashboard_pause
         ;;
       Rollback)
         source "$MUSTER_ROOT/lib/commands/rollback.sh"
         cmd_rollback
-        _dashboard_pause
+        [[ $? -ne 2 ]] && _dashboard_pause
         ;;
       Cleanup)
         source "$MUSTER_ROOT/lib/commands/cleanup.sh"
@@ -695,7 +701,7 @@ cmd_dashboard() {
               skill_remove "$_run_name"
               _dashboard_pause
               ;;
-            "Back")
+            "Back"|"__back__")
               ;;
           esac
         fi
