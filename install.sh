@@ -7,6 +7,22 @@ INSTALL_DIR="${MUSTER_INSTALL_DIR:-$HOME/.muster}"
 BIN_DIR="${MUSTER_BIN_DIR:-$HOME/.local/bin}"
 MANIFEST="${INSTALL_DIR}/install.json"
 
+# ── Colors (inline — installer is standalone) ──
+_B='\033[1m'
+_D='\033[2m'
+_R='\033[0m'
+_M='\033[38;5;178m'    # mustard (brand)
+_MB='\033[38;5;220m'   # mustard bright
+_G='\033[38;5;114m'    # green
+_RD='\033[38;5;203m'   # red
+_Y='\033[38;5;221m'    # yellow
+_GR='\033[38;5;243m'   # gray
+_W='\033[38;5;255m'    # white
+# Disable colors if not a terminal
+if [[ ! -t 1 ]]; then
+  _B="" _D="" _R="" _M="" _MB="" _G="" _RD="" _Y="" _GR="" _W=""
+fi
+
 # When piped (curl | bash), stdin is the script itself, not the terminal.
 # We can't `exec </dev/tty` because bash is still reading the script from fd 0.
 # Instead, we redirect individual `read` commands from /dev/tty.
@@ -18,7 +34,7 @@ elif [[ -e /dev/tty ]]; then
 fi
 
 echo ""
-echo "  Installing muster..."
+printf '  %b%bmuster%b %binstaller%b\n' "$_B" "$_MB" "$_R" "$_D" "$_R"
 echo ""
 
 # Ensure install dir has secure permissions
@@ -29,9 +45,10 @@ chmod 700 "$INSTALL_DIR"
 _fresh_install=true
 if [[ -d "${INSTALL_DIR}/repo" ]]; then
   _fresh_install=false
-  echo "  Updating existing installation..."
+  printf '  %bUpdating existing installation...%b\n' "$_D" "$_R"
   (cd "${INSTALL_DIR}/repo" && git pull --quiet)
 else
+  printf '  %bCloning muster...%b\n' "$_D" "$_R"
   git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo"
 fi
 
@@ -46,10 +63,10 @@ ln -sf "${INSTALL_DIR}/repo/bin/muster-mcp" "${BIN_DIR}/muster-mcp"
 _ver=""
 if "${BIN_DIR}/muster" --version >/dev/null 2>&1; then
   _ver="$("${BIN_DIR}/muster" --version 2>/dev/null || true)"
-  echo "  Done! muster ${_ver} installed."
+  printf '  %b✓%b muster %b%s%b installed.\n' "$_G" "$_R" "$_D" "$_ver" "$_R"
 else
-  echo "  Warning: muster installed but failed to run."
-  echo "  Try: ${BIN_DIR}/muster --version"
+  printf '  %b!%b muster installed but failed to run.\n' "$_Y" "$_R"
+  printf '  %bTry: %s/muster --version%b\n' "$_D" "$BIN_DIR" "$_R"
 fi
 
 # ── Install manifest ──
@@ -80,7 +97,7 @@ fi
 
 if [[ "$_needs_path" = true ]]; then
   echo ""
-  echo "  ${BIN_DIR} is not in your PATH."
+  printf '  %b!%b %b%s is not in your PATH.%b\n' "$_Y" "$_R" "$_D" "$BIN_DIR" "$_R"
 
   _shell_profile=""
   case "${SHELL:-}" in
@@ -101,14 +118,14 @@ if [[ "$_needs_path" = true ]]; then
   _added=false
 
   if [[ -n "$_shell_profile" && "$_interactive" = true ]]; then
-    printf "  Add to %s? [Y/n] " "$_shell_profile"
+    printf '  Add to %b%s%b? [Y/n] ' "$_W" "$_shell_profile" "$_R"
     read -r _answer </dev/tty
     case "${_answer:-Y}" in
       [Yy]|"")
         echo "" >> "$_shell_profile"
         echo "# Added by muster installer" >> "$_shell_profile"
         echo "$_export_line" >> "$_shell_profile"
-        echo "  Added! Run: source ${_shell_profile}"
+        printf '  %b✓%b Added! Run: %bsource %s%b\n' "$_G" "$_R" "$_D" "$_shell_profile" "$_R"
         _added=true
         ;;
     esac
@@ -145,26 +162,26 @@ if [[ "$_interactive" = true ]]; then
 
   if [[ "$_tui_installed" = true ]]; then
     echo ""
-    echo "  muster-tui already installed (${_tui_existing_ver:-unknown version})."
+    printf '  %b%bmuster-tui%b already installed %b(%s)%b\n' "$_B" "$_M" "$_R" "$_D" "${_tui_existing_ver:-unknown}" "$_R"
     echo ""
-    echo "  1) Keep current installation"
-    echo "  2) Reinstall / update muster-tui"
+    printf '  %b1)%b Keep current installation\n' "$_M" "$_R"
+    printf '  %b2)%b Reinstall / update muster-tui\n' "$_M" "$_R"
     echo ""
-    printf "  Choose [1/2]: "
+    printf '  %bChoose [1/2]:%b ' "$_M" "$_R"
     read -r _tui_choice </dev/tty
     # Map "keep" to skip
     [[ "${_tui_choice:-1}" == "1" ]] && _tui_choice="skip"
     [[ "${_tui_choice:-}" == "2" ]] && _tui_choice="install"
   else
     echo ""
-    echo "  muster-tui is an optional rich TUI frontend with a"
-    echo "  full-screen dashboard, streaming deploy logs, and"
-    echo "  scrollable log viewer."
+    printf '  %b%bmuster-tui%b %bis an optional rich TUI frontend with a%b\n' "$_B" "$_M" "$_R" "$_D" "$_R"
+    printf '  %bfull-screen dashboard, streaming deploy logs, and%b\n' "$_D" "$_R"
+    printf '  %bscrollable log viewer.%b\n' "$_D" "$_R"
     echo ""
-    echo "  1) Skip — use the built-in bash TUI (no extra install)"
-    echo "  2) Install muster-tui (downloads a pre-built binary)"
+    printf '  %b1)%b Skip — use the built-in bash TUI\n' "$_M" "$_R"
+    printf '  %b2)%b Install muster-tui %b(downloads a pre-built binary)%b\n' "$_M" "$_R" "$_D" "$_R"
     echo ""
-    printf "  Choose [1/2]: "
+    printf '  %bChoose [1/2]:%b ' "$_M" "$_R"
     read -r _tui_choice </dev/tty
     [[ "${_tui_choice:-1}" == "1" ]] && _tui_choice="skip"
     [[ "${_tui_choice:-}" == "2" ]] && _tui_choice="install"
@@ -173,7 +190,7 @@ if [[ "$_interactive" = true ]]; then
   case "${_tui_choice}" in
     install)
       echo ""
-      echo "  Installing muster-tui..."
+      printf '  %bInstalling muster-tui...%b\n' "$_D" "$_R"
 
       # Detect OS and arch
       _os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -200,7 +217,7 @@ if [[ "$_interactive" = true ]]; then
 
       if [[ "$_tui_ok" = true ]]; then
         _tui_ver="$("${BIN_DIR}/muster-tui" --version 2>/dev/null || echo "unknown")"
-        echo "  muster-tui installed! (${_tui_ver})"
+        printf '  %b✓%b muster-tui installed! %b(%s)%b\n' "$_G" "$_R" "$_D" "$_tui_ver" "$_R"
 
         # Record in install manifest
         _write_manifest "muster-tui" "$_tui_ver" "${BIN_DIR}/muster-tui"
@@ -208,7 +225,7 @@ if [[ "$_interactive" = true ]]; then
         # Auto-create auth token and connect the protocol
         # Only if no muster-tui token already exists
         echo ""
-        echo "  Setting up secure connection..."
+        printf '  %bSetting up secure connection...%b\n' "$_D" "$_R"
         source "${INSTALL_DIR}/repo/lib/core/auth.sh"
 
         _has_tui_token=false
@@ -218,45 +235,45 @@ if [[ "$_interactive" = true ]]; then
         fi
 
         if [[ "$_has_tui_token" = true ]]; then
-          echo "  Auth token 'muster-tui' already exists — skipping."
+          printf '  %b✓%b Auth token already exists — skipping.\n' "$_G" "$_R"
           echo ""
-          echo "  If you need a new token, revoke and recreate:"
-          echo "    MUSTER_TOKEN=<admin-token> muster auth revoke muster-tui"
-          echo "    MUSTER_TOKEN=<admin-token> muster auth create muster-tui --scope admin"
-          echo "    muster-tui --set-token <new-token>"
+          printf '  %bIf you need a new token, revoke and recreate:%b\n' "$_D" "$_R"
+          printf '  %b  MUSTER_TOKEN=<admin-token> muster auth revoke muster-tui%b\n' "$_D" "$_R"
+          printf '  %b  MUSTER_TOKEN=<admin-token> muster auth create muster-tui --scope admin%b\n' "$_D" "$_R"
+          printf '  %b  muster-tui --set-token <new-token>%b\n' "$_D" "$_R"
         else
           _tui_token=""
           if _tui_token=$(auth_create_token "muster-tui" "admin" 2>/dev/null) && [[ -n "$_tui_token" ]]; then
             if "${BIN_DIR}/muster-tui" --set-token "$_tui_token" >/dev/null 2>&1; then
-              echo "  Auth token created and linked automatically."
+              printf '  %b✓%b Auth token created and linked.\n' "$_G" "$_R"
               echo ""
-              echo "  You're all set! Run muster-tui from any muster project:"
-              echo "    cd your-project"
-              echo "    muster-tui"
+              printf '  You'\''re all set! Run %b%bmuster-tui%b from any muster project:\n' "$_B" "$_M" "$_R"
+              printf '  %b  cd your-project%b\n' "$_D" "$_R"
+              printf '  %b  muster-tui%b\n' "$_D" "$_R"
             else
-              echo "  Token created but could not save to muster-tui config."
-              echo "  Connect manually:"
-              echo "    muster-tui --set-token ${_tui_token}"
+              printf '  %b!%b Token created but could not save to config.\n' "$_Y" "$_R"
+              printf '  %bConnect manually:%b\n' "$_D" "$_R"
+              printf '  %b  muster-tui --set-token %s%b\n' "$_D" "$_tui_token" "$_R"
             fi
           else
-            echo "  Could not auto-create token (jq may be missing)."
-            echo "  Connect manually:"
-            echo "    muster auth create muster-tui --scope admin"
-            echo "    muster-tui --set-token <token>"
+            printf '  %b!%b Could not auto-create token (jq may be missing).\n' "$_Y" "$_R"
+            printf '  %bConnect manually:%b\n' "$_D" "$_R"
+            printf '  %b  muster auth create muster-tui --scope admin%b\n' "$_D" "$_R"
+            printf '  %b  muster-tui --set-token <token>%b\n' "$_D" "$_R"
           fi
         fi
       else
-        echo "  Could not download muster-tui binary."
-        echo "  No pre-built release found for ${_os}/${_arch}."
+        printf '  %b!%b Could not download muster-tui binary.\n' "$_Y" "$_R"
+        printf '  %bNo pre-built release for %s/%s.%b\n' "$_D" "$_os" "$_arch" "$_R"
         echo ""
-        echo "  You can build from source instead:"
-        echo "    go install github.com/${TUI_REPO}@latest"
+        printf '  %bBuild from source:%b\n' "$_D" "$_R"
+        printf '  %b  go install github.com/%s@latest%b\n' "$_D" "$TUI_REPO" "$_R"
       fi
       ;;
     *)
       echo ""
-      echo "  Skipped. You can install muster-tui later:"
-      echo "    go install github.com/${TUI_REPO}@latest"
+      printf '  %bSkipped. Install muster-tui later:%b\n' "$_D" "$_R"
+      printf '  %b  go install github.com/%s@latest%b\n' "$_D" "$TUI_REPO" "$_R"
       ;;
   esac
 fi
@@ -265,8 +282,8 @@ fi
 # On fresh install, offer to run muster setup immediately
 if [[ "$_fresh_install" = true && "$_interactive" = true ]]; then
   echo ""
-  echo "  Ready to set up your first project?"
-  printf "  Run muster setup now? [Y/n] "
+  printf '  Ready to set up your first project?\n'
+  printf '  Run %b%bmuster setup%b now? [Y/n] ' "$_B" "$_M" "$_R"
   read -r _setup_answer </dev/tty
   case "${_setup_answer:-Y}" in
     [Yy]|"")
@@ -277,7 +294,7 @@ if [[ "$_fresh_install" = true && "$_interactive" = true ]]; then
       ;;
     *)
       echo ""
-      echo "  No problem! Run 'muster setup' when you're ready."
+      printf '  No problem! Run %b%bmuster setup%b when you'\''re ready.\n' "$_B" "$_M" "$_R"
       ;;
   esac
 fi
