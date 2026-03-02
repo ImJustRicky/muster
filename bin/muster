@@ -146,8 +146,16 @@ case "${1:-}" in
     echo "  -h, --help      Show this help"
     ;;
   "")
-    # Default: prefer muster-tui (Go TUI) if installed
-    if command -v muster-tui >/dev/null 2>&1; then
+    # Check tui_mode setting (default: "go" when muster-tui installed)
+    _tui_mode="go"
+    _settings_file="$HOME/.muster/settings.json"
+    if [[ -f "$_settings_file" ]] && has_cmd jq; then
+      _tui_mode_val=$(jq -r '.tui_mode // "go"' "$_settings_file" 2>/dev/null)
+      [[ -n "$_tui_mode_val" ]] && _tui_mode="$_tui_mode_val"
+    fi
+
+    # Launch Go TUI if tui_mode is "go" and muster-tui is installed
+    if [[ "$_tui_mode" == "go" ]] && command -v muster-tui >/dev/null 2>&1; then
       _tui_config="$HOME/.muster-tui/config.json"
       _tui_has_token=false
 
@@ -171,6 +179,8 @@ case "${1:-}" in
         exec muster-tui
       fi
     fi
+
+    # Fallback to bash TUI
     source "$MUSTER_ROOT/lib/tui/dashboard.sh"
     cmd_dashboard
     ;;

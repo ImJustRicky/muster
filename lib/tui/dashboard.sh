@@ -161,6 +161,12 @@ _dashboard_home() {
       echo ""
     fi
 
+    # Promote muster-tui if not installed
+    if ! command -v muster-tui >/dev/null 2>&1; then
+      echo -e "  ${ACCENT_BRIGHT}*${RESET} ${DIM}Try the new Go TUI:${RESET} ${WHITE}go install github.com/ImJustRicky/muster-tui@latest${RESET} ${DIM}(beta)${RESET}"
+      echo ""
+    fi
+
     # Load registered projects
     _registry_ensure_file
     local _project_names=()
@@ -314,6 +320,12 @@ cmd_dashboard() {
     update_check_collect
     if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
       echo -e "  ${YELLOW}!${RESET} ${DIM}A new version of muster is available${RESET}"
+      echo ""
+    fi
+
+    # Promote muster-tui if not installed
+    if ! command -v muster-tui >/dev/null 2>&1; then
+      echo -e "  ${ACCENT_BRIGHT}*${RESET} ${DIM}Try the new Go TUI:${RESET} ${WHITE}go install github.com/ImJustRicky/muster-tui@latest${RESET} ${DIM}(beta)${RESET}"
       echo ""
     fi
 
