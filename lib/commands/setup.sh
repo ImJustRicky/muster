@@ -142,6 +142,84 @@ _setup_screen() {
   _setup_screen_inner
 }
 
+# ── Fleet Cloud: remote agent join ──
+_setup_remote_agent() {
+  local agent_bin=""
+  if command -v muster-agent >/dev/null 2>&1; then
+    agent_bin="muster-agent"
+  elif [[ -x "${HOME}/.local/bin/muster-agent" ]]; then
+    agent_bin="${HOME}/.local/bin/muster-agent"
+  fi
+
+  if [[ -z "$agent_bin" ]]; then
+    err "muster-agent not found"
+    return 1
+  fi
+
+  clear
+  echo ""
+  echo -e "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}— Remote Agent Setup${RESET}"
+  echo ""
+  echo -e "  ${DIM}Connect this machine to your fleet relay so it can${RESET}"
+  echo -e "  ${DIM}receive deployments from your host machine.${RESET}"
+  echo ""
+
+  echo -e "  ${BOLD}Relay URL${RESET} ${DIM}(e.g. wss://relay.example.com/v1/tunnel)${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  read -r _relay_url
+  if [[ -z "$_relay_url" ]]; then
+    err "Relay URL is required"
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Organization ID${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  read -r _org_id
+  if [[ -z "$_org_id" ]]; then
+    err "Organization ID is required"
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Join token${RESET} ${DIM}(from: muster-cloud token create --type agent-join)${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  read -r _join_token
+  if [[ -z "$_join_token" ]]; then
+    err "Join token is required"
+    return 1
+  fi
+
+  local _default_name
+  _default_name="$(hostname -s 2>/dev/null || hostname)"
+  echo ""
+  echo -e "  ${BOLD}Agent name${RESET} ${DIM}[${_default_name}]${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  read -r _agent_name
+  _agent_name="${_agent_name:-$_default_name}"
+
+  echo ""
+  info "Joining fleet as '${_agent_name}'..."
+  echo ""
+
+  if "$agent_bin" join \
+    --relay "$_relay_url" \
+    --token "$_join_token" \
+    --org "$_org_id" \
+    --name "$_agent_name"; then
+    echo ""
+    ok "Agent joined successfully!"
+    echo ""
+    echo -e "  ${DIM}Start the agent daemon with:${RESET}"
+    echo -e "    ${WHITE}muster-agent run${RESET}"
+    echo ""
+  else
+    echo ""
+    err "Failed to join fleet. Check your relay URL and token."
+    echo ""
+  fi
+}
+
 # ── Known infrastructure services (no build step needed) ──
 _INFRA_SERVICES="redis postgres postgresql mysql mariadb mongo mongodb meilisearch minio rabbitmq kafka elasticsearch opensearch nginx memcached etcd zookeeper consul vault nats"
 
@@ -924,6 +1002,28 @@ cmd_setup() {
     return 1
   fi
 
+  # ── Fleet Cloud role detection ──
+  local _fc_detected=false
+  if command -v muster-agent >/dev/null 2>&1 || [[ -x "${HOME}/.local/bin/muster-agent" ]]; then
+    _fc_detected=true
+  fi
+
+  if [[ "$_fc_detected" = true ]]; then
+    clear
+    echo ""
+    echo -e "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
+    echo ""
+    echo -e "  ${DIM}Fleet cloud detected. How will this machine be used?${RESET}"
+    echo ""
+
+    menu_select "Role" "Host — I deploy FROM this machine" "Remote — this machine RECEIVES deploys"
+
+    if [[ "$MENU_RESULT" == *"Remote"* ]]; then
+      _setup_remote_agent
+      return $?
+    fi
+  fi
+
   # ── Step 1: Project root ──
   local _plat_tools=""
   [[ "$MUSTER_HAS_DOCKER" == "true" ]] && _plat_tools+="docker "
@@ -1181,6 +1281,28 @@ cmd_setup() {
     read -r custom_name
     _SETUP_CUR_PROMPT="false"
     project_name="${custom_name:-$project_name}"
+
+    # ── Fleet init offer (host path only) ──
+    if [[ "$_fc_detected" = true ]]; then
+      echo ""
+      echo -e "  ${DIM}Fleet cloud is installed. Set up remote machines?${RESET}"
+      echo ""
+      menu_select "Fleet" "Skip — set up fleet later" "Yes — initialize fleet config"
+      if [[ "$MENU_RESULT" == *"Yes"* ]]; then
+        source "$MUSTER_ROOT/lib/core/fleet.sh"
+        local _remotes="${project_path}/remotes.json"
+        if [[ ! -f "$_remotes" ]]; then
+          printf '{"machines":{},"groups":{},"deploy_order":[]}\n' > "$_remotes"
+          ok "Created remotes.json"
+        fi
+        echo ""
+        echo -e "  ${DIM}Add machines later with:${RESET}"
+        echo -e "    ${WHITE}muster fleet add <name> user@host${RESET}"
+        echo ""
+        echo -e "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+      fi
+    fi
 
     # ── Step 7: Generate ──
     local config_path="${project_path}/muster.json"
