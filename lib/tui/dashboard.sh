@@ -251,12 +251,14 @@ _dashboard_home() {
         ;;
       "Setup new project")
         source "$MUSTER_ROOT/lib/commands/setup.sh"
-        cmd_setup
+        cmd_setup || true
+        MUSTER_REDRAW_FN=""
         # After setup, check if we now have a config and switch to dashboard
         if find_config &>/dev/null; then
           cmd_dashboard
           return 0
         fi
+        continue
         ;;
       "Settings")
         source "$MUSTER_ROOT/lib/commands/settings.sh"
