@@ -103,6 +103,11 @@ case "${1:-}" in
     source "$MUSTER_ROOT/lib/skills/manager.sh"
     cmd_skill "$@"
     ;;
+  addon)
+    shift
+    source "$MUSTER_ROOT/lib/commands/addon.sh"
+    cmd_addon "$@"
+    ;;
   projects)
     shift
     source "$MUSTER_ROOT/lib/commands/projects.sh"

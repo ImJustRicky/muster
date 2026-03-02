@@ -275,8 +275,8 @@ if [[ "$_interactive" = true ]]; then
       # Only show skip message if the user actively chose to skip (fresh install)
       if [[ "$_fresh_install" = true ]]; then
         echo ""
-        printf '  %bSkipped. Install muster-tui later:%b\n' "$_D" "$_R"
-        printf '  %b  go install github.com/%s@latest%b\n' "$_D" "$TUI_REPO" "$_R"
+        printf '  %bSkipped. Install later with:%b\n' "$_D" "$_R"
+        printf '  %b  muster addon add tui%b\n' "$_D" "$_R"
       fi
       ;;
   esac
@@ -396,8 +396,8 @@ if [[ "$_interactive" = true ]]; then
     *)
       if [[ "$_fresh_install" = true ]]; then
         echo ""
-        printf '  %bSkipped. Install fleet cloud later:%b\n' "$_D" "$_R"
-        printf '  %b  curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash%b\n' "$_D" "$FLEET_REPO" "$_R"
+        printf '  %bSkipped. Install later with:%b\n' "$_D" "$_R"
+        printf '  %b  muster addon add fleet-cloud%b\n' "$_D" "$_R"
       fi
       ;;
   esac
