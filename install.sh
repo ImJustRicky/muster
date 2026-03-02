@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# muster installer — curl https://raw.githubusercontent.com/ImJustRicky/muster/main/install.sh | bash
+# muster installer — bash <(curl -fsSL https://getmuster.dev/install.sh)
 set -euo pipefail
 
 REPO="ImJustRicky/muster"
