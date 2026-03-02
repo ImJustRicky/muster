@@ -40,6 +40,7 @@ cmd_uninstall() {
     return 1
   fi
 
+  muster_tui_fullscreen
   load_config
 
   local project_dir
@@ -96,6 +97,7 @@ cmd_uninstall() {
 }
 
 _uninstall_system() {
+  muster_tui_fullscreen
   local install_dir="${MUSTER_INSTALL_DIR:-$HOME/.muster}"
   local bin_dir="${MUSTER_BIN_DIR:-$HOME/.local/bin}"
 
