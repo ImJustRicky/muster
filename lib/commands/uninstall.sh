@@ -109,6 +109,8 @@ _uninstall_system() {
   [[ -L "${bin_dir}/muster" || -f "${bin_dir}/muster" ]] && echo -e "    ${RED}*${RESET} ${bin_dir}/muster"
   [[ -L "${bin_dir}/muster-mcp" || -f "${bin_dir}/muster-mcp" ]] && echo -e "    ${RED}*${RESET} ${bin_dir}/muster-mcp"
   [[ -L "${bin_dir}/muster-tui" || -f "${bin_dir}/muster-tui" ]] && echo -e "    ${RED}*${RESET} ${bin_dir}/muster-tui"
+  [[ -f "${bin_dir}/muster-tunnel" ]] && echo -e "    ${RED}*${RESET} ${bin_dir}/muster-tunnel"
+  [[ -f "${bin_dir}/muster-agent" ]] && echo -e "    ${RED}*${RESET} ${bin_dir}/muster-agent"
   echo ""
   echo -e "  ${DIM}Project configs (.muster/ in your projects) will NOT be removed.${RESET}"
   echo ""
@@ -122,7 +124,8 @@ _uninstall_system() {
   fi
 
   # Remove binaries/symlinks
-  rm -f "${bin_dir}/muster" "${bin_dir}/muster-mcp" "${bin_dir}/muster-tui" 2>/dev/null
+  rm -f "${bin_dir}/muster" "${bin_dir}/muster-mcp" "${bin_dir}/muster-tui" \
+    "${bin_dir}/muster-tunnel" "${bin_dir}/muster-agent" 2>/dev/null
   ok "Removed binaries"
 
   # Remove install directory
