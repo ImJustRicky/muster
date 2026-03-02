@@ -424,87 +424,8 @@ _settings_muster_global() {
     global_config_set "update_check" "\"$new_update\""
     global_config_set "default_stack" "\"$new_stack\""
 
-    # Now prompt for numeric settings and scanner excludes
-    _settings_muster_extras "$log_retention" "$health_timeout" "$scanner_ex"
-
-    ok "Muster settings saved"
-    echo ""
     return 0
   done
-}
-
-_settings_muster_extras() {
-  local cur_retention="$1" cur_timeout="$2" cur_excludes="$3"
-
-  clear
-  echo ""
-
-  # Log retention
-  printf '%b' "  ${BOLD}Log retention days${RESET} ${DIM}[${cur_retention}]:${RESET} "
-  local new_retention
-  IFS= read -r new_retention
-  new_retention=$(printf '%s' "$new_retention" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  if [[ -n "$new_retention" ]]; then
-    case "$new_retention" in
-      *[!0-9]*)
-        warn "Invalid number, keeping ${cur_retention}"
-        ;;
-      *)
-        global_config_set "log_retention_days" "$new_retention"
-        ;;
-    esac
-  fi
-
-  # Health timeout
-  printf '%b' "  ${BOLD}Default health timeout (s)${RESET} ${DIM}[${cur_timeout}]:${RESET} "
-  local new_timeout
-  IFS= read -r new_timeout
-  new_timeout=$(printf '%s' "$new_timeout" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  if [[ -n "$new_timeout" ]]; then
-    case "$new_timeout" in
-      *[!0-9]*)
-        warn "Invalid number, keeping ${cur_timeout}"
-        ;;
-      *)
-        global_config_set "default_health_timeout" "$new_timeout"
-        ;;
-    esac
-  fi
-
-  # Scanner excludes
-  echo ""
-  printf '%b\n' "  ${BOLD}Scanner excludes:${RESET} ${DIM}${cur_excludes}${RESET}"
-  printf '%b' "  ${DIM}Add patterns (comma-sep, empty to skip):${RESET} "
-  local add_patterns
-  IFS= read -r add_patterns
-  add_patterns=$(printf '%s' "$add_patterns" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  if [[ -n "$add_patterns" ]]; then
-    local IFS=','
-    local p
-    for p in $add_patterns; do
-      p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-      [[ -z "$p" ]] && continue
-      local quoted
-      quoted=$(printf '%s' "$p" | sed 's/\\/\\\\/g;s/"/\\"/g')
-      global_config_set "scanner_exclude" "(.scanner_exclude + [\"${quoted}\"] | unique)"
-    done
-  fi
-
-  printf '%b' "  ${DIM}Remove patterns (comma-sep, empty to skip):${RESET} "
-  local rm_patterns
-  IFS= read -r rm_patterns
-  rm_patterns=$(printf '%s' "$rm_patterns" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  if [[ -n "$rm_patterns" ]]; then
-    local IFS=','
-    local p
-    for p in $rm_patterns; do
-      p=$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-      [[ -z "$p" ]] && continue
-      local quoted
-      quoted=$(printf '%s' "$p" | sed 's/\\/\\\\/g;s/"/\\"/g')
-      global_config_set "scanner_exclude" "([.scanner_exclude[] | select(. != \"${quoted}\")])"
-    done
-  fi
 }
 
 cmd_settings() {
