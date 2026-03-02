@@ -542,10 +542,12 @@ cmd_settings() {
     return 1
   fi
 
-  load_config
-
-  local project_dir
-  project_dir="$(dirname "$CONFIG_FILE")"
+  # Check if we're inside a project
+  local _has_project=false
+  if find_config &>/dev/null; then
+    load_config
+    _has_project=true
+  fi
 
   while true; do
     clear
@@ -553,7 +555,11 @@ cmd_settings() {
     echo -e "  ${BOLD}${ACCENT_BRIGHT}Settings${RESET}"
     echo ""
 
-    menu_select "Settings" "Project Settings" "Muster Settings" "Back"
+    if [[ "$_has_project" == "true" ]]; then
+      menu_select "Settings" "Project Settings" "Muster Settings" "Back"
+    else
+      menu_select "Settings" "Muster Settings" "Back"
+    fi
 
     case "$MENU_RESULT" in
       "Project Settings")
