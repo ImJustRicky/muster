@@ -142,11 +142,113 @@ _dashboard_header() {
   echo ""
 }
 
+_dashboard_home() {
+  source "$MUSTER_ROOT/lib/core/registry.sh"
+
+  while true; do
+    muster_tui_fullscreen
+    clear
+    echo -e "\n  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}v${MUSTER_VERSION}${RESET}"
+    echo ""
+
+    # Load registered projects
+    _registry_ensure_file
+    local _project_names=()
+    local _project_paths=()
+    local _count=0
+
+    if has_cmd jq; then
+      _count=$(jq '.projects | length' "$MUSTER_PROJECTS_FILE" 2>/dev/null)
+      [[ -z "$_count" ]] && _count=0
+
+      local _i=0
+      while (( _i < _count )); do
+        local _pname _ppath
+        _pname=$(jq -r ".projects[$_i].name" "$MUSTER_PROJECTS_FILE")
+        _ppath=$(jq -r ".projects[$_i].path" "$MUSTER_PROJECTS_FILE")
+        _project_names[${#_project_names[@]}]="$_pname"
+        _project_paths[${#_project_paths[@]}]="$_ppath"
+        _i=$(( _i + 1 ))
+      done
+    fi
+
+    local actions=()
+
+    if (( _count > 0 )); then
+      echo -e "  ${DIM}Projects${RESET}"
+      echo ""
+      local _pi=0
+      while (( _pi < _count )); do
+        local _display_path="${_project_paths[$_pi]}"
+        # Shorten home prefix
+        _display_path="${_display_path/#$HOME/~}"
+        actions[${#actions[@]}]="${_project_names[$_pi]}  ${_display_path}"
+        _pi=$(( _pi + 1 ))
+      done
+    else
+      echo -e "  ${DIM}No projects registered yet.${RESET}"
+    fi
+
+    echo ""
+    actions[${#actions[@]}]="Setup new project"
+    actions[${#actions[@]}]="Settings"
+    actions[${#actions[@]}]="Quit"
+
+    menu_select "" "${actions[@]}"
+
+    case "$MENU_RESULT" in
+      "Setup new project")
+        source "$MUSTER_ROOT/lib/commands/setup.sh"
+        cmd_setup
+        # After setup, check if we now have a config and switch to dashboard
+        if find_config &>/dev/null; then
+          cmd_dashboard
+          return 0
+        fi
+        ;;
+      "Settings")
+        source "$MUSTER_ROOT/lib/commands/settings.sh"
+        cmd_settings
+        ;;
+      "Quit")
+        echo ""
+        exit 0
+        ;;
+      *)
+        # Must be a project selection — find matching path
+        local _si=0
+        while (( _si < _count )); do
+          local _match="${_project_names[$_si]}  ${_project_paths[$_si]/#$HOME/~}"
+          if [[ "$MENU_RESULT" == "$_match" ]]; then
+            local _target="${_project_paths[$_si]}"
+            if [[ -d "$_target" ]]; then
+              cd "$_target"
+              cmd_dashboard
+              return 0
+            else
+              echo -e "  ${RED}Directory not found:${RESET} $_target"
+              _dashboard_pause
+            fi
+            break
+          fi
+          _si=$(( _si + 1 ))
+        done
+        ;;
+    esac
+  done
+}
+
 cmd_dashboard() {
   if [[ ! -t 0 ]]; then
     printf '%b\n' "${RED}Error: interactive terminal required${RESET}" >&2
     printf '%b\n' "Use flag-based setup instead: muster setup --help" >&2
     return 1
+  fi
+
+  # If not inside a project, show the home screen
+  if ! find_config &>/dev/null; then
+    _dashboard_home
+    return $?
   fi
 
   # Kick off background update check (non-blocking)
