@@ -15,6 +15,7 @@ source "$MUSTER_ROOT/lib/commands/history.sh"
 cmd_deploy() {
   local dry_run=false
   local _json_mode=false
+  local _force=false
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
       --help|-h)
@@ -24,6 +25,7 @@ cmd_deploy() {
         echo ""
         echo "Flags:"
         echo "  --dry-run       Preview deploy plan without executing"
+        echo "  --force         Override deploy lock if one exists"
         echo "  --json          Output as NDJSON (one JSON object per line)"
         echo "  -h, --help      Show this help"
         echo ""
@@ -35,6 +37,7 @@ cmd_deploy() {
         return 0
         ;;
       --dry-run) dry_run=true; shift ;;
+      --force) _force=true; shift ;;
       --json) _json_mode=true; shift ;;
       *)
         err "Unknown flag: $1"
@@ -52,6 +55,18 @@ cmd_deploy() {
   project_dir="$(dirname "$CONFIG_FILE")"
   local log_dir="${project_dir}/.muster/logs"
   mkdir -p "$log_dir"
+
+  # Acquire deploy lock (skip for dry runs)
+  if [[ "$dry_run" == "false" ]]; then
+    if [[ "$_force" == "true" ]]; then
+      _deploy_lock_release "$project_dir"
+    fi
+    if ! _deploy_lock_acquire "$project_dir"; then
+      _unload_env_file
+      return 1
+    fi
+    trap '_deploy_lock_release "'"$project_dir"'"; _unload_env_file' EXIT
+  fi
 
   local project
   project=$(config_get '.project')
@@ -470,6 +485,12 @@ ${_k8s_env_lines}"
             if [[ -n "$_git_prev_sha" ]]; then
               echo ""
               _git_deploy_diff "$_git_prev_sha" "$_git_sha"
+              # Export diff context for skills (notifications)
+              export MUSTER_GIT_COMMIT_COUNT="$(git rev-list --count "${_git_prev_sha}..${_git_sha}" 2>/dev/null || echo 0)"
+              export MUSTER_GIT_DIFF_SUMMARY="$(git diff --shortstat "${_git_prev_sha}..${_git_sha}" 2>/dev/null || echo '')"
+            else
+              export MUSTER_GIT_COMMIT_COUNT=""
+              export MUSTER_GIT_DIFF_SUMMARY=""
             fi
             _git_save_deploy_sha "$svc" "$_git_sha"
           fi
@@ -532,8 +553,11 @@ ${_k8s_env_lines}"
             printf '  %bCtrl+O view full log  •  any key to continue%b ' "${DIM}" "${RESET}"
             while true; do
               local _post_key=""
-              IFS= read -rsn1 _post_key 2>/dev/null || true
-              if [[ "$_post_key" == $'\x0f' ]]; then
+              IFS= read -rsn1 -t 30 _post_key 2>/dev/null || true
+              if [[ -z "$_post_key" ]]; then
+                # Timeout — auto-continue
+                break
+              elif [[ "$_post_key" == $'\x0f' ]]; then
                 _log_viewer "$name deploy log" "$log_file"
                 # Viewer cleared screen; reprint hint
                 tput clear
@@ -667,5 +691,7 @@ ${_k8s_env_lines}"
     echo ""
   fi
 
+  _deploy_lock_release "$project_dir"
+  trap - EXIT
   _unload_env_file
 }

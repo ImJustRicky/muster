@@ -19,6 +19,7 @@ _MUSTER_INPUT_DIRTY="false"
 
 _on_resize() {
   update_term_size
+  _MUSTER_INPUT_DIRTY="true"
   if [[ -n "$MUSTER_REDRAW_FN" ]]; then
     $MUSTER_REDRAW_FN
   fi
@@ -272,4 +273,93 @@ _git_deploy_diff() {
     [[ -n "$del" ]] && stat_line="${stat_line}, ${RED}-${del}${RESET}"
     echo -e "    ${DIM}${stat_line}${RESET}"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Deploy lock — prevent concurrent deploys
+# ---------------------------------------------------------------------------
+
+_deploy_lock_file() {
+  local project_dir="$1"
+  echo "${project_dir}/.muster/deploy.lock"
+}
+
+_deploy_lock_acquire() {
+  local project_dir="$1"
+  shift
+  local lock_file
+  lock_file=$(_deploy_lock_file "$project_dir")
+
+  if [[ -f "$lock_file" ]]; then
+    # Read existing lock
+    local lock_user="" lock_pid="" lock_started=""
+    if has_cmd jq; then
+      lock_user=$(jq -r '.user // "unknown"' "$lock_file" 2>/dev/null)
+      lock_pid=$(jq -r '.pid // ""' "$lock_file" 2>/dev/null)
+      lock_started=$(jq -r '.started // "unknown"' "$lock_file" 2>/dev/null)
+    elif has_cmd python3; then
+      lock_user=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('user','unknown'))" "$lock_file" 2>/dev/null)
+      lock_pid=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('pid',''))" "$lock_file" 2>/dev/null)
+      lock_started=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('started','unknown'))" "$lock_file" 2>/dev/null)
+    fi
+
+    # Check if PID is still alive
+    if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      # Stale lock — remove it
+      warn "Removing stale deploy lock (PID ${lock_pid} is dead)"
+      rm -f "$lock_file"
+    else
+      # Active lock — warn and offer options
+      echo ""
+      warn "Deploy locked by ${lock_user} (PID ${lock_pid}) since ${lock_started}"
+      echo ""
+      if [[ -t 0 ]]; then
+        menu_select "Deploy is locked" "Wait and retry" "Override lock" "Abort"
+        case "$MENU_RESULT" in
+          "Wait and retry")
+            echo ""
+            info "Waiting for lock to be released..."
+            while [[ -f "$lock_file" ]]; do
+              if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+                rm -f "$lock_file"
+                break
+              fi
+              sleep 3
+            done
+            ;;
+          "Override lock")
+            warn "Overriding deploy lock"
+            rm -f "$lock_file"
+            ;;
+          "Abort"|"__back__")
+            return 1
+            ;;
+        esac
+      else
+        err "Deploy locked by ${lock_user} (PID ${lock_pid}). Use --force to override."
+        return 1
+      fi
+    fi
+  fi
+
+  # Create lock
+  mkdir -p "$(dirname "$lock_file")"
+  local _svcs=""
+  local _i=0
+  while (( _i < $# )); do
+    [[ -n "$_svcs" ]] && _svcs="${_svcs},"
+    _svcs="${_svcs}\"${!_i}\""
+    _i=$((_i + 1))
+  done
+  cat > "$lock_file" <<EOF
+{"user":"$(whoami)","pid":$$,"started":"$(date '+%Y-%m-%d %H:%M:%S')","services":[${_svcs}]}
+EOF
+  return 0
+}
+
+_deploy_lock_release() {
+  local project_dir="$1"
+  local lock_file
+  lock_file=$(_deploy_lock_file "$project_dir")
+  rm -f "$lock_file"
 }

@@ -104,16 +104,24 @@ _dev_show_status() {
         done <<< "$_k8s_env"
       fi
 
-      local _health_ok=false
+      local _health_ok=false _hpid="" _health_timeout=""
+      _health_timeout=$(config_get ".services.${svc}.health.timeout" 2>/dev/null)
+      [[ -z "$_health_timeout" || "$_health_timeout" == "null" ]] && _health_timeout=10
       if remote_is_enabled "$svc"; then
-        if remote_exec_stdout "$svc" "$hook" "$_k8s_env" &>/dev/null; then
-          _health_ok=true
-        fi
+        remote_exec_stdout "$svc" "$hook" "$_k8s_env" &>/dev/null &
+        _hpid=$!
       else
-        if "$hook" &>/dev/null; then
-          _health_ok=true
-        fi
+        "$hook" &>/dev/null &
+        _hpid=$!
       fi
+      # Wait with timeout — kill if health hook hangs
+      ( sleep "$_health_timeout" && kill "$_hpid" 2>/dev/null ) &
+      local _tpid=$!
+      if wait "$_hpid" 2>/dev/null; then
+        _health_ok=true
+      fi
+      kill "$_tpid" 2>/dev/null
+      wait "$_tpid" 2>/dev/null
 
       # Clean up k8s env
       if [[ -n "$_k8s_env" ]]; then
@@ -186,9 +194,10 @@ cmd_dev() {
 
   _dev_first_status=true
 
-  # Watch loop — refresh health every 5 seconds
+  # Watch loop — refresh health every 5 seconds (read -t instead of sleep for Ctrl+C)
   while true; do
     _dev_show_status "$project_dir"
-    sleep 5
+    IFS= read -rsn1 -t 5 _dev_key 2>/dev/null || true
+    [[ "$_dev_key" == "q" ]] && break
   done
 }

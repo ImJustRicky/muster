@@ -9,8 +9,9 @@ _HEALTH_CACHE_DIR="${HOME}/.muster/.health_cache"
 
 _dashboard_pause() {
   echo ""
-  echo -e "  ${DIM}Press any key to continue...${RESET}"
-  IFS= read -rsn1 || true
+  printf '  %bPress any key to continue...%b' "$DIM" "$RESET"
+  IFS= read -rsn1 -t 60 || true
+  echo ""
 }
 
 _dashboard_print_svc_line() {

@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/ImJustRicky/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.8"
+MUSTER_VERSION="0.5.9"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -79,6 +79,11 @@ case "${1:-}" in
     source "$MUSTER_ROOT/lib/commands/history.sh"
     cmd_history "$@"
     ;;
+  diff)
+    shift
+    source "$MUSTER_ROOT/lib/commands/diff.sh"
+    cmd_diff "$@"
+    ;;
   doctor)
     shift
     source "$MUSTER_ROOT/lib/commands/doctor.sh"
@@ -141,6 +146,7 @@ case "${1:-}" in
     echo "  status      Check service health"
     echo "  logs        Stream service logs"
     echo "  rollback    Revert last deploy"
+    echo "  diff        Show what changed since last deploy (<service> or all)"
     echo "  history     Show deploy/rollback history (--all, <service>)"
     echo "  doctor      Run project diagnostics (--fix to auto-repair)"
     echo "  cleanup     Clean up stuck processes"
