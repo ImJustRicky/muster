@@ -282,6 +282,127 @@ if [[ "$_interactive" = true ]]; then
   esac
 fi
 
+# ── Fleet Cloud ──
+# Offer optional fleet cloud addon (muster-tunnel + muster-agent for cloud transport)
+FLEET_REPO="Muster-dev/muster-fleet-cloud"
+
+if [[ "$_interactive" = true ]]; then
+  _fc_installed=false
+  _fc_existing_ver=""
+  if command -v muster-tunnel >/dev/null 2>&1; then
+    _fc_installed=true
+    _fc_existing_ver="$(muster-tunnel --version 2>/dev/null || true)"
+  elif [[ -x "${INSTALL_DIR}/bin/muster-tunnel" ]]; then
+    _fc_installed=true
+    _fc_existing_ver="$("${INSTALL_DIR}/bin/muster-tunnel" --version 2>/dev/null || true)"
+  elif [[ -f "$MANIFEST" ]] && command -v jq >/dev/null 2>&1; then
+    _fc_manifest_ver="$(jq -r '.components["fleet-cloud"].version // empty' "$MANIFEST" 2>/dev/null)"
+    if [[ -n "$_fc_manifest_ver" ]]; then
+      _fc_installed=true
+      _fc_existing_ver="$_fc_manifest_ver"
+    fi
+  fi
+
+  _fc_choice="skip"
+  if [[ "$_fc_installed" = true ]]; then
+    echo ""
+    printf '  %b%bfleet cloud%b already installed %b(%s)%b\n' "$_B" "$_M" "$_R" "$_D" "${_fc_existing_ver:-unknown}" "$_R"
+    echo ""
+    printf '  %b1)%b Keep current installation\n' "$_M" "$_R"
+    printf '  %b2)%b Reinstall / update fleet cloud\n' "$_M" "$_R"
+    echo ""
+    printf '  %bChoose [1/2]:%b ' "$_M" "$_R"
+    read -r _fc_choice </dev/tty
+    [[ "${_fc_choice:-1}" == "1" ]] && _fc_choice="skip"
+    [[ "${_fc_choice:-}" == "2" ]] && _fc_choice="install"
+  elif [[ "$_fresh_install" = true ]]; then
+    echo ""
+    printf '  %b%bfleet cloud%b %bis an optional addon for cloud-based fleet%b\n' "$_B" "$_M" "$_R" "$_D" "$_R"
+    printf '  %bdeployment. Installs muster-tunnel (CLI transport) and%b\n' "$_D" "$_R"
+    printf '  %bmuster-agent (remote daemon) for NAT-traversal deploys.%b\n' "$_D" "$_R"
+    echo ""
+    printf '  %b1)%b Skip — SSH-only fleet deployment\n' "$_M" "$_R"
+    printf '  %b2)%b Install fleet cloud %b(downloads pre-built binaries)%b\n' "$_M" "$_R" "$_D" "$_R"
+    echo ""
+    printf '  %bChoose [1/2]:%b ' "$_M" "$_R"
+    read -r _fc_choice </dev/tty
+    [[ "${_fc_choice:-1}" == "1" ]] && _fc_choice="skip"
+    [[ "${_fc_choice:-}" == "2" ]] && _fc_choice="install"
+  fi
+
+  case "${_fc_choice}" in
+    install)
+      echo ""
+      printf '  %bInstalling fleet cloud...%b\n' "$_D" "$_R"
+
+      _fc_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+      _fc_arch="$(uname -m)"
+      case "$_fc_arch" in
+        x86_64)  _fc_arch="amd64" ;;
+        aarch64|arm64) _fc_arch="arm64" ;;
+      esac
+
+      # Resolve latest version
+      _fc_ver=""
+      if command -v curl >/dev/null 2>&1; then
+        _fc_ver="$(curl -fsSL "https://api.github.com/repos/${FLEET_REPO}/releases/latest" 2>/dev/null \
+          | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')"
+      fi
+      if [[ -z "$_fc_ver" ]]; then
+        printf '  %b!%b Could not determine latest fleet cloud version.\n' "$_Y" "$_R"
+        printf '  %bInstall manually: https://github.com/%s%b\n' "$_D" "$FLEET_REPO" "$_R"
+      else
+        _fc_base="https://github.com/${FLEET_REPO}/releases/download/v${_fc_ver}"
+        _fc_prefix="${INSTALL_DIR}/bin"
+        mkdir -p "$_fc_prefix"
+
+        _fc_ok=true
+        for _fc_bin in muster-tunnel muster-agent; do
+          _fc_url="${_fc_base}/${_fc_bin}-${_fc_os}-${_fc_arch}"
+          printf '  %bDownloading %s...%b\n' "$_D" "$_fc_bin" "$_R"
+          if curl -fsSL "$_fc_url" -o "${_fc_prefix}/${_fc_bin}" 2>/dev/null; then
+            chmod 755 "${_fc_prefix}/${_fc_bin}"
+          else
+            printf '  %b!%b Failed to download %s.\n' "$_Y" "$_R" "$_fc_bin"
+            _fc_ok=false
+          fi
+        done
+
+        if [[ "$_fc_ok" = true ]]; then
+          printf '  %b✓%b fleet cloud installed! %b(v%s)%b\n' "$_G" "$_R" "$_D" "$_fc_ver" "$_R"
+
+          _write_manifest "fleet-cloud" "$_fc_ver" "${_fc_prefix}/muster-tunnel"
+
+          # Ensure ~/.muster/bin is in PATH
+          if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$_fc_prefix"; then
+            echo ""
+            printf '  %b~/.muster/bin is not in your PATH.%b\n' "$_D" "$_R"
+            printf '  %bAdd it with:%b\n' "$_D" "$_R"
+            printf '  %b  export PATH="$HOME/.muster/bin:$PATH"%b\n' "$_D" "$_R"
+          fi
+
+          echo ""
+          printf '  Next steps:\n'
+          printf '  %b  muster-tunnel --help   # cloud transport CLI%b\n' "$_D" "$_R"
+          printf '  %b  muster-agent --help    # remote agent daemon%b\n' "$_D" "$_R"
+        else
+          printf '  %b!%b Some fleet cloud binaries failed to download.\n' "$_Y" "$_R"
+          printf '  %bNo pre-built release for %s/%s.%b\n' "$_D" "$_fc_os" "$_fc_arch" "$_R"
+          echo ""
+          printf '  %bInstall manually: https://github.com/%s%b\n' "$_D" "$FLEET_REPO" "$_R"
+        fi
+      fi
+      ;;
+    *)
+      if [[ "$_fresh_install" = true ]]; then
+        echo ""
+        printf '  %bSkipped. Install fleet cloud later:%b\n' "$_D" "$_R"
+        printf '  %b  curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash%b\n' "$_D" "$FLEET_REPO" "$_R"
+      fi
+      ;;
+  esac
+fi
+
 # ── First-time setup ──
 # On fresh install, offer to run muster setup immediately
 if [[ "$_fresh_install" = true && "$_interactive" = true ]]; then
