@@ -906,6 +906,11 @@ cmd_setup() {
   read -r project_path
   _SETUP_CUR_PROMPT="false"
 
+  # "back" or "home" returns to caller (home screen)
+  case "$project_path" in
+    [Bb][Aa][Cc][Kk]|[Hh][Oo][Mm][Ee]|[Qq][Uu][Ii][Tt]|[Ee][Xx][Ii][Tt]|[Qq]) return 0 ;;
+  esac
+
   project_path="${project_path:-..}"
   project_path="$(cd "$project_path" 2>/dev/null && pwd)" || {
     err "Path does not exist: $project_path"
