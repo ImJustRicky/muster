@@ -562,7 +562,8 @@ _settings_download_tui() {
     aarch64|arm64) _arch="arm64" ;;
   esac
 
-  local tui_url="https://github.com/${tui_repo}/releases/latest/download/muster-tui-${_os}-${_arch}"
+  local _bin_name="muster-tui-${_os}-${_arch}"
+  local tui_url="https://github.com/${tui_repo}/releases/latest/download/${_bin_name}"
   mkdir -p "$bin_dir"
 
   local tui_ok=false
@@ -570,6 +571,17 @@ _settings_download_tui() {
     if curl -fsSL "$tui_url" -o "${bin_dir}/muster-tui" 2>/dev/null; then
       chmod +x "${bin_dir}/muster-tui"
       tui_ok=true
+    else
+      # Fallback: resolve latest tag via API and try direct URL
+      local _latest_tag=""
+      _latest_tag=$(curl -fsSL "https://api.github.com/repos/${tui_repo}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/".*//')
+      if [[ -n "$_latest_tag" ]]; then
+        local _fallback_url="https://github.com/${tui_repo}/releases/download/${_latest_tag}/${_bin_name}"
+        if curl -fsSL "$_fallback_url" -o "${bin_dir}/muster-tui" 2>/dev/null; then
+          chmod +x "${bin_dir}/muster-tui"
+          tui_ok=true
+        fi
+      fi
     fi
   elif has_cmd wget; then
     if wget -q "$tui_url" -O "${bin_dir}/muster-tui" 2>/dev/null; then
