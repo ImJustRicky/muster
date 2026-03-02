@@ -480,7 +480,7 @@ _settings_pair_tui() {
     ok "Auth token already exists."
   else
     local tui_token=""
-    if tui_token=$(auth_create_token "muster-tui" "admin" 2>/dev/null) && [[ -n "$tui_token" ]]; then
+    if tui_token=$(_auth_create_token_internal "muster-tui" "admin" 2>/dev/null) && [[ -n "$tui_token" ]]; then
       if "$bin_path" --set-token "$tui_token" >/dev/null 2>&1; then
         ok "Auth token created and linked."
       else

@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/ImJustRicky/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.7"
+MUSTER_VERSION="0.5.8"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -161,7 +161,7 @@ case "${1:-}" in
       if [[ "$_tui_has_token" = false ]]; then
         source "$MUSTER_ROOT/lib/core/auth.sh"
         _tui_token=""
-        if _tui_token=$(auth_create_token "muster-tui" "admin" 2>/dev/null) && [[ -n "$_tui_token" ]]; then
+        if _tui_token=$(_auth_create_token_internal "muster-tui" "admin" 2>/dev/null) && [[ -n "$_tui_token" ]]; then
           muster-tui --set-token "$_tui_token" >/dev/null 2>&1 && _tui_has_token=true
         fi
       fi

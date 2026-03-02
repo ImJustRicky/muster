@@ -55,6 +55,42 @@ _auth_require_admin() {
   return 0
 }
 
+# Internal: create token without admin auth check.
+# Only for use within muster's own code (auto-pairing, installer).
+# Usage: _auth_create_token_internal "muster-tui" "admin"
+_auth_create_token_internal() {
+  local name="$1" scope="$2"
+  _auth_ensure_file
+
+  has_cmd jq || { echo "jq required" >&2; return 1; }
+
+  # Check for duplicate name
+  local existing
+  existing=$(jq -r --arg n "$name" '.tokens[] | select(.name == $n) | .name' "$MUSTER_TOKENS_FILE" 2>/dev/null)
+  if [[ -n "$existing" ]]; then
+    echo "Token '${name}' already exists. Revoke it first with: muster auth revoke ${name}" >&2
+    return 1
+  fi
+
+  local raw_token
+  raw_token=$(openssl rand -hex 32)
+  local token_hash
+  token_hash=$(_auth_hash "$raw_token")
+  local created
+  created=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+  local tmp="${MUSTER_TOKENS_FILE}.tmp"
+  jq --arg name "$name" \
+     --arg hash "sha256:${token_hash}" \
+     --arg scope "$scope" \
+     --arg created "$created" \
+     '.tokens += [{"name":$name,"token_hash":$hash,"scope":$scope,"created":$created,"last_used":""}]' \
+     "$MUSTER_TOKENS_FILE" > "$tmp" && mv "$tmp" "$MUSTER_TOKENS_FILE"
+  chmod 600 "$MUSTER_TOKENS_FILE"
+
+  printf '%s\n' "$raw_token"
+}
+
 # Generate a new token, print raw token to stdout
 # Usage: auth_create_token "my-laptop" "admin"
 auth_create_token() {

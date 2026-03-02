@@ -244,7 +244,7 @@ if [[ "$_interactive" = true ]]; then
           printf '  %b  muster-tui --set-token <new-token>%b\n' "$_D" "$_R"
         else
           _tui_token=""
-          if _tui_token=$(auth_create_token "muster-tui" "admin" 2>/dev/null) && [[ -n "$_tui_token" ]]; then
+          if _tui_token=$(_auth_create_token_internal "muster-tui" "admin" 2>/dev/null) && [[ -n "$_tui_token" ]]; then
             if "${BIN_DIR}/muster-tui" --set-token "$_tui_token" >/dev/null 2>&1; then
               printf '  %b✓%b Auth token created and linked.\n' "$_G" "$_R"
               echo ""
