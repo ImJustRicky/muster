@@ -173,13 +173,13 @@ if [[ "$_interactive" = true ]]; then
     read -r _tui_choice </dev/tty
     [[ "${_tui_choice:-1}" == "1" ]] && _tui_choice="skip"
     [[ "${_tui_choice:-}" == "2" ]] && _tui_choice="install"
-  elif [[ "$_fresh_install" = true ]]; then
+  else
     echo ""
     printf '  %b%bmuster-tui%b %bis an optional rich TUI frontend with a%b\n' "$_B" "$_M" "$_R" "$_D" "$_R"
     printf '  %bfull-screen dashboard, streaming deploy logs, and%b\n' "$_D" "$_R"
-    printf '  %bscrollable log viewer.%b\n' "$_D" "$_R"
+    printf '  %bscrollable log viewer. %b(experimental, not recommended)%b\n' "$_D" "$_Y" "$_R"
     echo ""
-    printf '  %b1)%b Skip — use the built-in bash TUI\n' "$_M" "$_R"
+    printf '  %b1)%b Skip %b(recommended)%b\n' "$_M" "$_R" "$_G" "$_R"
     printf '  %b2)%b Install muster-tui %b(downloads a pre-built binary)%b\n' "$_M" "$_R" "$_D" "$_R"
     echo ""
     printf '  %bChoose [1/2]:%b ' "$_M" "$_R"
@@ -272,12 +272,6 @@ if [[ "$_interactive" = true ]]; then
       fi
       ;;
     *)
-      # Only show skip message if the user actively chose to skip (fresh install)
-      if [[ "$_fresh_install" = true ]]; then
-        echo ""
-        printf '  %bSkipped. Install later with:%b\n' "$_D" "$_R"
-        printf '  %b  muster addon add tui%b\n' "$_D" "$_R"
-      fi
       ;;
   esac
 fi
@@ -315,7 +309,7 @@ if [[ "$_interactive" = true ]]; then
     read -r _fc_choice </dev/tty
     [[ "${_fc_choice:-1}" == "1" ]] && _fc_choice="skip"
     [[ "${_fc_choice:-}" == "2" ]] && _fc_choice="install"
-  elif [[ "$_fresh_install" = true ]]; then
+  else
     echo ""
     printf '  %b%bfleet cloud%b %bis an optional addon for cloud-based fleet%b\n' "$_B" "$_M" "$_R" "$_D" "$_R"
     printf '  %bdeployment. Installs muster-tunnel (CLI transport) and%b\n' "$_D" "$_R"
@@ -394,11 +388,6 @@ if [[ "$_interactive" = true ]]; then
       fi
       ;;
     *)
-      if [[ "$_fresh_install" = true ]]; then
-        echo ""
-        printf '  %bSkipped. Install later with:%b\n' "$_D" "$_R"
-        printf '  %b  muster addon add fleet-cloud%b\n' "$_D" "$_R"
-      fi
       ;;
   esac
 fi
