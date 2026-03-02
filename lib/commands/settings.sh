@@ -466,6 +466,33 @@ _settings_muster_global() {
   done
 }
 
+_settings_pair_tui() {
+  local bin_path="$1"
+  source "$MUSTER_ROOT/lib/core/auth.sh"
+  local has_tui_token=false
+  if [[ -f "$MUSTER_TOKENS_FILE" ]] && has_cmd jq; then
+    local existing_tui
+    existing_tui=$(jq -r '.tokens[] | select(.name == "muster-tui") | .name' "$MUSTER_TOKENS_FILE" 2>/dev/null)
+    [[ -n "$existing_tui" ]] && has_tui_token=true
+  fi
+
+  if [[ "$has_tui_token" = true ]]; then
+    ok "Auth token already exists."
+  else
+    local tui_token=""
+    if tui_token=$(auth_create_token "muster-tui" "admin" 2>/dev/null) && [[ -n "$tui_token" ]]; then
+      if "$bin_path" --set-token "$tui_token" >/dev/null 2>&1; then
+        ok "Auth token created and linked."
+      else
+        echo -e "  ${YELLOW}!${RESET} ${DIM}Token created. Connect manually:${RESET}"
+        echo -e "  ${DIM}  muster-tui --set-token ${tui_token}${RESET}"
+      fi
+    else
+      echo -e "  ${YELLOW}!${RESET} ${DIM}Could not create token (jq may be missing).${RESET}"
+    fi
+  fi
+}
+
 _settings_download_tui() {
   local bin_dir="${HOME}/.local/bin"
   local tui_repo="ImJustRicky/muster-tui"
@@ -473,18 +500,32 @@ _settings_download_tui() {
   echo ""
 
   # Check if already installed
-  local tui_ver=""
+  local tui_bin="" tui_ver=""
   if command -v muster-tui >/dev/null 2>&1; then
+    tui_bin="$(command -v muster-tui)"
     tui_ver="$(muster-tui --version 2>/dev/null || true)"
   elif [[ -x "${bin_dir}/muster-tui" ]]; then
+    tui_bin="${bin_dir}/muster-tui"
     tui_ver="$("${bin_dir}/muster-tui" --version 2>/dev/null || true)"
   fi
 
   if [[ -n "$tui_ver" ]]; then
     echo -e "  ${BOLD}${ACCENT_BRIGHT}muster-tui${RESET} ${DIM}already installed (${tui_ver})${RESET}"
     echo ""
-    menu_select "Reinstall?" "Reinstall / update" "Back"
-    [[ "$MENU_RESULT" == "Back" ]] && return 0
+    menu_select "Options" "Pair auth token" "Reinstall / update" "Back"
+    case "$MENU_RESULT" in
+      "Pair auth token")
+        echo ""
+        _settings_pair_tui "$tui_bin"
+        echo ""
+        echo -e "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        return 0
+        ;;
+      Back)
+        return 0
+        ;;
+    esac
   fi
 
   echo -e "  ${DIM}Downloading muster-tui...${RESET}"
@@ -518,27 +559,8 @@ _settings_download_tui() {
     new_ver="$("${bin_dir}/muster-tui" --version 2>/dev/null || echo "unknown")"
     echo ""
     ok "muster-tui installed! (${new_ver})"
-
-    # Auto-create auth token if needed
-    source "$MUSTER_ROOT/lib/core/auth.sh"
-    local has_tui_token=false
-    if [[ -f "$MUSTER_TOKENS_FILE" ]] && has_cmd jq; then
-      local existing_tui
-      existing_tui=$(jq -r '.tokens[] | select(.name == "muster-tui") | .name' "$MUSTER_TOKENS_FILE" 2>/dev/null)
-      [[ -n "$existing_tui" ]] && has_tui_token=true
-    fi
-
-    if [[ "$has_tui_token" = false ]]; then
-      local tui_token=""
-      if tui_token=$(auth_create_token "muster-tui" "admin" 2>/dev/null) && [[ -n "$tui_token" ]]; then
-        if "${bin_dir}/muster-tui" --set-token "$tui_token" >/dev/null 2>&1; then
-          ok "Auth token created and linked."
-        else
-          echo -e "  ${YELLOW}!${RESET} ${DIM}Token created. Connect manually:${RESET}"
-          echo -e "  ${DIM}  muster-tui --set-token ${tui_token}${RESET}"
-        fi
-      fi
-    fi
+    echo ""
+    _settings_pair_tui "${bin_dir}/muster-tui"
   else
     err "Could not download muster-tui binary."
     echo -e "  ${DIM}No pre-built release for ${_os}/${_arch}.${RESET}"

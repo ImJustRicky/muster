@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/ImJustRicky/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.4"
+MUSTER_VERSION="0.5.5"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -141,7 +141,10 @@ case "${1:-}" in
     echo "  -h, --help      Show this help"
     ;;
   "")
-    # Default: open dashboard
+    # Default: prefer muster-tui (Go TUI) if installed, fall back to bash dashboard
+    if command -v muster-tui >/dev/null 2>&1; then
+      exec muster-tui "$@"
+    fi
     source "$MUSTER_ROOT/lib/tui/dashboard.sh"
     cmd_dashboard
     ;;
