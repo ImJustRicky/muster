@@ -8,12 +8,12 @@ BIN_DIR="${MUSTER_BIN_DIR:-$HOME/.local/bin}"
 MANIFEST="${INSTALL_DIR}/install.json"
 
 # When piped (curl | bash), stdin is the script itself, not the terminal.
-# Re-attach stdin to /dev/tty so interactive prompts work.
+# We can't `exec </dev/tty` because bash is still reading the script from fd 0.
+# Instead, we redirect individual `read` commands from /dev/tty.
 _interactive=false
 if [[ -t 0 ]]; then
   _interactive=true
 elif [[ -e /dev/tty ]]; then
-  exec </dev/tty
   _interactive=true
 fi
 
@@ -102,7 +102,7 @@ if [[ "$_needs_path" = true ]]; then
 
   if [[ -n "$_shell_profile" && "$_interactive" = true ]]; then
     printf "  Add to %s? [Y/n] " "$_shell_profile"
-    read -r _answer
+    read -r _answer </dev/tty
     case "${_answer:-Y}" in
       [Yy]|"")
         echo "" >> "$_shell_profile"
@@ -151,7 +151,7 @@ if [[ "$_interactive" = true ]]; then
     echo "  2) Reinstall / update muster-tui"
     echo ""
     printf "  Choose [1/2]: "
-    read -r _tui_choice
+    read -r _tui_choice </dev/tty
     # Map "keep" to skip
     [[ "${_tui_choice:-1}" == "1" ]] && _tui_choice="skip"
     [[ "${_tui_choice:-}" == "2" ]] && _tui_choice="install"
@@ -165,7 +165,7 @@ if [[ "$_interactive" = true ]]; then
     echo "  2) Install muster-tui (downloads a pre-built binary)"
     echo ""
     printf "  Choose [1/2]: "
-    read -r _tui_choice
+    read -r _tui_choice </dev/tty
     [[ "${_tui_choice:-1}" == "1" ]] && _tui_choice="skip"
     [[ "${_tui_choice:-}" == "2" ]] && _tui_choice="install"
   fi
@@ -267,7 +267,7 @@ if [[ "$_fresh_install" = true && "$_interactive" = true ]]; then
   echo ""
   echo "  Ready to set up your first project?"
   printf "  Run muster setup now? [Y/n] "
-  read -r _setup_answer
+  read -r _setup_answer </dev/tty
   case "${_setup_answer:-Y}" in
     [Yy]|"")
       echo ""
