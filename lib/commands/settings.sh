@@ -5,6 +5,8 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 
 source "$MUSTER_ROOT/lib/commands/settings_tui.sh"
+source "$MUSTER_ROOT/lib/commands/group.sh"
+source "$MUSTER_ROOT/lib/commands/projects.sh"
 
 # Toggle selector and TUI widgets loaded from lib/commands/settings_tui.sh
 
@@ -229,9 +231,9 @@ cmd_settings() {
     echo ""
 
     if [[ "$_has_project" == "true" ]]; then
-      menu_select "Settings" "Project Settings" "Muster Settings" "Back"
+      menu_select "Settings" "Project Settings" "Muster Settings" "Fleet Groups" "Projects" "Back"
     else
-      menu_select "Settings" "Muster Settings" "Back"
+      menu_select "Settings" "Muster Settings" "Fleet Groups" "Projects" "Back"
     fi
 
     case "$MENU_RESULT" in
@@ -240,6 +242,12 @@ cmd_settings() {
         ;;
       "Muster Settings")
         _settings_muster_global
+        ;;
+      "Fleet Groups")
+        _group_cmd_manager
+        ;;
+      "Projects")
+        _projects_manage
         ;;
       Back)
         return 0

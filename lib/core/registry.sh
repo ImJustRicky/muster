@@ -91,6 +91,18 @@ _registry_prune() {
   echo "$removed"
 }
 
+# Remove a single project entry by path
+# Usage: _registry_remove "/path/to/project"
+_registry_remove() {
+  local target_path="$1"
+  _registry_ensure_file
+  has_cmd jq || return 1
+
+  local tmp="${MUSTER_PROJECTS_FILE}.tmp"
+  jq --arg p "$target_path" '.projects = [.projects[] | select(.path != $p)]' \
+    "$MUSTER_PROJECTS_FILE" > "$tmp" && mv "$tmp" "$MUSTER_PROJECTS_FILE"
+}
+
 # List projects as formatted lines (for internal use)
 _registry_list() {
   _registry_ensure_file

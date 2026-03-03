@@ -21,6 +21,9 @@ cmd_group() {
     delete|rm)  shift; _group_cmd_delete "$@" ;;
     add)        shift; _group_cmd_add "$@" ;;
     remove)     shift; _group_cmd_remove "$@" ;;
+    rename)     shift; _group_cmd_rename_cli "$@" ;;
+    edit)       shift; _group_cmd_edit_cli "$@" ;;
+    reorder)    shift; _group_cmd_reorder_cli "$@" ;;
     deploy)     shift; _group_cmd_deploy "$@" ;;
     status)     shift; _group_cmd_status "$@" ;;
     --help|-h)  _group_cmd_help ;;
@@ -53,6 +56,9 @@ _group_cmd_help() {
   echo "  delete <name>       Delete a group"
   echo "  add <group> [target] Add a project (path for local, user@host for remote)"
   echo "  remove <group>      Remove a project from a group"
+  echo "  rename <group> <name> Rename a group"
+  echo "  edit <group> <idx>  Edit a remote project's SSH details"
+  echo "  reorder <group>     Reorder projects interactively"
   echo "  deploy <group>      Deploy all projects in a group"
   echo "  status <group>      Show health of all projects in a group"
   echo ""
@@ -450,6 +456,151 @@ _group_cmd_remove() {
   echo ""
   groups_remove_project "$group_name" "$remove_index"
   echo ""
+}
+
+# ── Rename (CLI) ──
+
+_group_cmd_rename_cli() {
+  local group_name="${1:-}"
+  local new_name="${2:-}"
+
+  if [[ -z "$group_name" ]]; then
+    err "Usage: muster group rename <group> <new-name>"
+    return 1
+  fi
+
+  if ! groups_exists "$group_name"; then
+    err "Group '${group_name}' not found"
+    return 1
+  fi
+
+  if [[ -z "$new_name" ]]; then
+    if [[ -t 0 ]]; then
+      _group_rename "$group_name"
+      return $?
+    fi
+    err "Usage: muster group rename <group> <new-name>"
+    return 1
+  fi
+
+  groups_set ".groups.\"${group_name}\".name" "\"${new_name}\""
+  ok "Renamed group '${group_name}' to '${new_name}'"
+}
+
+# ── Edit (CLI) ──
+
+_group_cmd_edit_cli() {
+  local group_name="${1:-}"
+  shift 2>/dev/null || true
+  local index="${1:-}"
+  shift 2>/dev/null || true
+
+  if [[ -z "$group_name" ]]; then
+    err "Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D]"
+    return 1
+  fi
+
+  if ! groups_exists "$group_name"; then
+    err "Group '${group_name}' not found"
+    return 1
+  fi
+
+  # No index: interactive
+  if [[ -z "$index" ]]; then
+    if [[ -t 0 ]]; then
+      _group_edit_project "$group_name"
+      return $?
+    fi
+    err "Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D]"
+    return 1
+  fi
+
+  # Validate index
+  local total
+  total=$(groups_project_count "$group_name")
+  if ! [[ "$index" =~ ^[0-9]+$ ]] || (( index >= total )); then
+    err "Invalid project index: ${index} (group has ${total} project(s), 0-indexed)"
+    return 1
+  fi
+
+  local _type
+  _type=$(jq -r --arg n "$group_name" --argjson i "$index" \
+    '.groups[$n].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+
+  if [[ "$_type" != "remote" ]]; then
+    err "Only remote projects can be edited via CLI (local projects: remove and re-add)"
+    return 1
+  fi
+
+  # Parse flags
+  local new_host="" new_user="" new_port="" new_key="" new_dir=""
+  local has_changes=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --host)  new_host="$2"; has_changes=true; shift 2 ;;
+      --user)  new_user="$2"; has_changes=true; shift 2 ;;
+      --port|-p) new_port="$2"; has_changes=true; shift 2 ;;
+      --key|-k)  new_key="$2"; has_changes=true; shift 2 ;;
+      --path)  new_dir="$2"; has_changes=true; shift 2 ;;
+      --help|-h)
+        echo "Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D]"
+        return 0
+        ;;
+      *) err "Unknown flag: $1"; return 1 ;;
+    esac
+  done
+
+  if [[ "$has_changes" == "false" ]]; then
+    if [[ -t 0 ]]; then
+      _group_edit_remote_fields "$group_name" "$index"
+      return $?
+    fi
+    err "No changes specified. Use --host, --user, --port, --key, or --path."
+    return 1
+  fi
+
+  # Apply only specified fields
+  local tmp="${GROUPS_CONFIG_FILE}.tmp"
+  local jq_expr=""
+  [[ -n "$new_host" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].host = \$host"
+  [[ -n "$new_user" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].user = \$user"
+  [[ -n "$new_port" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].port = (\$port | tonumber)"
+  [[ -n "$new_key" ]]  && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].identity_file = \$key"
+  [[ -n "$new_dir" ]]  && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].project_dir = \$dir"
+
+  # Strip leading " | "
+  jq_expr="${jq_expr# | }"
+
+  jq --arg g "$group_name" --argjson i "$index" \
+    --arg host "${new_host:-}" --arg user "${new_user:-}" \
+    --arg port "${new_port:-0}" --arg key "${new_key:-}" --arg dir "${new_dir:-}" \
+    "$jq_expr" "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+
+  ok "Updated remote project at index ${index}"
+}
+
+# ── Reorder (CLI) ──
+
+_group_cmd_reorder_cli() {
+  local group_name="${1:-}"
+
+  if [[ -z "$group_name" ]]; then
+    err "Usage: muster group reorder <group>"
+    return 1
+  fi
+
+  if ! groups_exists "$group_name"; then
+    err "Group '${group_name}' not found"
+    return 1
+  fi
+
+  if [[ -t 0 ]]; then
+    _group_reorder "$group_name"
+  else
+    err "Reorder requires an interactive terminal"
+    return 1
+  fi
 }
 
 # ── Deploy ──
@@ -970,6 +1121,302 @@ _group_cmd_manager() {
   done
 }
 
+# ── Rename ──
+
+_group_rename() {
+  local group_name="$1"
+  local display_name
+  display_name=$(groups_get ".groups.\"${group_name}\".name")
+  [[ "$display_name" == "null" || -z "$display_name" ]] && display_name="$group_name"
+
+  echo ""
+  printf '  Current name: %b%s%b\n' "${WHITE}" "$display_name" "${RESET}"
+  printf '  New name: '
+  local new_name
+  IFS= read -r new_name
+  [[ -z "$new_name" ]] && return 0
+
+  groups_set ".groups.\"${group_name}\".name" "\"${new_name}\""
+  echo ""
+  ok "Renamed to '${new_name}'"
+  echo ""
+  printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+  IFS= read -rsn1 || true
+}
+
+# ── Edit project ──
+
+_group_edit_project() {
+  local group_name="$1"
+  local total
+  total=$(groups_project_count "$group_name")
+
+  if (( total == 0 )); then
+    warn "No projects to edit"
+    return 0
+  fi
+
+  # Build picker
+  local options=()
+  local pi=0
+  while (( pi < total )); do
+    local _pname _desc _type
+    _pname=$(groups_project_name "$group_name" "$pi")
+    _type=$(jq -r --arg n "$group_name" --argjson i "$pi" \
+      '.groups[$n].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    _desc=$(groups_project_desc "$group_name" "$pi")
+    [[ "${_desc:0:1}" == "/" ]] && _desc="${_desc/#$HOME/~}"
+    options[${#options[@]}]="${_pname} (${_desc})"
+    pi=$(( pi + 1 ))
+  done
+  options[${#options[@]}]="Back"
+
+  echo ""
+  menu_select "Edit which project?" "${options[@]}"
+  [[ "$MENU_RESULT" == "Back" || "$MENU_RESULT" == "__back__" ]] && return 0
+
+  # Find selected index
+  local sel_idx=-1 si=0
+  while (( si < total )); do
+    local _pname _desc
+    _pname=$(groups_project_name "$group_name" "$si")
+    _desc=$(groups_project_desc "$group_name" "$si")
+    [[ "${_desc:0:1}" == "/" ]] && _desc="${_desc/#$HOME/~}"
+    if [[ "$MENU_RESULT" == "${_pname} (${_desc})" ]]; then
+      sel_idx="$si"
+      break
+    fi
+    si=$(( si + 1 ))
+  done
+  (( sel_idx < 0 )) && return 0
+
+  local _type
+  _type=$(jq -r --arg n "$group_name" --argjson i "$sel_idx" \
+    '.groups[$n].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+
+  if [[ "$_type" == "local" ]]; then
+    local _path
+    _path=$(jq -r --arg n "$group_name" --argjson i "$sel_idx" \
+      '.groups[$n].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    echo ""
+    printf '  %bLocal project%b\n' "${BOLD}" "${RESET}"
+    printf '  Path: %b%s%b\n' "${WHITE}" "$_path" "${RESET}"
+    printf '%b\n' "  ${DIM}(Remove and re-add to change path)${RESET}"
+    echo ""
+    printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+    IFS= read -rsn1 || true
+  else
+    _group_edit_remote_fields "$group_name" "$sel_idx"
+  fi
+}
+
+_group_edit_remote_fields() {
+  local group_name="$1" idx="$2"
+
+  local cur_host cur_user cur_port cur_key cur_dir
+  cur_host=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].host // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_user=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].user // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_port=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].port // 22' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_key=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].identity_file // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_dir=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].project_dir // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  [[ "$cur_key" == "null" ]] && cur_key=""
+  [[ "$cur_dir" == "null" ]] && cur_dir=""
+
+  echo ""
+  printf '  %bEdit Remote Project%b\n' "${BOLD}" "${RESET}"
+  printf '%b\n' "  ${DIM}Press Enter to keep current value${RESET}"
+  echo ""
+
+  printf '  Host [%s]: ' "$cur_host"
+  local new_host; IFS= read -r new_host
+  [[ -z "$new_host" ]] && new_host="$cur_host"
+
+  printf '  User [%s]: ' "$cur_user"
+  local new_user; IFS= read -r new_user
+  [[ -z "$new_user" ]] && new_user="$cur_user"
+
+  printf '  Port [%s]: ' "$cur_port"
+  local new_port; IFS= read -r new_port
+  [[ -z "$new_port" ]] && new_port="$cur_port"
+
+  printf '  SSH key [%s]: ' "${cur_key:-(none)}"
+  local new_key; IFS= read -r new_key
+  [[ -z "$new_key" ]] && new_key="$cur_key"
+
+  printf '  Project dir [%s]: ' "${cur_dir:-(none)}"
+  local new_dir; IFS= read -r new_dir
+  [[ -z "$new_dir" ]] && new_dir="$cur_dir"
+
+  # Save all fields via single jq update
+  local tmp="${GROUPS_CONFIG_FILE}.tmp"
+  jq --arg g "$group_name" --argjson i "$idx" \
+    --arg host "$new_host" --arg user "$new_user" --argjson port "$new_port" \
+    --arg key "$new_key" --arg dir "$new_dir" \
+    '.groups[$g].projects[$i].host = $host |
+     .groups[$g].projects[$i].user = $user |
+     .groups[$g].projects[$i].port = $port |
+     (if $key != "" then .groups[$g].projects[$i].identity_file = $key
+      else del(.groups[$g].projects[$i].identity_file) end) |
+     (if $dir != "" then .groups[$g].projects[$i].project_dir = $dir
+      else del(.groups[$g].projects[$i].project_dir) end)' \
+    "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+
+  echo ""
+  ok "Remote project updated"
+  echo ""
+  printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+  IFS= read -rsn1 || true
+}
+
+# ── Reorder projects ──
+
+_group_reorder() {
+  local group_name="$1"
+  local total
+  total=$(groups_project_count "$group_name")
+
+  if (( total < 2 )); then
+    echo ""
+    info "Need at least 2 projects to reorder"
+    echo ""
+    printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+    IFS= read -rsn1 || true
+    return 0
+  fi
+
+  local selected=0
+
+  tput civis
+
+  local _ro_w=$(( TERM_COLS - 4 ))
+  (( _ro_w > 50 )) && _ro_w=50
+  (( _ro_w < 20 )) && _ro_w=20
+
+  _ro_draw_header() {
+    echo ""
+    printf '  %bReorder Projects%b\n' "${BOLD}" "${RESET}"
+    printf '  %b↑/↓ select  ⏎ swap down  q done%b\n' "${DIM}" "${RESET}"
+  }
+
+  _ro_draw() {
+    local _t
+    _t=$(groups_project_count "$group_name")
+    local ri=0
+    while (( ri < _t )); do
+      local _pname
+      _pname=$(groups_project_name "$group_name" "$ri")
+      local _type
+      _type=$(jq -r --arg n "$group_name" --argjson idx "$ri" \
+        '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+
+      local _icon
+      [[ "$_type" == "local" ]] && _icon="●" || _icon="◆"
+
+      if (( ri == selected )); then
+        local text="  ▸ ${_icon} ${_pname}"
+        local text_len=${#text}
+        local bar_pad=$(( _ro_w - text_len ))
+        (( bar_pad < 0 )) && bar_pad=0
+        local pad
+        pad=$(printf '%*s' "$bar_pad" "")
+        printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
+      else
+        printf '    %s %s\n' "$_icon" "$_pname"
+      fi
+      ri=$(( ri + 1 ))
+    done
+
+    # Done row
+    if (( selected == _t )); then
+      local text="  ▸ Done"
+      local text_len=${#text}
+      local bar_pad=$(( _ro_w - text_len ))
+      (( bar_pad < 0 )) && bar_pad=0
+      local pad
+      pad=$(printf '%*s' "$bar_pad" "")
+      printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
+    else
+      printf '    %bDone%b\n' "${DIM}" "${RESET}"
+    fi
+  }
+
+  local total_lines=$(( total + 1 ))
+
+  _ro_clear() {
+    local ci=0
+    while (( ci < total_lines )); do
+      tput cuu1
+      ci=$(( ci + 1 ))
+    done
+    tput ed
+  }
+
+  _ro_read_key() {
+    local key
+    IFS= read -rsn1 key || true
+    if [[ "$key" == $'\x1b' ]]; then
+      local seq1 seq2
+      IFS= read -rsn1 -t 1 seq1 || true
+      IFS= read -rsn1 -t 1 seq2 || true
+      key="${key}${seq1}${seq2}"
+    fi
+    REPLY="$key"
+  }
+
+  _ro_draw_header
+  _ro_draw
+
+  while true; do
+    _ro_read_key
+
+    case "$REPLY" in
+      $'\x1b[A')
+        (( selected > 0 )) && selected=$((selected - 1))
+        ;;
+      $'\x1b[B')
+        (( selected < total )) && selected=$((selected + 1))
+        ;;
+      'q'|'Q')
+        _ro_clear
+        tput cnorm
+        return 0
+        ;;
+      '')
+        if (( selected == total )); then
+          # Done
+          _ro_clear
+          tput cnorm
+          return 0
+        fi
+        # Swap selected with next (if not last project)
+        if (( selected < total - 1 )); then
+          local tmp="${GROUPS_CONFIG_FILE}.tmp"
+          local next=$(( selected + 1 ))
+          jq --arg g "$group_name" --argjson a "$selected" --argjson b "$next" '
+            .groups[$g].projects as $p |
+            .groups[$g].projects[$a] = $p[$b] |
+            .groups[$g].projects[$b] = $p[$a]
+          ' "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+          selected=$next
+        fi
+        ;;
+      *)
+        continue
+        ;;
+    esac
+
+    _ro_clear
+    _ro_draw
+  done
+}
+
+# ── Detail Menu ──
+
 _group_detail_menu() {
   local group_name="$1"
 
@@ -1022,6 +1469,9 @@ _group_detail_menu() {
     actions[${#actions[@]}]="Status"
     actions[${#actions[@]}]="Add project"
     actions[${#actions[@]}]="Remove project"
+    actions[${#actions[@]}]="Rename group"
+    actions[${#actions[@]}]="Edit project"
+    actions[${#actions[@]}]="Reorder projects"
     actions[${#actions[@]}]="Delete group"
     actions[${#actions[@]}]="Back"
 
@@ -1045,6 +1495,15 @@ _group_detail_menu() {
         ;;
       "Remove project")
         _group_cmd_remove "$group_name"
+        ;;
+      "Rename group")
+        _group_rename "$group_name"
+        ;;
+      "Edit project")
+        _group_edit_project "$group_name"
+        ;;
+      "Reorder projects")
+        _group_reorder "$group_name"
         ;;
       "Delete group")
         groups_delete "$group_name"
