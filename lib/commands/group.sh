@@ -752,6 +752,11 @@ _group_cmd_deploy() {
     "$display_name" "$total" "$([ "$total" != "1" ] && echo "s")"
   echo ""
 
+  local _preview_lines=3
+  local _w=$(( TERM_COLS - 6 ))
+  (( _w > 70 )) && _w=70
+  (( _w < 20 )) && _w=20
+
   local i=0
   while (( i < total )); do
     local current=$(( i + 1 ))
@@ -765,20 +770,90 @@ _group_cmd_deploy() {
     local rc=0
 
     while true; do
+      # Draw progress bar
       progress_bar "$i" "$total" "${_pname}"
       echo ""
+      echo ""
 
+      # Print empty preview lines (to be overwritten)
+      local _pi=0
+      while (( _pi < _preview_lines )); do
+        printf '  %b│%b\n' "${DIM}" "${RESET}"
+        _pi=$(( _pi + 1 ))
+      done
+
+      # Ensure log file exists
+      : > "$log_file"
+
+      # Launch deploy in background
       if [[ "$_type" == "local" ]]; then
-        _group_deploy_local "$group_name" "$i" "$log_file"
-        rc=$?
+        _group_deploy_local "$group_name" "$i" "$log_file" &
       else
-        _group_deploy_remote "$group_name" "$i" "$log_file"
-        rc=$?
+        _group_deploy_remote "$group_name" "$i" "$log_file" &
       fi
+      local _deploy_pid=$!
+
+      # Live tail: redraw preview lines while deploy runs
+      local _frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+      local _fi=0
+      tput civis 2>/dev/null || true
+
+      while kill -0 "$_deploy_pid" 2>/dev/null; do
+        if [[ "$_group_interrupted" == "true" ]]; then
+          kill "$_deploy_pid" 2>/dev/null
+          wait "$_deploy_pid" 2>/dev/null || true
+          break
+        fi
+
+        # Move cursor up to overwrite preview lines
+        printf '\033[%dA' "$_preview_lines"
+
+        # Read last N lines from log
+        local _tl=()
+        local _tl_count=0
+        while IFS= read -r _tline; do
+          # Strip ANSI escapes
+          _tline=$(printf '%s' "$_tline" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
+          _tl[${#_tl[@]}]="$_tline"
+          _tl_count=$(( _tl_count + 1 ))
+        done < <(tail -n "$_preview_lines" "$log_file" 2>/dev/null)
+
+        _pi=0
+        while (( _pi < _preview_lines )); do
+          local _line=""
+          if (( _pi < _tl_count )); then
+            _line="${_tl[$_pi]}"
+          fi
+          # Truncate to width
+          if (( ${#_line} > _w )); then
+            _line="${_line:0:$((_w - 3))}..."
+          fi
+          # Pad to clear previous content
+          local _pad_len=$(( _w - ${#_line} ))
+          (( _pad_len < 0 )) && _pad_len=0
+          local _pad
+          _pad=$(printf '%*s' "$_pad_len" "")
+          printf '  %b│%b %b%s%b%s\n' \
+            "${DIM}" "${RESET}" \
+            "${DIM}" "$_line" "${RESET}" "$_pad"
+          _pi=$(( _pi + 1 ))
+        done
+
+        sleep 1
+      done
+
+      tput cnorm 2>/dev/null || true
+
+      # Get exit code
+      wait "$_deploy_pid" 2>/dev/null
+      rc=$?
 
       # Check if interrupted
       if [[ "$_group_interrupted" == "true" ]]; then
-        echo ""
+        # Clear preview lines
+        printf '\033[%dA' "$_preview_lines"
+        _pi=0
+        while (( _pi < _preview_lines )); do printf '\033[K\n'; _pi=$((_pi+1)); done
         err "${_pname} deploy interrupted"
         failed=$(( total - succeeded - skipped ))
         echo ""
@@ -787,6 +862,13 @@ _group_cmd_deploy() {
         return 130
       fi
 
+      # Clear preview lines
+      printf '\033[%dA' "$_preview_lines"
+      _pi=0
+      while (( _pi < _preview_lines )); do printf '\033[K\n'; _pi=$((_pi+1)); done
+      # Move back up past the cleared lines
+      printf '\033[%dA' "$_preview_lines"
+
       if (( rc == 0 )); then
         progress_bar "$current" "$total" "${_pname}"
         echo ""
@@ -794,13 +876,13 @@ _group_cmd_deploy() {
         succeeded=$(( succeeded + 1 ))
         break
       else
-        echo ""
         err "${_pname} deploy failed"
 
         # Show last few lines in red
         if [[ -f "$log_file" ]] && [[ -s "$log_file" ]]; then
           echo ""
           tail -10 "$log_file" | while IFS= read -r _line; do
+            _line=$(printf '%s' "$_line" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
             printf '  %b%s%b\n' "${RED}" "$_line" "${RESET}"
           done
           echo ""
@@ -822,6 +904,7 @@ _group_cmd_deploy() {
             failed=$(( total - succeeded - skipped ))
             echo ""
             _group_deploy_summary "$succeeded" "$skipped" "$failed" "$total"
+            trap - INT
             return 1
             ;;
         esac
