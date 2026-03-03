@@ -246,9 +246,9 @@ cmd_settings() {
     echo ""
 
     if [[ "$_has_project" == "true" ]]; then
-      menu_select "Settings" "Project Settings" "Muster Settings" "Fleet Groups" "Projects" "Back"
+      menu_select "Settings" "Project Settings" "Muster Settings" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     else
-      menu_select "Settings" "Muster Settings" "Fleet Groups" "Projects" "Back"
+      menu_select "Settings" "Muster Settings" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     fi
 
     case "$MENU_RESULT" in
@@ -260,6 +260,11 @@ cmd_settings() {
         ;;
       "Fleet Groups")
         _group_cmd_manager
+        ;;
+      "Fleet Trust")
+        source "$MUSTER_ROOT/lib/core/trust.sh"
+        source "$MUSTER_ROOT/lib/commands/trust.sh"
+        _trust_cmd_manager
         ;;
       "Projects")
         _projects_manage
