@@ -96,6 +96,37 @@ cmd_uninstall() {
   echo ""
 }
 
+# Remove muster PATH entries from shell profiles
+_uninstall_clean_path() {
+  local bin_dir="$1"
+  local _profile _tmp _cleaned
+
+  for _profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    [[ -f "$_profile" ]] || continue
+    if grep -q "$bin_dir" "$_profile" 2>/dev/null; then
+      _tmp="${_profile}.muster-tmp"
+      # Remove the PATH export line and the comment above it
+      grep -v "# Added by muster installer" "$_profile" \
+        | grep -v "# Muster Fleet Cloud" \
+        | grep -v "$bin_dir" > "$_tmp"
+      mv "$_tmp" "$_profile"
+      ok "Cleaned PATH from ${_profile}"
+    fi
+  done
+}
+
+# Remove from PATH only — keep all files
+_uninstall_path_only() {
+  local bin_dir="$1"
+  _uninstall_clean_path "$bin_dir"
+  echo ""
+  ok "Removed muster from PATH."
+  printf '%b\n' "  ${DIM}Files kept in ${MUSTER_INSTALL_DIR:-$HOME/.muster}/${RESET}"
+  printf '%b\n' "  ${DIM}Binaries kept in ${bin_dir}/${RESET}"
+  printf '%b\n' "  ${DIM}To fully remove: muster uninstall --system${RESET}"
+  echo ""
+}
+
 _uninstall_system() {
   muster_tui_fullscreen
   local install_dir="${MUSTER_INSTALL_DIR:-$HOME/.muster}"
@@ -115,27 +146,39 @@ _uninstall_system() {
   printf '%b\n' "  ${DIM}Project configs (.muster/ in your projects) will NOT be removed.${RESET}"
   echo ""
 
-  menu_select "Are you sure?" "No, keep muster" "Yes, uninstall muster"
+  menu_select "What would you like to do?" \
+    "Cancel — keep everything" \
+    "Remove from PATH only — keep files for later" \
+    "Remove everything — delete all muster files"
 
-  if [[ "$MENU_RESULT" != "Yes, uninstall muster" ]]; then
-    info "Cancelled"
-    echo ""
-    return 0
-  fi
+  case "$MENU_RESULT" in
+    *"Cancel"*)
+      info "Cancelled"
+      echo ""
+      return 0
+      ;;
+    *"Remove from PATH only"*)
+      _uninstall_path_only "$bin_dir"
+      ;;
+    *"Remove everything"*)
+      # Remove binaries/symlinks
+      rm -f "${bin_dir}/muster" "${bin_dir}/muster-mcp" "${bin_dir}/muster-tui" \
+        "${bin_dir}/muster-tunnel" "${bin_dir}/muster-agent" 2>/dev/null
+      ok "Removed binaries"
 
-  # Remove binaries/symlinks
-  rm -f "${bin_dir}/muster" "${bin_dir}/muster-mcp" "${bin_dir}/muster-tui" \
-    "${bin_dir}/muster-tunnel" "${bin_dir}/muster-agent" 2>/dev/null
-  ok "Removed binaries"
+      # Remove install directory
+      if [[ -d "$install_dir" ]]; then
+        rm -rf "$install_dir"
+        ok "Removed ${install_dir}/"
+      fi
 
-  # Remove install directory
-  if [[ -d "$install_dir" ]]; then
-    rm -rf "$install_dir"
-    ok "Removed ${install_dir}/"
-  fi
+      # Clean PATH from shell profiles
+      _uninstall_clean_path "$bin_dir"
 
-  echo ""
-  ok "muster has been uninstalled."
-  printf '%b\n' "  ${DIM}To reinstall: curl -fsSL https://getmuster.dev/install.sh | bash${RESET}"
-  echo ""
+      echo ""
+      ok "muster has been uninstalled."
+      printf '%b\n' "  ${DIM}To reinstall: curl -fsSL https://getmuster.dev/install.sh | bash${RESET}"
+      echo ""
+      ;;
+  esac
 }

@@ -151,42 +151,51 @@ cmd_group() {
 # ── Help ──
 
 _group_cmd_help() {
-  printf '%b\n' "${BOLD}muster group${RESET} — Fleet Groups (cross-project deploy orchestration)"
+  printf '%b\n' "${BOLD}muster group${RESET} — Orchestrate multiple projects as one deploy"
+  echo ""
+  echo "  Combine local and remote projects into a group, then deploy them"
+  echo "  together in order. Each project can use SSH or cloud transport."
   echo ""
   echo "Usage: muster group [command]"
+  echo "       muster deploy fleet <group>   (shortcut)"
   echo ""
   echo "Commands:"
   echo "  (none)              Interactive group manager"
   echo "  list                List all groups"
   echo "  create <name>       Create a new group"
   echo "  delete <name>       Delete a group"
-  echo "  add <group> [target] Add a project (path for local, user@host for remote)"
+  echo "  add <group> [target] Add a project to a group"
   echo "  remove <group>      Remove a project from a group"
   echo "  rename <group> <name> Rename a group"
-  echo "  edit <group> <idx>  Edit a remote project's SSH details"
+  echo "  edit <group> <idx>  Edit a remote project's connection settings"
   echo "  reorder <group>     Reorder projects interactively"
   echo "  deploy <group>      Deploy all projects in a group"
   echo "  status <group>      Show health of all projects in a group"
   echo ""
-  echo "Options:"
-  echo "  --port, -p    SSH port for remote projects (default: 22)"
-  echo "  --key, -k     SSH identity file for remote projects"
-  echo "  --path        Project directory on remote machine"
-  echo "  --cloud       Use cloud tunnel transport (instead of SSH)"
-  echo "  --auth        Auth method: key, password, agent"
-  echo "  --auth-mode   Password mode: save, session, always"
-  echo "  --dry-run     Preview deploy plan without executing"
-  echo "  --json        Output as JSON"
-  echo "  -h, --help    Show this help"
+  echo "Project types:"
+  echo "  Local               muster group add prod /path/to/project"
+  echo "  Remote (SSH key)    muster group add prod deploy@10.0.1.5 --path /opt/app"
+  echo "  Remote (SSH pass)   muster group add prod deploy@10.0.1.5 --auth password"
+  echo "  Remote (cloud)      muster group add prod agent-name --cloud --path /opt/app"
   echo ""
-  echo "Examples:"
-  echo "  muster group create production"
-  echo "  muster group add production /path/to/api"
-  echo "  muster group add production deploy@10.0.1.5 --path /opt/frontend"
-  echo "  muster group add production deploy@10.0.1.5 --auth password --auth-mode session"
-  echo "  muster group add production agent-prod-east --cloud --path /opt/app"
-  echo "  muster group deploy production"
-  echo "  muster group status production"
+  echo "Add options:"
+  echo "  --port, -p N        SSH port (default: 22)"
+  echo "  --key, -k FILE      SSH identity file"
+  echo "  --path DIR          Project directory on remote"
+  echo "  --cloud             Route through cloud tunnel (instead of SSH)"
+  echo "  --auth METHOD       Auth: key (default), password, agent"
+  echo "  --auth-mode MODE    Password handling: save, session, always"
+  echo ""
+  echo "Deploy options:"
+  echo "  --dry-run           Preview deploy plan without executing"
+  echo "  --json              Output as JSON"
+  echo ""
+  echo "Edit options:"
+  echo "  --host, --user, --port, --key, --path   Change connection details"
+  echo "  --cloud / --no-cloud                    Toggle cloud transport"
+  echo "  --auth, --auth-mode                     Change auth settings"
+  echo ""
+  echo "Other: -h, --help    Show this help"
 }
 
 # ── List ──
@@ -1058,9 +1067,11 @@ _group_cmd_deploy() {
   fi
 
   # Progress bar — printed once, updated via full-section redraw
-  local _first_pname
+  local _first_pname _first_pdesc
   _first_pname=$(groups_project_name "$group_name" "0")
-  progress_bar 0 "$_total_steps" "$_first_pname"
+  _first_pdesc=$(groups_project_desc "$group_name" "0")
+  [[ "${_first_pdesc:0:1}" == "/" ]] && _first_pdesc="${_first_pdesc/#$HOME/~}"
+  progress_bar 0 "$_total_steps" "${_first_pname}  ${_first_pdesc}"
   echo ""
   local _result_lines=()
   local _section_h=2
@@ -1070,10 +1081,12 @@ _group_cmd_deploy() {
   while (( i < total )); do
     local current=$(( i + 1 ))
 
-    local _type _pname
+    local _type _pname _pdesc
     _type=$(jq -r --arg n "$group_name" --argjson idx "$i" \
       '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
     _pname=$(groups_project_name "$group_name" "$i")
+    _pdesc=$(groups_project_desc "$group_name" "$i")
+    [[ "${_pdesc:0:1}" == "/" ]] && _pdesc="${_pdesc/#$HOME/~}"
 
     local log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
     local rc=0
@@ -1216,7 +1229,7 @@ _group_cmd_deploy() {
               _section_h=$(( 2 + ${#_result_lines[@]} + 4 ))
               _bar_state=""
               # Print initial frame
-              progress_bar "$_steps_done" "$_total_steps" "$_pname"
+              progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
               printf '\n'
               local _ri=0
               while (( _ri < ${#_result_lines[@]} )); do
@@ -1232,7 +1245,7 @@ _group_cmd_deploy() {
               while kill -0 "$_hook_pid" 2>/dev/null; do
                 [[ "$_group_interrupted" == "true" ]] && { kill "$_hook_pid" 2>/dev/null; break; }
                 printf '\033[%dA' "$_section_h"
-                progress_bar "$_steps_done" "$_total_steps" "$_pname"
+                progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
                 printf '\n'
                 _ri=0
                 while (( _ri < ${#_result_lines[@]} )); do
@@ -1273,7 +1286,7 @@ _group_cmd_deploy() {
 
               # Redraw section without animation (bar + results only)
               printf '\033[%dA' "$_section_h"
-              progress_bar "$_steps_done" "$_total_steps" "$_pname" "$_bar_state"
+              progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}" "$_bar_state"
               printf '\n'
               _ri=0
               while (( _ri < ${#_result_lines[@]} )); do
@@ -1324,7 +1337,7 @@ _group_cmd_deploy() {
         _section_h=$(( 2 + ${#_result_lines[@]} + 4 ))
         _bar_state=""
         # Print initial frame
-        progress_bar "$_steps_done" "$_total_steps" "$_pname"
+        progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
         printf '\n'
         local _ri=0
         while (( _ri < ${#_result_lines[@]} )); do
@@ -1338,7 +1351,7 @@ _group_cmd_deploy() {
         while kill -0 "$_remote_pid" 2>/dev/null; do
           [[ "$_group_interrupted" == "true" ]] && { kill "$_remote_pid" 2>/dev/null; break; }
           printf '\033[%dA' "$_section_h"
-          progress_bar "$_steps_done" "$_total_steps" "$_pname"
+          progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
           printf '\n'
           _ri=0
           while (( _ri < ${#_result_lines[@]} )); do
@@ -1372,15 +1385,15 @@ _group_cmd_deploy() {
         # Add result to tracking
         if (( rc == 0 )); then
           _steps_done=$(( _steps_done + 1 ))
-          _result_lines[${#_result_lines[@]}]="$(printf '  %b✓%b %s %b(remote)%b' "${GREEN}" "${RESET}" "$_pname" "${DIM}" "${RESET}")"
+          _result_lines[${#_result_lines[@]}]="$(printf '  %b✓%b %s  %b%s%b' "${GREEN}" "${RESET}" "$_pname" "${DIM}" "$_pdesc" "${RESET}")"
         else
-          _result_lines[${#_result_lines[@]}]="$(printf '  %b✗%b %s %b(remote)%b' "${RED}" "${RESET}" "$_pname" "${DIM}" "${RESET}")"
+          _result_lines[${#_result_lines[@]}]="$(printf '  %b✗%b %s  %b%s%b' "${RED}" "${RESET}" "$_pname" "${DIM}" "$_pdesc" "${RESET}")"
           _bar_state="error"
         fi
 
         # Redraw section without animation
         printf '\033[%dA' "$_section_h"
-        progress_bar "$_steps_done" "$_total_steps" "$_pname" "$_bar_state"
+        progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}" "$_bar_state"
         printf '\n'
         _ri=0
         while (( _ri < ${#_result_lines[@]} )); do
@@ -1443,7 +1456,7 @@ _group_cmd_deploy() {
               done
               _result_lines=("${_kept[@]}")
             fi
-            progress_bar "$_steps_done" "$_total_steps" "$_pname"
+            progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
             printf '\n\033[J'
             _section_h=2
             log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
@@ -1459,7 +1472,7 @@ _group_cmd_deploy() {
             # Update bar in-place (clear error state)
             printf '\033[%dA' "$_section_h"
             _bar_state=""
-            progress_bar "$_steps_done" "$_total_steps" "$_pname"
+            progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
             printf '\033[%dB' "$_section_h"
             skipped=$(( skipped + 1 ))
             break
@@ -1493,22 +1506,23 @@ _group_deploy_remote() {
   fi
 
   local cmd="muster deploy --quiet"
-  if [[ -n "$_GP_PROJECT_DIR" ]]; then
-    local _escaped_dir
-    printf -v _escaped_dir '%q' "$_GP_PROJECT_DIR"
-    cmd="cd ${_escaped_dir} && ${cmd}"
-  fi
 
   if [[ "$_GP_CLOUD" == "true" ]]; then
-    # Cloud transport
+    # Cloud transport — pass cwd natively (agent handles directory change)
     source "$MUSTER_ROOT/lib/core/cloud.sh"
     _groups_cloud_config
     if ! _fleet_cloud_check "$_GP_HOST" 2>/dev/null; then
       printf 'Cannot reach cloud agent %s — check tunnel and relay\n' "$_GP_HOST" > "$log_file"
       return 1
     fi
-    _fleet_cloud_exec "$_GP_HOST" "$cmd" >> "$log_file" 2>&1
+    _fleet_cloud_exec "$_GP_HOST" "$cmd" "$_GP_PROJECT_DIR" >> "$log_file" 2>&1
   else
+    # SSH transport — prepend cd for project dir
+    if [[ -n "$_GP_PROJECT_DIR" ]]; then
+      local _escaped_dir
+      printf -v _escaped_dir '%q' "$_GP_PROJECT_DIR"
+      cmd="cd ${_escaped_dir} && ${cmd}"
+    fi
     # SSH transport
     _groups_build_ssh_opts
 
@@ -1568,11 +1582,12 @@ _group_deploy_dry_run() {
       _icon="◆"; _color="${ACCENT}"
     fi
 
-    printf '  %b%d.%b %b%s%b %b%s%b  %b%s%b\n' \
+    [[ "${_desc:0:1}" == "/" ]] && _desc="${_desc/#$HOME/~}"
+    printf '  %b%d.%b %b%s%b %b%s%b  %b%s  %s%b\n' \
       "${DIM}" "$(( i + 1 ))" "${RESET}" \
       "$_color" "$_icon" "${RESET}" \
       "${WHITE}" "$_pname" "${RESET}" \
-      "${DIM}" "$_tag" "${RESET}"
+      "${DIM}" "$_tag" "$_desc" "${RESET}"
 
     i=$(( i + 1 ))
   done
@@ -1668,10 +1683,12 @@ _group_cmd_status() {
 
   local i=0
   while (( i < total )); do
-    local _type _pname
+    local _type _pname _pdesc
     _type=$(jq -r --arg n "$group_name" --argjson idx "$i" \
       '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
     _pname=$(groups_project_name "$group_name" "$i")
+    _pdesc=$(groups_project_desc "$group_name" "$i")
+    [[ "${_pdesc:0:1}" == "/" ]] && _pdesc="${_pdesc/#$HOME/~}"
 
     local _icon _color _tag _result=""
 
@@ -1695,12 +1712,20 @@ _group_cmd_status() {
 
       if groups_remote_check "$group_name" "$i"; then
         local cmd="muster status --json"
-        if [[ -n "$_GP_PROJECT_DIR" ]]; then
-          local _escaped_dir
-          printf -v _escaped_dir '%q' "$_GP_PROJECT_DIR"
-          cmd="cd ${_escaped_dir} && ${cmd}"
+        if [[ "$_GP_CLOUD" == "true" ]]; then
+          # Cloud: agent handles cwd natively
+          source "$MUSTER_ROOT/lib/core/cloud.sh"
+          _groups_cloud_config
+          _result=$(_fleet_cloud_exec "$_GP_HOST" "$cmd" "$_GP_PROJECT_DIR" 2>/dev/null) || true
+        else
+          # SSH: prepend cd for project dir
+          if [[ -n "$_GP_PROJECT_DIR" ]]; then
+            local _escaped_dir
+            printf -v _escaped_dir '%q' "$_GP_PROJECT_DIR"
+            cmd="cd ${_escaped_dir} && ${cmd}"
+          fi
+          _result=$(groups_remote_exec "$group_name" "$i" "$cmd" 2>/dev/null) || true
         fi
-        _result=$(groups_remote_exec "$group_name" "$i" "$cmd" 2>/dev/null) || true
       else
         _icon="●"; _color="${RED}"; _tag="unreachable"
       fi
@@ -1759,6 +1784,7 @@ _group_cmd_status() {
       "${WHITE}" "$_pname" "${RESET}" \
       "${DIM}" "$dots" "${RESET}" \
       "$_color" "$_tag" "${RESET}"
+    printf '    %b%s%b\n' "${DIM}" "$_pdesc" "${RESET}"
 
     # ── Render per-service lines ──
     if [[ -n "$_svc_keys" ]]; then

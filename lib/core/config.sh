@@ -16,7 +16,8 @@ _GLOBAL_DEFAULTS='{
   "default_health_timeout": 10,
   "scanner_exclude": [],
   "update_check": "on",
-  "cloud": {}
+  "cloud": {},
+  "machine_role": ""
 }'
 
 # Ensure global config exists with defaults

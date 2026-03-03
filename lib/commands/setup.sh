@@ -200,6 +200,207 @@ _setup_remote_agent() {
   fi
 }
 
+# ── Control host: guided fleet setup ──
+_setup_control_host() {
+  clear
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}— Fleet Control Setup${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Set up this machine to deploy to other machines.${RESET}"
+  echo ""
+
+  menu_select "Where are your target machines?" \
+    "Same network (SSH)   — Direct SSH connection, simple setup" \
+    "Remote / cloud       — Different networks, NATs, firewalls. Uses cloud relay" \
+    "Both                 — Mix of local SSH and remote cloud targets"
+
+  local _transport="ssh"
+  case "$MENU_RESULT" in
+    *"Remote"*)  _transport="cloud" ;;
+    *"Both"*)    _transport="both" ;;
+  esac
+
+  if [[ "$_transport" == "cloud" || "$_transport" == "both" ]]; then
+    _setup_control_cloud
+    [[ $? -ne 0 ]] && return 1
+  fi
+
+  # Offer to create a fleet group
+  clear
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}— Fleet Control Setup${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Fleet groups let you deploy multiple projects together.${RESET}"
+  printf '%b\n' "  ${DIM}You can add machines and projects to groups later.${RESET}"
+  echo ""
+
+  menu_select "Create a fleet group now?" "Yes" "Skip"
+
+  if [[ "$MENU_RESULT" == "Yes" ]]; then
+    source "$MUSTER_ROOT/lib/core/groups.sh"
+    echo ""
+    printf '%b\n' "  ${BOLD}Group name${RESET} ${DIM}(e.g. production, staging)${RESET}"
+    printf '  %b>%b ' "$ACCENT" "$RESET"
+    local _grp_name=""
+    read -r _grp_name
+    if [[ -n "$_grp_name" ]]; then
+      groups_create "$_grp_name" "$_grp_name" 2>/dev/null && \
+        ok "Created fleet group: ${_grp_name}" || \
+        err "Failed to create group"
+    fi
+  fi
+
+  echo ""
+  printf '%b\n' "  ${GREEN}*${RESET} ${BOLD}Setup complete${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Next steps:${RESET}"
+  if [[ "$_transport" == "ssh" || "$_transport" == "both" ]]; then
+    printf '%b\n' "  ${DIM}  Add SSH machines:   muster fleet add <name> user@host${RESET}"
+    printf '%b\n' "  ${DIM}  Add to a group:     muster group add <group> user@host${RESET}"
+  fi
+  if [[ "$_transport" == "cloud" || "$_transport" == "both" ]]; then
+    printf '%b\n' "  ${DIM}  Add cloud targets:  muster group add <group> <agent-name> --cloud${RESET}"
+  fi
+  printf '%b\n' "  ${DIM}  Deploy a group:     muster group deploy <group>${RESET}"
+  printf '%b\n' "  ${DIM}  Open dashboard:     muster${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Press any key to exit...${RESET}"
+  IFS= read -rsn1 || true
+}
+
+# ── Control host: cloud config ──
+_setup_control_cloud() {
+  clear
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}— Cloud Transport Setup${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Cloud transport connects to remote machines through a WebSocket relay.${RESET}"
+  printf '%b\n' "  ${DIM}No direct SSH needed — works across different networks, NATs, and firewalls.${RESET}"
+  echo ""
+
+  # Check if cloud config already exists
+  local _existing_relay=""
+  _existing_relay=$(global_config_get "cloud.relay" 2>/dev/null)
+  if [[ -n "$_existing_relay" && "$_existing_relay" != "null" && "$_existing_relay" != "" ]]; then
+    printf '%b\n' "  ${DIM}Current relay: ${_existing_relay}${RESET}"
+    echo ""
+    menu_select "Cloud config already set. Update it?" "Keep existing" "Update"
+    [[ "$MENU_RESULT" == "Keep existing" ]] && return 0
+    echo ""
+  fi
+
+  printf '%b\n' "  ${BOLD}Relay URL${RESET} ${DIM}(e.g. wss://relay.example.com)${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  local _relay=""
+  read -r _relay
+  if [[ -z "$_relay" ]]; then
+    err "Relay URL is required for cloud transport"
+    return 1
+  fi
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Organization ID${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  local _org=""
+  read -r _org
+  if [[ -z "$_org" ]]; then
+    err "Organization ID is required"
+    return 1
+  fi
+
+  echo ""
+  printf '%b\n' "  ${BOLD}CLI token${RESET} ${DIM}(mst_cli_...)${RESET}"
+  printf '  %b>%b ' "$ACCENT" "$RESET"
+  local _token=""
+  read -r _token
+  if [[ -z "$_token" ]]; then
+    err "CLI token is required"
+    return 1
+  fi
+
+  # Save to global settings
+  global_config_set "cloud.relay" "\"$_relay\""
+  global_config_set "cloud.org_id" "\"$_org\""
+  global_config_set "cloud.token" "\"$_token\""
+
+  echo ""
+  ok "Cloud transport configured"
+
+  # Check if muster-tunnel is installed
+  if ! command -v muster-tunnel >/dev/null 2>&1 && [[ ! -x "$HOME/.muster/bin/muster-tunnel" ]]; then
+    echo ""
+    printf '%b\n' "  ${YELLOW}!${RESET} ${DIM}muster-tunnel not installed. Install it to deploy via cloud:${RESET}"
+    printf '%b\n' "    ${WHITE}curl -fsSL https://getmuster.dev/cloud | bash${RESET}"
+  fi
+
+  return 0
+}
+
+# ── Deploy target: intro screen (shows transport info, falls through to project setup) ──
+_setup_deploy_target_intro() {
+  clear
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}— Deploy Target Setup${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}This machine will receive deploys from a control host.${RESET}"
+  printf '%b\n' "  ${DIM}How will the control host connect to this machine?${RESET}"
+  echo ""
+  printf '%b\n' "  ${BOLD}Direct SSH${RESET}"
+  printf '%b\n' "  ${DIM}  The control host connects over SSH. Both machines must be${RESET}"
+  printf '%b\n' "  ${DIM}  on the same network, or this machine needs a public IP or${RESET}"
+  printf '%b\n' "  ${DIM}  port forwarding. Simple, no extra software needed.${RESET}"
+  echo ""
+  printf '%b\n' "  ${BOLD}Cloud tunnel${RESET}"
+  printf '%b\n' "  ${DIM}  The control host connects through a WebSocket relay. Works${RESET}"
+  printf '%b\n' "  ${DIM}  across different networks, behind NATs and firewalls.${RESET}"
+  printf '%b\n' "  ${DIM}  Requires muster-agent running on this machine.${RESET}"
+  echo ""
+
+  menu_select "Transport" \
+    "Direct SSH    — Same network, nothing extra needed" \
+    "Cloud tunnel  — Cross-network, needs muster-agent"
+
+  if [[ "$MENU_RESULT" == *"Cloud"* ]]; then
+    # Check if muster-agent is installed
+    local agent_bin=""
+    if command -v muster-agent >/dev/null 2>&1; then
+      agent_bin="muster-agent"
+    elif [[ -x "${HOME}/.local/bin/muster-agent" ]]; then
+      agent_bin="${HOME}/.local/bin/muster-agent"
+    elif [[ -x "${HOME}/.muster/bin/muster-agent" ]]; then
+      agent_bin="${HOME}/.muster/bin/muster-agent"
+    fi
+
+    if [[ -z "$agent_bin" ]]; then
+      echo ""
+      printf '%b\n' "  ${YELLOW}!${RESET} ${BOLD}muster-agent not installed${RESET}"
+      echo ""
+      printf '%b\n' "  ${DIM}Cloud transport requires the muster-agent daemon. Install it:${RESET}"
+      printf '%b\n' "    ${WHITE}curl -fsSL https://getmuster.dev/cloud | bash -s -- --agent${RESET}"
+      echo ""
+      printf '%b\n' "  ${DIM}You can set up the agent later. Continuing to project setup...${RESET}"
+    else
+      # Agent installed — run the join flow
+      _setup_remote_agent
+    fi
+  else
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}— SSH Deploy Target${RESET}"
+    echo ""
+    printf '%b\n' "  ${GREEN}*${RESET} ${BOLD}SSH is ready to go${RESET}"
+    echo ""
+    printf '%b\n' "  ${DIM}Make sure SSH is enabled and the deploy user can access the project.${RESET}"
+  fi
+
+  echo ""
+  printf '%b\n' "  ${DIM}Now let's set up your project so muster can deploy it.${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+  IFS= read -rsn1 || true
+  # Returns to cmd_setup which continues with project setup
+}
+
 
 # Template utilities loaded from lib/core/templates.sh
 
@@ -826,27 +1027,85 @@ cmd_setup() {
     return 1
   fi
 
-  # ── Fleet Cloud role detection ──
-  local _fc_detected=false
-  if command -v muster-agent >/dev/null 2>&1 || [[ -x "${HOME}/.local/bin/muster-agent" ]]; then
-    _fc_detected=true
-  fi
+  # ── Machine role ──
+  local _existing_role=""
+  _existing_role=$(global_config_get "machine_role" 2>/dev/null)
+  [[ "$_existing_role" == "null" ]] && _existing_role=""
 
-  if [[ "$_fc_detected" = true ]]; then
+  local _setup_role="local"
+  local _role_changed=true
+
+  if [[ -n "$_existing_role" ]]; then
+    # Show current role and offer to keep or change
+    local _role_label=""
+    case "$_existing_role" in
+      local)   _role_label="Just this machine" ;;
+      control) _role_label="Deploy to others" ;;
+      target)  _role_label="Receive deploys" ;;
+      both)    _role_label="Both (local + fleet control)" ;;
+    esac
+
     clear
     echo ""
     printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
     echo ""
-    printf '%b\n' "  ${DIM}Fleet cloud detected. How will this machine be used?${RESET}"
+    printf '%b\n' "  ${DIM}Current role: ${RESET}${BOLD}${_role_label}${RESET}"
     echo ""
 
-    menu_select "Role" "Host — I deploy FROM this machine" "Remote — this machine RECEIVES deploys"
+    menu_select "Machine role" "Keep — ${_role_label}" "Change role"
 
-    if [[ "$MENU_RESULT" == *"Remote"* ]]; then
-      _setup_remote_agent
-      return $?
+    if [[ "$MENU_RESULT" == *"Keep"* ]]; then
+      _setup_role="$_existing_role"
+      _role_changed=false
     fi
   fi
+
+  if [[ "$_role_changed" == "true" ]]; then
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
+    echo ""
+    printf '%b\n' "  ${DIM}What will this machine do?${RESET}"
+    echo ""
+
+    menu_select "Role" \
+      "Just this machine    — Set up and deploy locally" \
+      "Deploy to others     — Configure fleet targets" \
+      "Receive deploys      — Set up as a deploy target" \
+      "Both (1 + 2)         — Local project + fleet control"
+
+    case "$MENU_RESULT" in
+      *"Deploy to others"*)
+        _setup_role="control"
+        ;;
+      *"Receive deploys"*)
+        _setup_role="target"
+        ;;
+      *"Both"*)
+        _setup_role="both"
+        ;;
+      *)
+        _setup_role="local"
+        ;;
+    esac
+
+    global_config_set "machine_role" "\"$_setup_role\""
+  fi
+
+  # Route based on role
+  case "$_setup_role" in
+    control)
+      _setup_control_host
+      return $?
+      ;;
+    target)
+      _setup_deploy_target_intro
+      # Falls through to project setup below
+      ;;
+    both)
+      # Falls through to project setup below, then offers fleet config at the end
+      ;;
+  esac
 
   # ── Step 1: Choose project location ──
   local _cwd_display
@@ -1112,28 +1371,6 @@ cmd_setup() {
     _SETUP_CUR_PROMPT="false"
     project_name="${custom_name:-$project_name}"
 
-    # ── Fleet init offer (host path only) ──
-    if [[ "$_fc_detected" = true ]]; then
-      echo ""
-      printf '%b\n' "  ${DIM}Fleet cloud is installed. Set up remote machines?${RESET}"
-      echo ""
-      menu_select "Fleet" "Skip — set up fleet later" "Yes — initialize fleet config"
-      if [[ "$MENU_RESULT" == *"Yes"* ]]; then
-        source "$MUSTER_ROOT/lib/core/fleet.sh"
-        local _remotes="${project_path}/remotes.json"
-        if [[ ! -f "$_remotes" ]]; then
-          printf '{"machines":{},"groups":{},"deploy_order":[]}\n' > "$_remotes"
-          ok "Created remotes.json"
-        fi
-        echo ""
-        printf '%b\n' "  ${DIM}Add machines later with:${RESET}"
-        printf '%b\n' "    ${WHITE}muster fleet add <name> user@host${RESET}"
-        echo ""
-        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
-        IFS= read -rsn1 || true
-      fi
-    fi
-
     # ── Hook format (offer justfile if just is installed) ──
     local _hook_format="bash"
     if has_cmd just; then
@@ -1293,6 +1530,17 @@ print(json.dumps(data, indent=2))
       fi
     fi
 
+    # ── "Both" role: offer fleet control setup after project is complete ──
+    if [[ "$_setup_role" == "both" ]]; then
+      echo ""
+      printf '%b\n' "  ${DIM}Project setup done. Now let's configure fleet control.${RESET}"
+      echo ""
+      printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+      IFS= read -rsn1 || true
+      _setup_control_host
+      return $?
+    fi
+
     _SETUP_CUR_PROMPT="false"
     _setup_screen 7 "Setup complete"
     read -rs
@@ -1300,6 +1548,17 @@ print(json.dumps(data, indent=2))
   else
     # ────── Fallback: manual question flow ──────
     _setup_manual_flow
+
+    # ── "Both" role: offer fleet control after manual setup too ──
+    if [[ "$_setup_role" == "both" ]]; then
+      echo ""
+      printf '%b\n' "  ${DIM}Project setup done. Now let's configure fleet control.${RESET}"
+      echo ""
+      printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+      IFS= read -rsn1 || true
+      _setup_control_host
+      return $?
+    fi
   fi
 }
 

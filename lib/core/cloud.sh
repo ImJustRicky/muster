@@ -89,7 +89,7 @@ _fleet_cloud_token_delete() {
 # ── Transport functions ──
 
 _fleet_cloud_exec() {
-  local machine="$1" cmd="$2"
+  local machine="$1" cmd="$2" cwd="${3:-}"
   _fleet_cloud_config
 
   if ! _fleet_cloud_available; then
@@ -99,12 +99,22 @@ _fleet_cloud_exec() {
 
   local bin
   bin=$(_fleet_cloud_bin)
-  "$bin" exec \
-    --relay "$FLEET_CLOUD_RELAY" \
-    --token "$FLEET_CLOUD_TOKEN" \
-    --org "$FLEET_CLOUD_ORG" \
-    --agent "$machine" \
-    --cmd "$cmd"
+  if [[ -n "$cwd" ]]; then
+    "$bin" exec \
+      --relay "$FLEET_CLOUD_RELAY" \
+      --token "$FLEET_CLOUD_TOKEN" \
+      --org "$FLEET_CLOUD_ORG" \
+      --agent "$machine" \
+      --cmd "$cmd" \
+      --cwd "$cwd"
+  else
+    "$bin" exec \
+      --relay "$FLEET_CLOUD_RELAY" \
+      --token "$FLEET_CLOUD_TOKEN" \
+      --org "$FLEET_CLOUD_ORG" \
+      --agent "$machine" \
+      --cmd "$cmd"
+  fi
 }
 
 _fleet_cloud_push() {

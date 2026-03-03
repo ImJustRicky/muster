@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/Muster-dev/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.27"
+MUSTER_VERSION="0.5.29"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -161,12 +161,12 @@ case "${1:-}" in
     source "$MUSTER_ROOT/lib/core/updater.sh"
     update_apply
     ;;
-  --help|-h)
+  help|--help|-h)
     printf '%bmuster%b — Universal deploy framework\n' "${BOLD}" "${RESET}"
     echo ""
     echo "Usage: muster [command]"
     echo ""
-    echo "Commands:"
+    echo "Project commands:"
     echo "  (none)      Open the dashboard"
     echo "  setup       Guided setup wizard (or setup --help for flags)"
     echo "  deploy      Deploy services (--dry-run to preview, <service> for one)"
@@ -181,11 +181,16 @@ case "${1:-}" in
     echo "  cleanup     Clean up stuck processes"
     echo "  settings    View and edit project/global settings"
     echo "  uninstall   Remove muster from project (--system to uninstall muster itself)"
+    echo ""
+    echo "Fleet commands:"
+    echo "  fleet       Deploy one project to multiple machines (SSH or cloud)"
+    echo "  group       Orchestrate multiple projects as one deploy (local, SSH, or cloud)"
+    echo "  deploy fleet <group>   Shortcut for 'muster group deploy <group>'"
+    echo ""
+    echo "Other:"
     echo "  skill       Manage addon skills (add, create, remove, list, run)"
     echo "  projects    List registered projects (--prune to clean stale)"
     echo "  auth        Manage API tokens (create, list, revoke, verify)"
-    echo "  fleet       Manage fleet deployments across machines"
-    echo "  group       Manage fleet groups (combine projects for unified deploys)"
     echo "  update      Update muster to latest version"
     echo ""
     echo "Options:"

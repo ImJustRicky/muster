@@ -1,9 +1,14 @@
 # Fleet — Multi-Machine Deployment
 
-Deploy your project to multiple machines over SSH. Fleet supports two modes:
+Deploy your project to multiple machines. Fleet supports two transports and two deploy modes:
 
-- **`muster` mode** — Remote has muster installed. SSH in and run `muster deploy` on the remote.
-- **`push` mode** — No muster needed on remote. Pipes your hook scripts over SSH.
+**Transports:**
+- **SSH** (default) — Direct SSH connection. Works on any LAN or reachable host.
+- **Cloud** — Route through a cloud relay via WebSocket tunnel. Works across LANs, NATs, and firewalls. Requires `muster-agent` on remote + `muster-tunnel` on your machine.
+
+**Deploy modes:**
+- **`muster` mode** — Remote has muster installed. Runs `muster deploy` on the remote.
+- **`push` mode** — No muster needed on remote. Pipes your hook scripts over SSH (or cloud tunnel).
 
 ## Quick Start
 
@@ -206,7 +211,7 @@ Lives in your project root alongside `deploy.json`. Example:
 | `identity_file` | no | — | Path to SSH private key |
 | `project_dir` | no | — | Project path on remote (for `cd` before deploy) |
 | `mode` | no | `push` | `muster` or `push` |
-| `transport` | no | `ssh` | Transport layer (`ssh` now, `cloud` in future) |
+| `transport` | no | `ssh` | Transport layer: `ssh` or `cloud` |
 
 ## Auth Pairing
 
@@ -346,6 +351,91 @@ Fleet setup (init, add, remove, group, ungroup, pair) is CLI-only.
 ## Doctor Integration
 
 `muster doctor` includes a fleet connectivity check when `remotes.json` exists. It tests SSH access to each machine and reports pass/warn/fail.
+
+## Cloud Transport
+
+Cloud transport routes commands through a WebSocket relay, so machines don't need direct SSH access. Useful when fleet machines are behind NATs, firewalls, or on different LANs.
+
+### Requirements
+
+- **Your machine:** `muster-tunnel` CLI helper (installed to `~/.muster/bin/` or PATH)
+- **Remote machines:** `muster-agent` daemon + `muster` CLI
+- **Relay server:** A running `muster-cloud` relay (self-hosted or managed)
+
+### Install
+
+```bash
+# Install muster-tunnel on your laptop
+curl -fsSL https://raw.githubusercontent.com/Muster-dev/muster-fleet-cloud/main/install.sh | bash -s -- --tunnel
+
+# Install muster-agent on each remote
+curl -fsSL https://raw.githubusercontent.com/Muster-dev/muster-fleet-cloud/main/install.sh | bash -s -- --agent
+```
+
+### Setup
+
+```bash
+# On the remote: register agent with your relay
+muster-agent join --relay wss://relay.example.com \
+  --token mst_agent_<join-token> --org myorg --name prod-east \
+  --project /opt/myapp
+
+# Start the agent daemon (or install as systemd service)
+muster-agent run
+
+# On your laptop: configure cloud settings
+muster settings --global cloud.relay '"wss://relay.example.com"'
+muster settings --global cloud.org_id '"myorg"'
+muster settings --global cloud.token '"mst_cli_<your-token>"'
+
+# Add a cloud machine to your fleet
+muster fleet add prod-east deploy@prod-east --transport cloud --path /opt/myapp
+```
+
+### How It Works
+
+1. `muster-agent` on each remote connects outbound to the relay via WebSocket
+2. `muster-tunnel` on your laptop connects to the same relay
+3. Commands are end-to-end encrypted (X25519 + NaCl box) — the relay can't read them
+4. The agent executes `muster deploy`, `muster status`, etc. locally and streams output back
+
+Cloud and SSH machines can coexist in the same fleet. Deploy respects the per-machine transport setting.
+
+### Cloud Config (Global Settings)
+
+Set via `muster settings --global` or edit `~/.muster/settings.json`:
+
+```json
+{
+  "cloud": {
+    "relay": "wss://relay.example.com",
+    "org_id": "myorg",
+    "token": "mst_cli_<token>"
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `relay` | WebSocket URL of the relay server |
+| `org_id` | Your organization identifier |
+| `token` | CLI access token (`mst_cli_` prefix) |
+
+Alternatively, use `cloud.token_ref` to reference a named token stored in `~/.muster/tokens/cloud.json` (managed by the credential system).
+
+## Fleet vs Group
+
+Both are fleet features — they just solve different problems:
+
+| | `muster fleet` | `muster group` |
+|---|---|---|
+| **What** | One project → many machines | Many projects → one coordinated deploy |
+| **Config** | `remotes.json` (per-project) | `~/.muster/groups.json` (global) |
+| **Use case** | Scale one app horizontally | Monorepo, multi-service, multi-machine orchestration |
+| **Transport** | SSH or cloud per machine | SSH or cloud per project |
+| **Example** | Deploy `api` to 3 prod servers | Deploy `api` + `frontend` + `worker` together |
+
+Both support SSH key auth, SSH password auth, and cloud tunnel transport. A single deploy can mix transport types — some machines/projects via SSH, others via cloud.
 
 ## Fleet vs Per-Service Remote
 
