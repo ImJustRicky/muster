@@ -34,6 +34,21 @@ _setup_pick_phrase() {
   echo "${_setup_phrases[$idx]}"
 }
 
+# ── Mustard header bar (matches dashboard style) ──
+_setup_bar() {
+  local left="$1" right="${2:-}"
+  local bar_w=$(( TERM_COLS - 2 ))
+  (( bar_w < 20 )) && bar_w=20
+  local text="  ${left}"
+  local text_len=${#text}
+  local right_len=${#right}
+  local pad_len=$(( bar_w - text_len - right_len ))
+  (( pad_len < 1 )) && pad_len=1
+  local pad
+  pad=$(printf '%*s' "$pad_len" "")
+  printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
+}
+
 # Current screen state for resize redraw
 _SETUP_CUR_STEP=1
 _SETUP_CUR_LABEL=""
@@ -52,12 +67,15 @@ _setup_screen_inner() {
   clear
   update_term_size
 
-  local W=$(( TERM_COLS - 4 ))
-  (( W > 56 )) && W=56
-  (( W < 10 )) && W=10
+  # Mustard header bar
+  local _step_right="step ${_SETUP_CUR_STEP}/${SETUP_TOTAL_STEPS}  "
+  echo ""
+  _setup_bar "muster  setup" "$_step_right"
 
-  local bar_w=$(( W - 4 ))
-  (( bar_w < 1 )) && bar_w=1
+  # Progress bar
+  local bar_w=$(( TERM_COLS - 6 ))
+  (( bar_w > 50 )) && bar_w=50
+  (( bar_w < 10 )) && bar_w=10
   local filled=$(( _SETUP_CUR_STEP * bar_w / SETUP_TOTAL_STEPS ))
   local empty_count=$(( bar_w - filled ))
   local bar_filled=""
@@ -66,51 +84,12 @@ _setup_screen_inner() {
   while (( i < filled )); do bar_filled="${bar_filled}#"; i=$((i + 1)); done
   i=0
   while (( i < empty_count )); do bar_empty="${bar_empty}-"; i=$((i + 1)); done
+  printf '  %b%s%b%s%b\n' "${ACCENT_BRIGHT}" "$bar_filled" "${GRAY}" "$bar_empty" "${RESET}"
 
-  local step_text="step ${_SETUP_CUR_STEP}/${SETUP_TOTAL_STEPS}"
-
-  local max_phrase_len=$(( W - 2 ))
-  local display_phrase="$_SETUP_CUR_PHRASE"
-  if (( ${#display_phrase} > max_phrase_len )); then
-    display_phrase="${display_phrase:0:$((max_phrase_len - 3))}..."
+  # Phrase subtitle
+  if [[ -n "$_SETUP_CUR_PHRASE" ]]; then
+    printf '  %b%s%b\n' "${DIM}" "$_SETUP_CUR_PHRASE" "${RESET}"
   fi
-
-  local display_step="$step_text"
-  if (( ${#display_step} > max_phrase_len )); then
-    display_step="${display_step:0:$((max_phrase_len - 3))}..."
-  fi
-
-  local hline
-  hline=$(printf '%*s' "$W" "" | sed 's/ /─/g')
-
-  local p_empty
-  p_empty=$(printf '%*s' "$W" "")
-  local p_title
-  local p_title_pad=$(( W - 13 ))
-  (( p_title_pad < 0 )) && p_title_pad=0
-  p_title=$(printf '%*s' "$p_title_pad" "")
-  local p_phrase
-  local p_phrase_pad=$(( W - ${#display_phrase} - 2 ))
-  (( p_phrase_pad < 0 )) && p_phrase_pad=0
-  p_phrase=$(printf '%*s' "$p_phrase_pad" "")
-  local p_bar
-  local p_bar_pad=$(( W - bar_w - 4 ))
-  (( p_bar_pad < 0 )) && p_bar_pad=0
-  p_bar=$(printf '%*s' "$p_bar_pad" "")
-  local p_step
-  local p_step_pad=$(( W - ${#display_step} - 2 ))
-  (( p_step_pad < 0 )) && p_step_pad=0
-  p_step=$(printf '%*s' "$p_step_pad" "")
-
-  echo ""
-  printf '  %b┌%s┐%b\n' "${ACCENT_BRIGHT}" "$hline" "${RESET}"
-  printf '  %b│%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "$p_empty" "${ACCENT_BRIGHT}" "${RESET}"
-  printf '  %b│%b  %b%bm u s t e r%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" "$p_title" "${ACCENT_BRIGHT}" "${RESET}"
-  printf '  %b│%b  %b%s%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${DIM}" "$display_phrase" "${RESET}" "$p_phrase" "${ACCENT_BRIGHT}" "${RESET}"
-  printf '  %b│%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "$p_empty" "${ACCENT_BRIGHT}" "${RESET}"
-  printf '  %b│%b  %b%s%b%s%b  %s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${ACCENT_BRIGHT}" "$bar_filled" "${GRAY}" "$bar_empty" "${RESET}" "$p_bar" "${ACCENT_BRIGHT}" "${RESET}"
-  printf '  %b│%b  %b%s%b%s%b│%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${DIM}" "$display_step" "${RESET}" "$p_step" "${ACCENT_BRIGHT}" "${RESET}"
-  printf '  %b└%s┘%b\n' "${ACCENT_BRIGHT}" "$hline" "${RESET}"
 
   if [[ -n "$_SETUP_CUR_LABEL" ]]; then
     echo ""
@@ -869,38 +848,44 @@ cmd_setup() {
     fi
   fi
 
-  # ── Step 1: Project root ──
-  local _plat_tools=""
-  [[ "$MUSTER_HAS_DOCKER" == "true" ]] && _plat_tools+="docker "
-  [[ "$MUSTER_HAS_KUBECTL" == "true" ]] && _plat_tools+="kubectl "
-  [[ "$MUSTER_HAS_JQ" == "true" ]] && _plat_tools+="jq "
-  [[ "$MUSTER_HAS_PYTHON" == "true" ]] && _plat_tools+="python3 "
-  local _plat_kc="not available (will use encrypted vault)"
-  [[ "$MUSTER_HAS_KEYCHAIN" == "true" ]] && _plat_kc="available"
+  # ── Step 1: Choose project location ──
+  local _cwd_display
+  _cwd_display="$(pwd)"
+  _cwd_display="${_cwd_display/#$HOME/~}"
 
-  _SETUP_CUR_SUMMARY=(
-    ""
-    "  ${DIM}${MUSTER_OS} ${MUSTER_ARCH}${RESET}"
-    "  ${DIM}tools: ${_plat_tools}${RESET}"
-    "  ${DIM}keychain: ${_plat_kc}${RESET}"
-    ""
-    "  ${BOLD}Where is your project?${RESET}"
-    "  ${DIM}Enter path, or type 'back' to return${RESET}"
-    ""
-    "  ${ACCENT}>${RESET} "
-  )
-  _SETUP_CUR_PROMPT="true"
+  _SETUP_CUR_SUMMARY=("")
+  _setup_screen 1 "Get started"
 
-  _setup_screen 1 "Project location"
-  read -r project_path
-  _SETUP_CUR_PROMPT="false"
+  menu_select "Where is your project?" "Setup here (${_cwd_display})" "Choose location" "Back"
 
-  # "back" or "home" returns to caller (home screen)
-  case "$project_path" in
-    [Bb][Aa][Cc][Kk]|[Hh][Oo][Mm][Ee]|[Qq][Uu][Ii][Tt]|[Ee][Xx][Ii][Tt]|[Qq]) return 0 ;;
+  local project_path=""
+  case "$MENU_RESULT" in
+    "Back"|"__back__")
+      return 0
+      ;;
+    "Choose location")
+      _SETUP_CUR_SUMMARY=(
+        ""
+        "  ${DIM}Enter the path to your project directory${RESET}"
+        ""
+        "  ${ACCENT}>${RESET} "
+      )
+      _SETUP_CUR_PROMPT="true"
+      _setup_screen 1 "Project location"
+      read -r project_path
+      _SETUP_CUR_PROMPT="false"
+
+      case "$project_path" in
+        [Bb][Aa][Cc][Kk]|[Hh][Oo][Mm][Ee]|[Qq][Uu][Ii][Tt]|[Ee][Xx][Ii][Tt]|[Qq]) return 0 ;;
+      esac
+      project_path="${project_path:-.}"
+      ;;
+    *)
+      # "Setup here" — use current directory
+      project_path="$(pwd)"
+      ;;
   esac
 
-  project_path="${project_path:-..}"
   local _resolved_path
   _resolved_path="$(cd "$project_path" 2>/dev/null && pwd)" || {
     err "Path does not exist: $project_path"
