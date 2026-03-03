@@ -742,6 +742,10 @@ _group_cmd_deploy() {
   local log_dir="$HOME/.muster/logs"
   mkdir -p "$log_dir"
 
+  # Catch Ctrl+C so we don't falsely report success
+  local _group_interrupted=false
+  trap '_group_interrupted=true' INT
+
   echo ""
   printf '  %b%bGroup Deploy%b — %s (%d project%s)\n' \
     "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" \
@@ -770,6 +774,17 @@ _group_cmd_deploy() {
       else
         _group_deploy_remote "$group_name" "$i" "$log_file"
         rc=$?
+      fi
+
+      # Check if interrupted
+      if [[ "$_group_interrupted" == "true" ]]; then
+        echo ""
+        err "${_pname} deploy interrupted"
+        failed=$(( total - succeeded - skipped ))
+        echo ""
+        _group_deploy_summary "$succeeded" "$skipped" "$failed" "$total"
+        trap - INT
+        return 130
       fi
 
       if (( rc == 0 )); then
@@ -816,6 +831,7 @@ _group_cmd_deploy() {
     i=$(( i + 1 ))
   done
 
+  trap - INT
   echo ""
   _group_deploy_summary "$succeeded" "$skipped" "$failed" "$total"
 }
@@ -840,10 +856,9 @@ _group_deploy_local() {
     return 1
   fi
 
-  # Run muster deploy in a subshell to avoid config contamination
-  # Redirect stdin from /dev/null so deploy skips interactive menus
+  # Run muster deploy in a subshell — minimal mode avoids TUI feedback loops
   local _muster_bin="${MUSTER_ROOT}/bin/muster"
-  (cd "$_path" && "$_muster_bin" deploy --quiet) >> "$log_file" 2>&1 < /dev/null
+  (cd "$_path" && MUSTER_MINIMAL=true "$_muster_bin" deploy --quiet) >> "$log_file" 2>&1 < /dev/null
 }
 
 _group_deploy_remote() {

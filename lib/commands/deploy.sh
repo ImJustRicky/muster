@@ -13,6 +13,19 @@ source "$MUSTER_ROOT/lib/core/just_runner.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
+# Run a deploy command with TUI stream box (interactive) or plain (non-interactive)
+# Usage: _deploy_run_hook "title" "log_file" command args...
+_deploy_run_hook() {
+  local _drh_title="$1" _drh_log="$2"
+  shift 2
+  if [[ -t 0 && "$MUSTER_MINIMAL" != "true" ]]; then
+    stream_in_box "$_drh_title" "$_drh_log" "$@"
+  else
+    # Non-interactive: run directly, output to log file
+    "$@" >> "$_drh_log" 2>&1
+  fi
+}
+
 # Verify a deploy hook actually did something meaningful
 # Args: log_file, service_name, start_time [json]
 # Pass "json" as 4th arg to emit NDJSON warnings instead of TUI output
@@ -588,9 +601,9 @@ ${_k8s_env_lines}"
           _remote_load_config "$svc"
           _remote_build_opts
           if [[ "$_use_just" == "true" ]] && _just_remote_available; then
-            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" _just_remote_run "$svc" "deploy" "$_all_env"
+            _deploy_run_hook "$name" "$log_file" _run_with_timeout "$_hook_timeout" _just_remote_run "$svc" "deploy" "$_all_env"
           else
-            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" remote_exec_stdout "$svc" "$hook" "$_all_env"
+            _deploy_run_hook "$name" "$log_file" _run_with_timeout "$_hook_timeout" remote_exec_stdout "$svc" "$hook" "$_all_env"
           fi
         else
           # ── Local deploy ──
@@ -602,9 +615,9 @@ ${_k8s_env_lines}"
           fi
 
           if [[ "$_use_just" == "true" ]]; then
-            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" just --justfile "${_hook_dir}/justfile" deploy
+            _deploy_run_hook "$name" "$log_file" _run_with_timeout "$_hook_timeout" just --justfile "${_hook_dir}/justfile" deploy
           else
-            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" "$hook"
+            _deploy_run_hook "$name" "$log_file" _run_with_timeout "$_hook_timeout" "$hook"
           fi
         fi
         local rc=$?
