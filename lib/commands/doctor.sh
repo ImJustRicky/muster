@@ -281,6 +281,7 @@ $(cat "$_hf" 2>/dev/null)"
 
     # Per-service hook checks
     local _missing_dirs=0 _missing_hooks=0 _not_exec=0 _fixed_exec=0
+    local _justfile_count=0 _justfile_no_just=0
     local _expected="deploy.sh health.sh rollback.sh logs.sh cleanup.sh"
     while IFS= read -r _svc; do
       [[ -z "$_svc" ]] && continue
@@ -289,9 +290,22 @@ $(cat "$_hf" 2>/dev/null)"
         _missing_dirs=$(( _missing_dirs + 1 ))
         continue
       fi
+      # Check for justfile
+      local _has_justfile=false
+      if [[ -f "${_shd}/justfile" ]]; then
+        _has_justfile=true
+        _justfile_count=$(( _justfile_count + 1 ))
+        if ! has_cmd just; then
+          _justfile_no_just=$(( _justfile_no_just + 1 ))
+        fi
+      fi
       for _h in $_expected; do
         local _hp="${_shd}/${_h}"
         if [[ ! -f "$_hp" ]]; then
+          # Skip missing .sh if justfile has the recipe
+          if [[ "$_has_justfile" == "true" ]]; then
+            continue
+          fi
           _missing_hooks=$(( _missing_hooks + 1 ))
         elif [[ ! -x "$_hp" ]]; then
           if [[ "$fix" == "true" ]]; then
@@ -316,6 +330,16 @@ $(cat "$_hf" 2>/dev/null)"
       _doc_pass "Fixed ${_fixed_exec} hook scripts (chmod +x)"
     elif (( _missing_dirs == 0 && _missing_hooks == 0 )); then
       _doc_pass "All hook scripts present and executable"
+    fi
+
+    # Justfile checks
+    if (( _justfile_count > 0 )); then
+      if (( _justfile_no_just > 0 )); then
+        _doc_warn "${_justfile_no_just} service(s) have justfile but 'just' is not installed"
+        _doc_detail "Install: https://just.systems"
+      else
+        _doc_pass "${_justfile_count} service(s) using justfile hooks"
+      fi
     fi
 
     # Deploy order check

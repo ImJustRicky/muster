@@ -21,9 +21,15 @@ _dev_cleanup() {
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
     local hook="${project_dir}/.muster/hooks/${svc}/cleanup.sh"
-    if [[ -x "$hook" ]]; then
-      local name
-      name=$(config_get ".services.${svc}.name")
+    local _dev_hook_dir="${project_dir}/.muster/hooks/${svc}"
+    local name
+    name=$(config_get ".services.${svc}.name")
+    if _just_available "$_dev_hook_dir" && _just_has_recipe "$_dev_hook_dir" "cleanup"; then
+      start_spinner "Cleaning up ${name}..."
+      just --justfile "${_dev_hook_dir}/justfile" cleanup &>/dev/null
+      stop_spinner
+      ok "${name} stopped"
+    elif [[ -x "$hook" ]]; then
       start_spinner "Cleaning up ${name}..."
       "$hook" &>/dev/null
       stop_spinner
@@ -90,10 +96,17 @@ _dev_show_status() {
     health_enabled=$(config_get ".services.${svc}.health.enabled")
 
     local hook="${project_dir}/.muster/hooks/${svc}/health.sh"
+    local _dev_health_dir="${project_dir}/.muster/hooks/${svc}"
+    local _has_dev_health=false
+    if [[ -x "$hook" ]]; then
+      _has_dev_health=true
+    elif _just_available "$_dev_health_dir" && _just_has_recipe "$_dev_health_dir" "health"; then
+      _has_dev_health=true
+    fi
 
     if [[ "$health_enabled" == "false" ]]; then
       printf '  %b○%b %s %b(disabled)%b\n' "${GRAY}" "${RESET}" "$name" "${DIM}" "${RESET}"
-    elif [[ -x "$hook" ]]; then
+    elif [[ "$_has_dev_health" == "true" ]]; then
       # Export k8s env vars for health hook
       local _k8s_env=""
       _k8s_env=$(k8s_env_for_service "$svc")
@@ -109,6 +122,9 @@ _dev_show_status() {
       [[ -z "$_health_timeout" || "$_health_timeout" == "null" ]] && _health_timeout=10
       if remote_is_enabled "$svc"; then
         remote_exec_stdout "$svc" "$hook" "$_k8s_env" &>/dev/null &
+        _hpid=$!
+      elif _just_available "$_dev_health_dir" && _just_has_recipe "$_dev_health_dir" "health"; then
+        just --justfile "${_dev_health_dir}/justfile" health &>/dev/null &
         _hpid=$!
       else
         "$hook" &>/dev/null &

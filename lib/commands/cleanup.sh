@@ -2,6 +2,7 @@
 # muster/lib/commands/cleanup.sh — Cleanup stuck processes
 
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
+source "$MUSTER_ROOT/lib/core/just_runner.sh"
 
 cmd_cleanup() {
   case "${1:-}" in
@@ -34,9 +35,16 @@ cmd_cleanup() {
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
     local hook="${project_dir}/.muster/hooks/${svc}/cleanup.sh"
-    if [[ -x "$hook" ]]; then
-      local name
-      name=$(config_get ".services.${svc}.name")
+    local _clean_hook_dir="${project_dir}/.muster/hooks/${svc}"
+    local name
+    name=$(config_get ".services.${svc}.name")
+    if _just_available "$_clean_hook_dir" && _just_has_recipe "$_clean_hook_dir" "cleanup"; then
+      start_spinner "Cleaning up ${name}..."
+      just --justfile "${_clean_hook_dir}/justfile" cleanup &>/dev/null
+      stop_spinner
+      ok "${name} cleaned up"
+      ran_any=true
+    elif [[ -x "$hook" ]]; then
       start_spinner "Cleaning up ${name}..."
       "$hook" &>/dev/null
       stop_spinner

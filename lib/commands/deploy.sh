@@ -9,6 +9,7 @@ source "$MUSTER_ROOT/lib/tui/streambox.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 source "$MUSTER_ROOT/lib/core/k8s_diag.sh"
+source "$MUSTER_ROOT/lib/core/just_runner.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
@@ -155,18 +156,28 @@ cmd_deploy() {
     local name
     name=$(config_get ".services.${svc}.name")
     local hook="${project_dir}/.muster/hooks/${svc}/deploy.sh"
+    local _hook_dir="${project_dir}/.muster/hooks/${svc}"
+    local _use_just=false
+    if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "deploy"; then
+      _use_just=true
+    fi
 
-    if [[ ! -x "$hook" ]]; then
+    if [[ "$_use_just" == "false" && ! -x "$hook" ]]; then
       warn "No deploy hook for ${name}, skipping"
       continue
     fi
 
     if [[ "$_json_mode" == "true" && "$dry_run" == "true" ]]; then
       # ── JSON dry-run ──
-      local _hook_lines
-      _hook_lines=$(wc -l < "$hook" | tr -d ' ')
+      local _hook_lines _hook_display="$hook"
+      if [[ "$_use_just" == "true" ]]; then
+        _hook_display="${_hook_dir}/justfile"
+        _hook_lines=$(wc -l < "$_hook_display" | tr -d ' ')
+      else
+        _hook_lines=$(wc -l < "$hook" | tr -d ' ')
+      fi
       printf '{"event":"dry_run","service":"%s","name":"%s","index":%d,"total":%d,"hook":"%s","hook_lines":%s}\n' \
-        "$svc" "$name" "$current" "$total" "$hook" "$_hook_lines"
+        "$svc" "$name" "$current" "$total" "$_hook_display" "$_hook_lines"
       continue
 
     elif [[ "$_json_mode" == "true" ]]; then
@@ -237,8 +248,17 @@ cmd_deploy() {
       local _json_hook_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
       {
         if remote_is_enabled "$svc"; then
-          _run_with_timeout "$_json_hook_timeout" remote_exec_stdout "$svc" "$hook" "${_cred_env_lines}
-${_k8s_env_lines}" 2>&1
+          _remote_load_config "$svc"
+          _remote_build_opts
+          local _json_all_env="${_cred_env_lines}
+${_k8s_env_lines}"
+          if [[ "$_use_just" == "true" ]] && _just_remote_available; then
+            _run_with_timeout "$_json_hook_timeout" _just_remote_run "$svc" "deploy" "$_json_all_env" 2>&1
+          else
+            _run_with_timeout "$_json_hook_timeout" remote_exec_stdout "$svc" "$hook" "$_json_all_env" 2>&1
+          fi
+        elif [[ "$_use_just" == "true" ]]; then
+          _run_with_timeout "$_json_hook_timeout" just --justfile "${_hook_dir}/justfile" deploy 2>&1
         else
           _run_with_timeout "$_json_hook_timeout" "$hook" 2>&1
         fi
@@ -260,11 +280,27 @@ ${_k8s_env_lines}" 2>&1
         local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"
         local health_enabled
         health_enabled=$(config_get ".services.${svc}.health.enabled")
-        if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
+        local _health_avail=false
+        if [[ "$health_enabled" != "false" ]]; then
+          if [[ -x "$health_hook" ]]; then
+            _health_avail=true
+          elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health"; then
+            _health_avail=true
+          fi
+        fi
+        if [[ "$_health_avail" == "true" ]]; then
           printf '{"event":"health","service":"%s","status":"checking"}\n' "$svc"
           local _health_ok=false
           if remote_is_enabled "$svc"; then
-            remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null && _health_ok=true
+            _remote_load_config "$svc"
+            _remote_build_opts
+            if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health" && _just_remote_available; then
+              _just_remote_run "$svc" "health" "" &>/dev/null && _health_ok=true
+            else
+              remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null && _health_ok=true
+            fi
+          elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health"; then
+            just --justfile "${_hook_dir}/justfile" health &>/dev/null && _health_ok=true
           else
             "$health_hook" &>/dev/null && _health_ok=true
           fi
@@ -306,9 +342,15 @@ ${_k8s_env_lines}" 2>&1
       echo ""
       echo ""
       printf '  %b[DRY-RUN]%b %bDeploying %s%b (%s/%s)\n' "${ACCENT}" "${RESET}" "${BOLD}" "$name" "${RESET}" "$current" "$total"
-      printf '  %bHook:%b %s\n' "${DIM}" "${RESET}" "$hook"
+      local _dryrun_file="$hook"
+      if [[ "$_use_just" == "true" ]]; then
+        _dryrun_file="${_hook_dir}/justfile"
+        printf '  %bHook:%b %s %b(justfile)%b\n' "${DIM}" "${RESET}" "$_dryrun_file" "${ACCENT}" "${RESET}"
+      else
+        printf '  %bHook:%b %s\n' "${DIM}" "${RESET}" "$hook"
+      fi
 
-      # Show first 10 lines of the hook script
+      # Show first 10 lines of the hook script/justfile
       local _line_num=0
       local _separator=""
       printf -v _separator '%*s' 34 ''
@@ -318,7 +360,7 @@ ${_k8s_env_lines}" 2>&1
         _line_num=$(( _line_num + 1 ))
         (( _line_num > 10 )) && break
         printf '  %b%s%b\n' "${DIM}" "$_line" "${RESET}"
-      done < "$hook"
+      done < "$_dryrun_file"
       if (( _line_num > 10 )); then
         printf '  %b...%b\n' "${DIM}" "${RESET}"
       fi
@@ -350,8 +392,16 @@ ${_k8s_env_lines}" 2>&1
       local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"
       local health_enabled
       health_enabled=$(config_get ".services.${svc}.health.enabled")
-      if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
-        printf '  %bHealth check:%b %s %b(enabled)%b\n' "${DIM}" "${RESET}" "$health_hook" "${GREEN}" "${RESET}"
+      local _has_health_hook=false
+      if [[ "$health_enabled" != "false" ]]; then
+        if [[ -x "$health_hook" ]]; then
+          _has_health_hook=true
+        elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health"; then
+          _has_health_hook=true
+        fi
+      fi
+      if [[ "$_has_health_hook" == "true" ]]; then
+        printf '  %bHealth check:%b %b(enabled)%b\n' "${DIM}" "${RESET}" "${GREEN}" "${RESET}"
       else
         printf '  %bHealth check:%b %b(disabled)%b\n' "${DIM}" "${RESET}" "${RED}" "${RESET}"
       fi
@@ -483,7 +533,13 @@ ${_k8s_env_lines}" 2>&1
           local _all_env="${_cred_env_lines}"
           [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
 ${_k8s_env_lines}"
-          stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" remote_exec_stdout "$svc" "$hook" "$_all_env"
+          _remote_load_config "$svc"
+          _remote_build_opts
+          if [[ "$_use_just" == "true" ]] && _just_remote_available; then
+            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" _just_remote_run "$svc" "deploy" "$_all_env"
+          else
+            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" remote_exec_stdout "$svc" "$hook" "$_all_env"
+          fi
         else
           # ── Local deploy ──
           if [[ -n "$_cred_env_lines" ]]; then
@@ -493,7 +549,11 @@ ${_k8s_env_lines}"
             done <<< "$_cred_env_lines"
           fi
 
-          stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" "$hook"
+          if [[ "$_use_just" == "true" ]]; then
+            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" just --justfile "${_hook_dir}/justfile" deploy
+          else
+            stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" "$hook"
+          fi
         fi
         local rc=$?
         unset _SIB_REDRAW_FN
@@ -526,11 +586,29 @@ ${_k8s_env_lines}"
           local health_hook="${project_dir}/.muster/hooks/${svc}/health.sh"
           local health_enabled
           health_enabled=$(config_get ".services.${svc}.health.enabled")
-          if [[ "$health_enabled" != "false" && -x "$health_hook" ]]; then
+          local _has_health=false
+          if [[ "$health_enabled" != "false" ]]; then
+            if [[ -x "$health_hook" ]]; then
+              _has_health=true
+            elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health"; then
+              _has_health=true
+            fi
+          fi
+          if [[ "$_has_health" == "true" ]]; then
             start_spinner "Health check: ${name}"
             local _health_ok=false
             if remote_is_enabled "$svc"; then
-              if remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null; then
+              _remote_load_config "$svc"
+              _remote_build_opts
+              if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health" && _just_remote_available; then
+                if _just_remote_run "$svc" "health" "" &>/dev/null; then
+                  _health_ok=true
+                fi
+              elif remote_exec_stdout "$svc" "$health_hook" "" &>/dev/null; then
+                _health_ok=true
+              fi
+            elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "health"; then
+              if just --justfile "${_hook_dir}/justfile" health &>/dev/null; then
                 _health_ok=true
               fi
             else
@@ -549,9 +627,23 @@ ${_k8s_env_lines}"
               case "$MENU_RESULT" in
                 "Rollback ${name}")
                   local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
+                  local _has_rb=false
                   if [[ -x "$rb_hook" ]]; then
+                    _has_rb=true
+                  elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
+                    _has_rb=true
+                  fi
+                  if [[ "$_has_rb" == "true" ]]; then
                     if remote_is_enabled "$svc"; then
-                      remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                      _remote_load_config "$svc"
+                      _remote_build_opts
+                      if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback" && _just_remote_available; then
+                        _just_remote_run "$svc" "rollback" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                      else
+                        remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                      fi
+                    elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
+                      just --justfile "${_hook_dir}/justfile" rollback 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
                     else
                       "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
                     fi
@@ -654,10 +746,24 @@ ${_k8s_env_lines}"
               ;;
             "Rollback ${name}")
               local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
+              local _has_rb=false
               if [[ -x "$rb_hook" ]]; then
+                _has_rb=true
+              elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
+                _has_rb=true
+              fi
+              if [[ "$_has_rb" == "true" ]]; then
                 start_spinner "Rolling back ${name}..."
                 if remote_is_enabled "$svc"; then
-                  remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+                  _remote_load_config "$svc"
+                  _remote_build_opts
+                  if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback" && _just_remote_available; then
+                    _just_remote_run "$svc" "rollback" "$_cred_env_lines" >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+                  else
+                    remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
+                  fi
+                elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
+                  just --justfile "${_hook_dir}/justfile" rollback >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
                 else
                   "$rb_hook" >> "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log" 2>&1
                 fi

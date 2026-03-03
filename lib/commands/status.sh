@@ -3,6 +3,7 @@
 
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
+source "$MUSTER_ROOT/lib/core/just_runner.sh"
 
 cmd_status() {
   local _json_mode=false
@@ -62,6 +63,7 @@ cmd_status() {
     name=$(config_get ".services.${svc}.name")
 
     local hook="${project_dir}/.muster/hooks/${svc}/health.sh"
+    local _status_hook_dir="${project_dir}/.muster/hooks/${svc}"
 
     local health_enabled
     health_enabled=$(config_get ".services.${svc}.health.enabled")
@@ -75,6 +77,14 @@ cmd_status() {
       _remote_tag=" ${DIM}($(remote_desc "$svc"))${RESET}"
     fi
 
+    # Check if health hook is available (bash script or justfile recipe)
+    local _has_health_hook=false
+    if [[ -x "$hook" ]]; then
+      _has_health_hook=true
+    elif _just_available "$_status_hook_dir" && _just_has_recipe "$_status_hook_dir" "health"; then
+      _has_health_hook=true
+    fi
+
     if [[ "$health_enabled" == "false" ]]; then
       if [[ "$_json_mode" == "true" ]]; then
         $_json_first || printf ','
@@ -84,7 +94,7 @@ cmd_status() {
       else
         printf '  %b○%b %s%s %b(disabled)%b\n' "${GRAY}" "${RESET}" "$name" "$_remote_tag" "${DIM}" "${RESET}"
       fi
-    elif [[ -x "$hook" ]]; then
+    elif [[ "$_has_health_hook" == "true" ]]; then
       # Export k8s env vars for health hook
       local _k8s_env=""
       _k8s_env=$(k8s_env_for_service "$svc")
@@ -101,6 +111,10 @@ cmd_status() {
       local _health_ok=false
       if remote_is_enabled "$svc"; then
         if remote_exec_stdout "$svc" "$hook" "$_k8s_env" &>/dev/null; then
+          _health_ok=true
+        fi
+      elif _just_available "$_status_hook_dir" && _just_has_recipe "$_status_hook_dir" "health"; then
+        if just --justfile "${_status_hook_dir}/justfile" health &>/dev/null; then
           _health_ok=true
         fi
       else

@@ -5,6 +5,7 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/updater.sh"
 source "$MUSTER_ROOT/lib/core/build_context.sh"
+source "$MUSTER_ROOT/lib/core/just_runner.sh"
 
 _HEALTH_CACHE_DIR="${HOME}/.muster/health_cache"
 
@@ -110,6 +111,14 @@ _dashboard_header() {
 
     if [[ "$health_enabled" == "false" ]]; then
       printf 'disabled' > "${_HEALTH_CACHE_DIR}/${svc}"
+    elif _just_available "$hook_dir" && _just_has_recipe "$hook_dir" "health"; then
+      (
+        if just --justfile "${hook_dir}/justfile" health &>/dev/null; then
+          printf 'healthy' > "${_HEALTH_CACHE_DIR}/${svc}"
+        else
+          printf 'unhealthy' > "${_HEALTH_CACHE_DIR}/${svc}"
+        fi
+      ) &
     elif [[ -x "${hook_dir}/health.sh" ]]; then
       (
         if "${hook_dir}/health.sh" &>/dev/null; then

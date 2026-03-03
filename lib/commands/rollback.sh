@@ -6,6 +6,7 @@ source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 source "$MUSTER_ROOT/lib/core/k8s_diag.sh"
+source "$MUSTER_ROOT/lib/core/just_runner.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
@@ -39,7 +40,12 @@ cmd_rollback() {
 
     while IFS= read -r svc; do
       [[ -z "$svc" ]] && continue
-      [[ -x "${project_dir}/.muster/hooks/${svc}/rollback.sh" ]] && rollback_services[${#rollback_services[@]}]="$svc"
+      local _rb_dir="${project_dir}/.muster/hooks/${svc}"
+      if [[ -x "${_rb_dir}/rollback.sh" ]]; then
+        rollback_services[${#rollback_services[@]}]="$svc"
+      elif _just_available "$_rb_dir" && _just_has_recipe "$_rb_dir" "rollback"; then
+        rollback_services[${#rollback_services[@]}]="$svc"
+      fi
     done <<< "$services"
 
     if [[ ${#rollback_services[@]} -eq 0 ]]; then
@@ -57,8 +63,13 @@ cmd_rollback() {
   fi
 
   local hook="${project_dir}/.muster/hooks/${target}/rollback.sh"
+  local _rb_hook_dir="${project_dir}/.muster/hooks/${target}"
+  local _use_just=false
+  if _just_available "$_rb_hook_dir" && _just_has_recipe "$_rb_hook_dir" "rollback"; then
+    _use_just=true
+  fi
 
-  if [[ ! -x "$hook" ]]; then
+  if [[ "$_use_just" == "false" && ! -x "$hook" ]]; then
     err "No rollback hook for ${target}"
     return 1
   fi
@@ -110,7 +121,15 @@ cmd_rollback() {
       local _all_env="${_cred_env_lines}"
       [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
 ${_k8s_env_lines}"
-      _run_with_timeout "$_rb_timeout" remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
+      _remote_load_config "$target"
+      _remote_build_opts
+      if [[ "$_use_just" == "true" ]] && _just_remote_available; then
+        _run_with_timeout "$_rb_timeout" _just_remote_run "$target" "rollback" "$_all_env" >> "$log_file" 2>&1
+      else
+        _run_with_timeout "$_rb_timeout" remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
+      fi
+    elif [[ "$_use_just" == "true" ]]; then
+      _run_with_timeout "$_rb_timeout" just --justfile "${_rb_hook_dir}/justfile" rollback >> "$log_file" 2>&1
     else
       _run_with_timeout "$_rb_timeout" "$hook" >> "$log_file" 2>&1
     fi
@@ -149,10 +168,24 @@ ${_k8s_env_lines}"
           ;; # loop continues
         "Force cleanup and retry")
           local cleanup_hook="${project_dir}/.muster/hooks/${target}/cleanup.sh"
+          local _has_cleanup=false
           if [[ -x "$cleanup_hook" ]]; then
+            _has_cleanup=true
+          elif _just_available "$_rb_hook_dir" && _just_has_recipe "$_rb_hook_dir" "cleanup"; then
+            _has_cleanup=true
+          fi
+          if [[ "$_has_cleanup" == "true" ]]; then
             start_spinner "Running cleanup for ${name}..."
             if remote_is_enabled "$target"; then
-              _run_with_timeout "$_rb_timeout" remote_exec_stdout "$target" "$cleanup_hook" "" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              _remote_load_config "$target"
+              _remote_build_opts
+              if _just_available "$_rb_hook_dir" && _just_has_recipe "$_rb_hook_dir" "cleanup" && _just_remote_available; then
+                _run_with_timeout "$_rb_timeout" _just_remote_run "$target" "cleanup" "" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              else
+                _run_with_timeout "$_rb_timeout" remote_exec_stdout "$target" "$cleanup_hook" "" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              fi
+            elif _just_available "$_rb_hook_dir" && _just_has_recipe "$_rb_hook_dir" "cleanup"; then
+              _run_with_timeout "$_rb_timeout" just --justfile "${_rb_hook_dir}/justfile" cleanup >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
             else
               _run_with_timeout "$_rb_timeout" "$cleanup_hook" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
             fi

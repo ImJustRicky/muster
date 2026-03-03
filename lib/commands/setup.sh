@@ -1134,6 +1134,17 @@ cmd_setup() {
       fi
     fi
 
+    # ── Hook format (offer justfile if just is installed) ──
+    local _hook_format="bash"
+    if has_cmd just; then
+      _SETUP_CUR_SUMMARY=("")
+      _setup_screen 7 "Hook format"
+      menu_select "Hook format?" "Bash scripts (default)" "Justfile"
+      case "$MENU_RESULT" in
+        "Justfile") _hook_format="just" ;;
+      esac
+    fi
+
     # ── Step 7: Generate ──
     local config_path="${project_path}/muster.json"
     local muster_dir="${project_path}/.muster"
@@ -1165,12 +1176,16 @@ cmd_setup() {
         _start_cmd_i=$(scan_get_dev_cmd "$svc")
         [[ -z "$_start_cmd_i" ]] && _start_cmd_i=$(scan_get_dev_cmd "$key")
       fi
-      _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
-        "${_detected_compose:-docker-compose.yml}" \
-        "${_detected_dockerfile:-Dockerfile}" \
-        "${_detected_k8s:-k8s/${svc}/}" \
-        "default" "${_svc_ports[$_si]:-8080}" \
-        "$(scan_get_k8s_name "$svc")" "$_start_cmd_i"
+      if [[ "$_hook_format" == "just" ]]; then
+        _setup_copy_justfile "$key" "$svc" "$hook_dir" "${_svc_ports[$_si]:-8080}"
+      else
+        _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
+          "${_detected_compose:-docker-compose.yml}" \
+          "${_detected_dockerfile:-Dockerfile}" \
+          "${_detected_k8s:-k8s/${svc}/}" \
+          "default" "${_svc_ports[$_si]:-8080}" \
+          "$(scan_get_k8s_name "$svc")" "$_start_cmd_i"
+      fi
       generated_hooks[${#generated_hooks[@]}]=".muster/hooks/${key}/"
       _si=$((_si + 1))
     done
@@ -1479,6 +1494,17 @@ _setup_manual_flow() {
   _SETUP_CUR_PROMPT="false"
   project_name="${custom_name:-$project_name}"
 
+  # ── Hook format (offer justfile if just is installed) ──
+  local _hook_format="bash"
+  if has_cmd just; then
+    _SETUP_CUR_SUMMARY=("")
+    _setup_screen 7 "Hook format"
+    menu_select "Hook format?" "Bash scripts (default)" "Justfile"
+    case "$MENU_RESULT" in
+      "Justfile") _hook_format="just" ;;
+    esac
+  fi
+
   # ── Step 7: Generate ──
   local config_path="${project_path}/muster.json"
   local muster_dir="${project_path}/.muster"
@@ -1504,10 +1530,14 @@ _setup_manual_flow() {
       _start_cmd_m=$(scan_get_dev_cmd "$svc")
       [[ -z "$_start_cmd_m" ]] && _start_cmd_m=$(scan_get_dev_cmd "$key")
     fi
-    _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
-      "docker-compose.yml" "Dockerfile" "k8s/${svc}/" \
-      "default" "${_svc_ports[$_si]:-8080}" \
-      "$(scan_get_k8s_name "$svc")" "$_start_cmd_m"
+    if [[ "$_hook_format" == "just" ]]; then
+      _setup_copy_justfile "$key" "$svc" "$hook_dir" "${_svc_ports[$_si]:-8080}"
+    else
+      _setup_copy_hooks "$stack" "$key" "$svc" "$hook_dir" \
+        "docker-compose.yml" "Dockerfile" "k8s/${svc}/" \
+        "default" "${_svc_ports[$_si]:-8080}" \
+        "$(scan_get_k8s_name "$svc")" "$_start_cmd_m"
+    fi
     _si=$((_si + 1))
   done
 

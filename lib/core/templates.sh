@@ -165,6 +165,28 @@ _setup_copy_hooks() {
   done
 }
 
+# ── Copy justfile template for a service, replacing placeholders ──
+# Args: svc_key svc_name hook_dir port
+_setup_copy_justfile() {
+  local svc_key="$1" svc_name="$2" hook_dir="$3" port="${4:-8080}"
+  local template="${MUSTER_ROOT}/templates/hooks/just/justfile"
+
+  if [[ ! -f "$template" ]]; then
+    # Fallback to stub hooks if template missing
+    _setup_write_stub_hooks "$hook_dir"
+    return
+  fi
+
+  local esc_svc_name esc_port
+  esc_svc_name=$(_escape_sed_replacement "$svc_name")
+  esc_port=$(_escape_sed_replacement "$port")
+
+  sed \
+    -e "s|{{SERVICE_NAME}}|${esc_svc_name}|g" \
+    -e "s|{{PORT}}|${esc_port}|g" \
+    "$template" > "${hook_dir}/justfile"
+}
+
 _setup_write_stub_hooks() {
   local hook_dir="$1"
 

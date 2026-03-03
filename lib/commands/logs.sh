@@ -2,6 +2,7 @@
 # muster/lib/commands/logs.sh — Log streaming
 
 source "$MUSTER_ROOT/lib/tui/menu.sh"
+source "$MUSTER_ROOT/lib/core/just_runner.sh"
 
 cmd_logs() {
   case "${1:-}" in
@@ -44,8 +45,13 @@ cmd_logs() {
   fi
 
   local hook="${project_dir}/.muster/hooks/${target}/logs.sh"
+  local _logs_hook_dir="${project_dir}/.muster/hooks/${target}"
 
-  if [[ -x "$hook" ]]; then
+  if _just_available "$_logs_hook_dir" && _just_has_recipe "$_logs_hook_dir" "logs"; then
+    info "Streaming logs for ${target}... (Ctrl+C to stop)"
+    echo ""
+    just --justfile "${_logs_hook_dir}/justfile" logs
+  elif [[ -x "$hook" ]]; then
     info "Streaming logs for ${target}... (Ctrl+C to stop)"
     echo ""
     "$hook"
