@@ -266,7 +266,7 @@ _dashboard_home() {
 
     # Promote muster-tui if not installed
     if ! command -v muster-tui >/dev/null 2>&1; then
-      echo -e "  ${ACCENT_BRIGHT}*${RESET} ${DIM}Try the new Go TUI:${RESET} ${WHITE}go install github.com/ImJustRicky/muster-tui@latest${RESET} ${DIM}(beta)${RESET}"
+      echo -e "  ${ACCENT_BRIGHT}*${RESET} ${DIM}Try the new Go TUI:${RESET} ${WHITE}go install github.com/Muster-dev/muster-tui@latest${RESET} ${DIM}(beta)${RESET}"
       echo ""
     fi
 
@@ -428,7 +428,7 @@ cmd_dashboard() {
 
     # Promote muster-tui if not installed
     if ! command -v muster-tui >/dev/null 2>&1; then
-      echo -e "  ${ACCENT_BRIGHT}*${RESET} ${DIM}Try the new Go TUI:${RESET} ${WHITE}go install github.com/ImJustRicky/muster-tui@latest${RESET} ${DIM}(beta)${RESET}"
+      echo -e "  ${ACCENT_BRIGHT}*${RESET} ${DIM}Try the new Go TUI:${RESET} ${WHITE}go install github.com/Muster-dev/muster-tui@latest${RESET} ${DIM}(beta)${RESET}"
       echo ""
     fi
 
@@ -484,7 +484,9 @@ cmd_dashboard() {
       fi
     fi
     if [[ "$_registry_stale" == "true" ]]; then
-      curl -fsSL "https://raw.githubusercontent.com/ImJustRicky/muster-skills/main/registry.json" \
+      curl -fsSL "https://raw.githubusercontent.com/Muster-dev/muster-skills/main/registry.json" \
+        -o "$_registry_cache" 2>/dev/null \
+        || curl -fsSL "https://raw.githubusercontent.com/ImJustRicky/muster-skills/main/registry.json" \
         -o "$_registry_cache" 2>/dev/null || true
     fi
 

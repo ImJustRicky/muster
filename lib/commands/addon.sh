@@ -6,10 +6,10 @@ ADDON_BIN_DIR="${HOME}/.muster/bin"
 ADDON_LOCAL_BIN="${HOME}/.local/bin"
 
 # ── Addon registry ──
-# Each addon: <name>|<repo>|<binaries (comma-sep)>|<dest-dir>|<description>
+# Each addon: <name>|<repo>|<binaries (comma-sep)>|<dest-dir>|<description>|<old-repo (migration fallback)>
 _ADDON_REGISTRY=(
-  "fleet-cloud|Muster-dev/muster-fleet-cloud|muster-tunnel,muster-agent|${ADDON_LOCAL_BIN}|Cloud fleet deployment (tunnel + agent)"
-  "tui|ImJustRicky/muster-tui|muster-tui|${ADDON_LOCAL_BIN}|Rich TUI frontend"
+  "fleet-cloud|Muster-dev/muster-fleet-cloud|muster-tunnel,muster-agent|${ADDON_LOCAL_BIN}|Cloud fleet deployment (tunnel + agent)|"
+  "tui|Muster-dev/muster-tui|muster-tui|${ADDON_LOCAL_BIN}|Rich TUI frontend|ImJustRicky/muster-tui"
 )
 
 _addon_field() {
@@ -158,11 +158,12 @@ addon_add() {
     return 1
   fi
 
-  local repo bins dest desc
+  local repo bins dest desc repo_old
   repo="$(_addon_field "$entry" 2)"
   bins="$(_addon_field "$entry" 3)"
   dest="$(_addon_field "$entry" 4)"
   desc="$(_addon_field "$entry" 5)"
+  repo_old="$(_addon_field "$entry" 6)"
 
   # Check if already installed
   local existing_ver=""
@@ -186,11 +187,17 @@ addon_add() {
     aarch64|arm64) arch="arm64" ;;
   esac
 
-  # Fetch latest version
+  # Fetch latest version (try new org, fall back to old)
   info "  Fetching latest ${name} release..."
-  local version
+  local version _active_repo
+  _active_repo="$repo"
   version="$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null \
     | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')"
+  if [[ -z "$version" && -n "$repo_old" ]]; then
+    _active_repo="$repo_old"
+    version="$(curl -fsSL "https://api.github.com/repos/${repo_old}/releases/latest" 2>/dev/null \
+      | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')"
+  fi
 
   if [[ -z "$version" ]]; then
     err "Could not determine latest version for ${name}"
@@ -201,7 +208,7 @@ addon_add() {
   info "  Installing ${name} v${version} (${os}/${arch})..."
   mkdir -p "$dest"
 
-  local base_url="https://github.com/${repo}/releases/download/v${version}"
+  local base_url="https://github.com/${_active_repo}/releases/download/v${version}"
   local ok=true
   local bin_name first_bin=""
 

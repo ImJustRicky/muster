@@ -519,7 +519,8 @@ _settings_pair_tui() {
 
 _settings_download_tui() {
   local bin_dir="${HOME}/.local/bin"
-  local tui_repo="ImJustRicky/muster-tui"
+  local tui_repo="Muster-dev/muster-tui"
+  local tui_repo_old="ImJustRicky/muster-tui"
 
   echo ""
 
@@ -566,25 +567,31 @@ _settings_download_tui() {
   local tui_url="https://github.com/${tui_repo}/releases/latest/download/${_bin_name}"
   mkdir -p "$bin_dir"
 
+  local tui_url_old="https://github.com/${tui_repo_old}/releases/latest/download/${_bin_name}"
   local tui_ok=false
   if has_cmd curl; then
-    if curl -fsSL "$tui_url" -o "${bin_dir}/muster-tui" 2>/dev/null; then
+    if curl -fsSL "$tui_url" -o "${bin_dir}/muster-tui" 2>/dev/null \
+        || curl -fsSL "$tui_url_old" -o "${bin_dir}/muster-tui" 2>/dev/null; then
       chmod +x "${bin_dir}/muster-tui"
       tui_ok=true
     else
       # Fallback: resolve latest tag via API and try direct URL
       local _latest_tag=""
       _latest_tag=$(curl -fsSL "https://api.github.com/repos/${tui_repo}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/".*//')
+      [[ -z "$_latest_tag" ]] && _latest_tag=$(curl -fsSL "https://api.github.com/repos/${tui_repo_old}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/".*//')
       if [[ -n "$_latest_tag" ]]; then
         local _fallback_url="https://github.com/${tui_repo}/releases/download/${_latest_tag}/${_bin_name}"
-        if curl -fsSL "$_fallback_url" -o "${bin_dir}/muster-tui" 2>/dev/null; then
+        local _fallback_url_old="https://github.com/${tui_repo_old}/releases/download/${_latest_tag}/${_bin_name}"
+        if curl -fsSL "$_fallback_url" -o "${bin_dir}/muster-tui" 2>/dev/null \
+            || curl -fsSL "$_fallback_url_old" -o "${bin_dir}/muster-tui" 2>/dev/null; then
           chmod +x "${bin_dir}/muster-tui"
           tui_ok=true
         fi
       fi
     fi
   elif has_cmd wget; then
-    if wget -q "$tui_url" -O "${bin_dir}/muster-tui" 2>/dev/null; then
+    if wget -q "$tui_url" -O "${bin_dir}/muster-tui" 2>/dev/null \
+        || wget -q "$tui_url_old" -O "${bin_dir}/muster-tui" 2>/dev/null; then
       chmod +x "${bin_dir}/muster-tui"
       tui_ok=true
     fi

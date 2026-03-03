@@ -2,7 +2,7 @@
 
 Skills are addons that extend muster with new capabilities — notifications, monitoring, automation, anything. A skill is just a folder with a `skill.json` manifest and a `run.sh` script.
 
-Browse official skills: [muster-skills marketplace](https://github.com/ImJustRicky/muster-skills)
+Browse official skills: [muster-skills marketplace](https://github.com/Muster-dev/muster-skills)
 
 ## Quick Start
 
@@ -180,7 +180,7 @@ muster skill add https://github.com/yourname/muster-skill-ssl
 
 ### Option B: Submit to the official marketplace
 
-Add your skill to [muster-skills](https://github.com/ImJustRicky/muster-skills):
+Add your skill to [muster-skills](https://github.com/Muster-dev/muster-skills):
 
 1. Fork the repo
 2. Add your skill folder (`my-skill/skill.json` + `my-skill/run.sh`)

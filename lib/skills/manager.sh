@@ -658,7 +658,8 @@ print('yes' if sys.argv[2] in d.get('hooks',[]) else 'no')
 # Skill Marketplace — browse and install from the official registry
 # ---------------------------------------------------------------------------
 
-SKILL_REGISTRY_URL="https://raw.githubusercontent.com/ImJustRicky/muster-skills/main/registry.json"
+SKILL_REGISTRY_URL="https://raw.githubusercontent.com/Muster-dev/muster-skills/main/registry.json"
+SKILL_REGISTRY_URL_OLD="https://raw.githubusercontent.com/ImJustRicky/muster-skills/main/registry.json"
 
 skill_marketplace() {
   source "$MUSTER_ROOT/lib/tui/checklist.sh"
@@ -673,7 +674,8 @@ skill_marketplace() {
   tmp_file=$(mktemp)
 
   start_spinner "Fetching skill registry..."
-  if ! curl -fsSL "$SKILL_REGISTRY_URL" -o "$tmp_file" 2>/dev/null; then
+  if ! curl -fsSL "$SKILL_REGISTRY_URL" -o "$tmp_file" 2>/dev/null \
+      && ! curl -fsSL "$SKILL_REGISTRY_URL_OLD" -o "$tmp_file" 2>/dev/null; then
     stop_spinner
     err "Failed to fetch skill registry"
     rm -f "$tmp_file"
@@ -855,7 +857,9 @@ skill_marketplace_install() {
   tmp_dir=$(mktemp -d)
 
   start_spinner "Installing ${name}..."
-  git clone --quiet --depth 1 https://github.com/ImJustRicky/muster-skills.git "$tmp_dir" 2>/dev/null
+  if ! git clone --quiet --depth 1 https://github.com/Muster-dev/muster-skills.git "$tmp_dir" 2>/dev/null; then
+    git clone --quiet --depth 1 https://github.com/ImJustRicky/muster-skills.git "$tmp_dir" 2>/dev/null
+  fi
   stop_spinner
 
   if [[ -d "${tmp_dir}/${name}" && -f "${tmp_dir}/${name}/skill.json" ]]; then

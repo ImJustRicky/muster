@@ -49,6 +49,11 @@ update_check_start() {
   # Cache provides instant display; fetch refreshes the result
   (
     cd "$MUSTER_ROOT" || exit 1
+    # Migrate remote URL to new org if still pointing to old
+    _cr="$(git remote get-url origin 2>/dev/null || true)"
+    if [[ "$_cr" == *"ImJustRicky/muster"* ]]; then
+      git remote set-url origin "https://github.com/Muster-dev/muster.git" 2>/dev/null || true
+    fi
     git fetch --quiet origin main 2>/dev/null || exit 1
     local local_head remote_head
     local_head=$(git rev-parse HEAD 2>/dev/null)
@@ -85,6 +90,11 @@ update_apply() {
   echo ""
   info "Updating muster..."
   echo ""
+  # Migrate remote URL to new org if still pointing to old
+  _cur_remote="$(cd "$MUSTER_ROOT" && git remote get-url origin 2>/dev/null || true)"
+  if [[ "$_cur_remote" == *"ImJustRicky/muster"* ]]; then
+    (cd "$MUSTER_ROOT" && git remote set-url origin "https://github.com/Muster-dev/muster.git" 2>/dev/null) || true
+  fi
   if (cd "$MUSTER_ROOT" && git pull --quiet origin main 2>&1); then
     printf '%s\n%s\n' "$(date +%s)" "current" > "$_MUSTER_UPDATE_CACHE"
     MUSTER_UPDATE_AVAILABLE="false"

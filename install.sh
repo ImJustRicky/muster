@@ -2,7 +2,8 @@
 # muster installer — bash <(curl -fsSL https://getmuster.dev/install.sh)
 set -euo pipefail
 
-REPO="ImJustRicky/muster"
+REPO="Muster-dev/muster"
+REPO_OLD="ImJustRicky/muster"
 INSTALL_DIR="${MUSTER_INSTALL_DIR:-$HOME/.muster}"
 BIN_DIR="${MUSTER_BIN_DIR:-$HOME/.local/bin}"
 MANIFEST="${INSTALL_DIR}/install.json"
@@ -46,10 +47,17 @@ _fresh_install=true
 if [[ -d "${INSTALL_DIR}/repo" ]]; then
   _fresh_install=false
   printf '  %bUpdating existing installation...%b\n' "$_D" "$_R"
+  # Migrate remote URL to new org if still pointing to old
+  _cur_remote="$(cd "${INSTALL_DIR}/repo" && git remote get-url origin 2>/dev/null || true)"
+  if [[ "$_cur_remote" == *"ImJustRicky/muster"* ]]; then
+    (cd "${INSTALL_DIR}/repo" && git remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null) || true
+  fi
   (cd "${INSTALL_DIR}/repo" && git pull --quiet)
 else
   printf '  %bCloning muster...%b\n' "$_D" "$_R"
-  git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo"
+  if ! git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo" 2>/dev/null; then
+    git clone --quiet "https://github.com/${REPO_OLD}.git" "${INSTALL_DIR}/repo"
+  fi
 fi
 
 mkdir -p "$BIN_DIR"
@@ -140,7 +148,8 @@ fi
 
 # ── TUI Frontend ──
 # Offer optional muster-tui (rich TUI frontend built with Go)
-TUI_REPO="ImJustRicky/muster-tui"
+TUI_REPO="Muster-dev/muster-tui"
+TUI_REPO_OLD="ImJustRicky/muster-tui"
 
 if [[ "$_interactive" = true ]]; then
   # Check if muster-tui is already installed
@@ -202,15 +211,18 @@ if [[ "$_interactive" = true ]]; then
       esac
 
       _tui_url="https://github.com/${TUI_REPO}/releases/latest/download/muster-tui-${_os}-${_arch}"
+      _tui_url_old="https://github.com/${TUI_REPO_OLD}/releases/latest/download/muster-tui-${_os}-${_arch}"
 
       _tui_ok=false
       if command -v curl >/dev/null 2>&1; then
-        if curl -fsSL "$_tui_url" -o "${BIN_DIR}/muster-tui" 2>/dev/null; then
+        if curl -fsSL "$_tui_url" -o "${BIN_DIR}/muster-tui" 2>/dev/null \
+            || curl -fsSL "$_tui_url_old" -o "${BIN_DIR}/muster-tui" 2>/dev/null; then
           chmod +x "${BIN_DIR}/muster-tui"
           _tui_ok=true
         fi
       elif command -v wget >/dev/null 2>&1; then
-        if wget -q "$_tui_url" -O "${BIN_DIR}/muster-tui" 2>/dev/null; then
+        if wget -q "$_tui_url" -O "${BIN_DIR}/muster-tui" 2>/dev/null \
+            || wget -q "$_tui_url_old" -O "${BIN_DIR}/muster-tui" 2>/dev/null; then
           chmod +x "${BIN_DIR}/muster-tui"
           _tui_ok=true
         fi

@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://getmuster.dev">Website</a> · <a href="https://github.com/ImJustRicky/muster">GitHub</a> · <a href="https://github.com/ImJustRicky/muster/issues">Issues</a>
+  <a href="https://getmuster.dev">Website</a> · <a href="https://github.com/Muster-dev/muster">GitHub</a> · <a href="https://github.com/Muster-dev/muster/issues">Issues</a>
 </p>
 
 ---
@@ -23,7 +23,7 @@ curl -fsSL https://getmuster.dev/install.sh | bash
 Or clone manually:
 
 ```bash
-git clone https://github.com/ImJustRicky/muster.git ~/.muster/repo
+git clone https://github.com/Muster-dev/muster.git ~/.muster/repo
 ln -s ~/.muster/repo/bin/muster ~/.local/bin/muster
 ln -s ~/.muster/repo/bin/muster-mcp ~/.local/bin/muster-mcp
 ```
