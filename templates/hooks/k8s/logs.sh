@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Stream logs for {{SERVICE_NAME}} on Kubernetes
 
 NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"

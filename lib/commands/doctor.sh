@@ -734,8 +734,16 @@ $(cat "$_hf" 2>/dev/null)"
     case "$_retention" in ''|*[!0-9]*) _retention=7 ;; esac
 
     if [[ -d "$_log_dir" ]]; then
-      local _old_logs
-      _old_logs=$(find "$_log_dir" -name "*.log" -mtime +"$_retention" 2>/dev/null | wc -l | tr -d ' ')
+      local _old_logs _find_tmp="/tmp/.muster_find_$$"
+      ( find "$_log_dir" -name "*.log" -mtime +"$_retention" 2>/dev/null | wc -l | tr -d ' ' > "$_find_tmp" ) &
+      local _fp=$!
+      ( sleep 10 && kill "$_fp" 2>/dev/null ) &
+      local _fkp=$!
+      wait "$_fp" 2>/dev/null || true
+      kill "$_fkp" 2>/dev/null; wait "$_fkp" 2>/dev/null || true
+      _old_logs=$(cat "$_find_tmp" 2>/dev/null)
+      rm -f "$_find_tmp"
+      case "$_old_logs" in ''|*[!0-9]*) _old_logs=0 ;; esac
       if (( _old_logs > 0 )); then
         if [[ "$fix" == "true" ]]; then
           find "$_log_dir" -name "*.log" -mtime +"$_retention" -delete 2>/dev/null
@@ -789,11 +797,19 @@ $(cat "$_hf" 2>/dev/null)"
       _doc_pass "No build context overlaps"
     fi
 
-    # Disk space on project directory
+    # Disk space on project directory (timeout to avoid NFS hangs)
     local _avail_kb=0
     if has_cmd df; then
-      _avail_kb=$(df -k "$project_dir" 2>/dev/null | tail -1 | awk '{print $4}')
-      case "$_avail_kb" in *[!0-9]*) _avail_kb=0 ;; esac
+      local _df_tmp="/tmp/.muster_df_$$"
+      ( df -k "$project_dir" 2>/dev/null | tail -1 | awk '{print $4}' > "$_df_tmp" ) &
+      local _dp=$!
+      ( sleep 5 && kill "$_dp" 2>/dev/null ) &
+      local _kp=$!
+      wait "$_dp" 2>/dev/null || true
+      kill "$_kp" 2>/dev/null; wait "$_kp" 2>/dev/null || true
+      _avail_kb=$(cat "$_df_tmp" 2>/dev/null)
+      rm -f "$_df_tmp"
+      case "$_avail_kb" in ''|*[!0-9]*) _avail_kb=0 ;; esac
       if (( _avail_kb > 0 )); then
         local _avail_mb=$(( _avail_kb / 1024 ))
         if (( _avail_mb < 100 )); then

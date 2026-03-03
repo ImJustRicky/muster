@@ -91,6 +91,18 @@ _friendly_name() {
   echo "$result"
 }
 
+# ── Escape a string for use as a sed replacement ──
+# Handles: backslash, pipe (our delimiter), ampersand
+_escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'
+}
+
+# ── Escape a string for embedding inside single quotes ──
+# Replaces ' with '\'' (end quote, escaped literal quote, start quote)
+_escape_single_quotes() {
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+}
+
 # ── Copy template hooks for a service, replacing placeholders ──
 # Args: stack svc_key svc_name hook_dir [compose_file] [dockerfile] [k8s_dir] [namespace] [port] [k8s_deploy_name]
 _setup_copy_hooks() {
@@ -117,21 +129,37 @@ _setup_copy_hooks() {
     return
   fi
 
+  # Escape all substitution values for safe sed replacement
+  local esc_svc_name esc_k8s_deploy esc_svc_image esc_namespace
+  local esc_port esc_compose esc_dockerfile esc_k8s_path esc_start_cmd
+  esc_svc_name=$(_escape_sed_replacement "$svc_name")
+  esc_k8s_deploy=$(_escape_sed_replacement "$k8s_deploy_name")
+  esc_svc_image=$(_escape_sed_replacement "$svc_image")
+  esc_namespace=$(_escape_sed_replacement "$namespace")
+  esc_port=$(_escape_sed_replacement "$port")
+  esc_compose=$(_escape_sed_replacement "$compose_path")
+  esc_dockerfile=$(_escape_sed_replacement "$dockerfile_path")
+  esc_k8s_path=$(_escape_sed_replacement "$k8s_path")
+  # START_CMD is embedded in single quotes in templates, so escape single quotes first
+  local sq_start_cmd
+  sq_start_cmd=$(_escape_single_quotes "$start_cmd")
+  esc_start_cmd=$(_escape_sed_replacement "$sq_start_cmd")
+
   local f
   for f in "${template_dir}"/*.sh; do
     [[ ! -f "$f" ]] && continue
     local basename
     basename=$(basename "$f")
     sed \
-      -e "s|{{SERVICE_NAME}}|${svc_name}|g" \
-      -e "s|{{K8S_DEPLOY_NAME}}|${k8s_deploy_name}|g" \
-      -e "s|{{SERVICE_IMAGE}}|${svc_image}|g" \
-      -e "s|{{NAMESPACE}}|${namespace}|g" \
-      -e "s|{{PORT}}|${port}|g" \
-      -e "s|{{COMPOSE_FILE}}|${compose_path}|g" \
-      -e "s|{{DOCKERFILE}}|${dockerfile_path}|g" \
-      -e "s|{{K8S_DIR}}|${k8s_path}|g" \
-      -e "s|{{START_CMD}}|${start_cmd}|g" \
+      -e "s|{{SERVICE_NAME}}|${esc_svc_name}|g" \
+      -e "s|{{K8S_DEPLOY_NAME}}|${esc_k8s_deploy}|g" \
+      -e "s|{{SERVICE_IMAGE}}|${esc_svc_image}|g" \
+      -e "s|{{NAMESPACE}}|${esc_namespace}|g" \
+      -e "s|{{PORT}}|${esc_port}|g" \
+      -e "s|{{COMPOSE_FILE}}|${esc_compose}|g" \
+      -e "s|{{DOCKERFILE}}|${esc_dockerfile}|g" \
+      -e "s|{{K8S_DIR}}|${esc_k8s_path}|g" \
+      -e "s|{{START_CMD}}|${esc_start_cmd}|g" \
       "$f" > "${hook_dir}/${basename}"
     chmod +x "${hook_dir}/${basename}"
   done

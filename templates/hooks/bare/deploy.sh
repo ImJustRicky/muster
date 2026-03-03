@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Deploy {{SERVICE_NAME}} via systemd
 
 SERVICE="{{SERVICE_NAME}}"
+: "${SERVICE:?SERVICE is required}"
 
 echo "Pulling latest code..."
 git pull origin main # TODO: adjust branch if needed

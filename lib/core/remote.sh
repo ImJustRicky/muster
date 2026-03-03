@@ -76,6 +76,7 @@ remote_exec_stdout() {
 
     # Pipe the hook script content
     cat "$hook_file"
+  # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
   } | ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "bash -s"
 }
 
@@ -87,6 +88,7 @@ remote_check() {
   _remote_load_config "$svc"
   _remote_build_opts
 
+  # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
   ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "echo ok" &>/dev/null
 }
 

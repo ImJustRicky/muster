@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Cleanup {{SERVICE_NAME}} via systemd
 
 SERVICE="{{SERVICE_NAME}}"

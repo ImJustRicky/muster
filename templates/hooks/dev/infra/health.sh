@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Health check for {{SERVICE_NAME}} (infrastructure) via Docker Compose
 
 COMPOSE_FILE="${COMPOSE_FILE:-{{COMPOSE_FILE}}}"

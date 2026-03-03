@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Deploy {{SERVICE_NAME}} to Kubernetes
 
 NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"
@@ -8,6 +8,9 @@ DEPLOY_NAME="${MUSTER_K8S_DEPLOYMENT:-{{K8S_DEPLOY_NAME}}}"
 REGISTRY="${DOCKER_REGISTRY:-localhost:5000}"
 TAG="${IMAGE_TAG:-latest}"
 TIMEOUT="${MUSTER_DEPLOY_TIMEOUT:-120}"
+: "${SERVICE:?SERVICE is required}"
+: "${NAMESPACE:?NAMESPACE is required}"
+: "${DEPLOY_NAME:?DEPLOY_NAME is required}"
 
 # Smart rollout wait: progress updates + early error detection
 _k8s_smart_wait() {

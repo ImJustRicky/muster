@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Cleanup stuck pods for {{SERVICE_NAME}} (infrastructure) on Kubernetes
 
 NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"

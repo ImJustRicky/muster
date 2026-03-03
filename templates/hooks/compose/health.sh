@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Health check for {{SERVICE_NAME}} via Docker Compose
 
 COMPOSE_FILE="${COMPOSE_FILE:-{{COMPOSE_FILE}}}"
 SERVICE="{{SERVICE_NAME}}"
+: "${SERVICE:?SERVICE is required}"
 
 # Check if container is running
 if ! docker compose -f "$COMPOSE_FILE" ps "$SERVICE" 2>/dev/null | grep -q "running\|Up"; then

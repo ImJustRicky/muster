@@ -307,6 +307,7 @@ groups_remote_exec() {
   local name="$1" index="$2" cmd="$3"
   _groups_load_remote "$name" "$index"
   _groups_build_ssh_opts
+  # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
   ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd"
 }
 
@@ -315,5 +316,6 @@ groups_remote_check() {
   local name="$1" index="$2"
   _groups_load_remote "$name" "$index"
   _groups_build_ssh_opts
+  # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
   ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null
 }

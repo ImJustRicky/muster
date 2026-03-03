@@ -100,6 +100,8 @@ cmd_rollback() {
     info "Rolling back ${name} remotely ($(remote_desc "$target"))"
   fi
 
+  local _rb_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
+
   while true; do
     local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
@@ -108,9 +110,9 @@ cmd_rollback() {
       local _all_env="${_cred_env_lines}"
       [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
 ${_k8s_env_lines}"
-      remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
+      _run_with_timeout "$_rb_timeout" remote_exec_stdout "$target" "$hook" "$_all_env" >> "$log_file" 2>&1
     else
-      "$hook" >> "$log_file" 2>&1
+      _run_with_timeout "$_rb_timeout" "$hook" >> "$log_file" 2>&1
     fi
     local rc=$?
     stop_spinner
@@ -122,7 +124,11 @@ ${_k8s_env_lines}"
       run_skill_hooks "post-rollback" "$target"
       break
     else
-      err "${name} rollback failed (exit code ${rc})"
+      if (( rc == 124 )); then
+        err "${name} rollback timed out after ${_rb_timeout}s"
+      else
+        err "${name} rollback failed (exit code ${rc})"
+      fi
       _history_log_event "$target" "rollback" "failed"
 
       # Show last few lines of log for context
@@ -146,9 +152,9 @@ ${_k8s_env_lines}"
           if [[ -x "$cleanup_hook" ]]; then
             start_spinner "Running cleanup for ${name}..."
             if remote_is_enabled "$target"; then
-              remote_exec_stdout "$target" "$cleanup_hook" "" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              _run_with_timeout "$_rb_timeout" remote_exec_stdout "$target" "$cleanup_hook" "" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
             else
-              "$cleanup_hook" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
+              _run_with_timeout "$_rb_timeout" "$cleanup_hook" >> "${log_dir}/${target}-cleanup-$(date +%Y%m%d-%H%M%S).log" 2>&1
             fi
             stop_spinner
             ok "${name} cleaned up"

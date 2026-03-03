@@ -212,6 +212,7 @@ cmd_deploy() {
           _remote_load_config "$svc"
           _remote_build_opts
           local _gp_cmd="cd ${_REMOTE_PROJECT_DIR:-.} && git pull ${_gp_remote} ${_gp_branch}"
+          # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
           ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "$_gp_cmd" >/dev/null 2>&1 || _gp_rc=$?
         else
           git pull "$_gp_remote" "$_gp_branch" >/dev/null 2>&1 || _gp_rc=$?
@@ -233,12 +234,13 @@ cmd_deploy() {
         done <<< "$_cred_env_lines"
       fi
 
+      local _json_hook_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
       {
         if remote_is_enabled "$svc"; then
-          remote_exec_stdout "$svc" "$hook" "${_cred_env_lines}
+          _run_with_timeout "$_json_hook_timeout" remote_exec_stdout "$svc" "$hook" "${_cred_env_lines}
 ${_k8s_env_lines}" 2>&1
         else
-          "$hook" 2>&1
+          _run_with_timeout "$_json_hook_timeout" "$hook" 2>&1
         fi
       } | while IFS= read -r _jline; do
         printf '%s\n' "$_jline" >> "$log_file"
@@ -273,7 +275,11 @@ ${_k8s_env_lines}" 2>&1
           fi
         fi
       else
-        printf '{"event":"done","service":"%s","status":"failed","exit_code":%d}\n' "$svc" "$_deploy_rc"
+        if (( _deploy_rc == 124 )); then
+          printf '{"event":"done","service":"%s","status":"timeout","timeout":%d}\n' "$svc" "$_json_hook_timeout"
+        else
+          printf '{"event":"done","service":"%s","status":"failed","exit_code":%d}\n' "$svc" "$_deploy_rc"
+        fi
         _history_log_event "$svc" "deploy" "failed" ""
         export MUSTER_DEPLOY_STATUS="failed"
         run_skill_hooks "post-deploy" "$svc" 2>/dev/null
@@ -439,6 +445,7 @@ ${_k8s_env_lines}" 2>&1
             _remote_load_config "$svc"
             _remote_build_opts
             local _gp_cmd="cd ${_REMOTE_PROJECT_DIR:-.} && git pull ${_gp_remote} ${_gp_branch}"
+            # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
             _gp_output=$(ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "$_gp_cmd" 2>&1) || _gp_rc=$?
           else
             start_spinner "Pulling ${_gp_remote}/${_gp_branch}"
@@ -468,13 +475,15 @@ ${_k8s_env_lines}" 2>&1
           fi
         fi
 
+        local _hook_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
+
         if remote_is_enabled "$svc"; then
           # ── Remote deploy via SSH ──
           info "Deploying ${name} remotely ($(remote_desc "$svc"))"
           local _all_env="${_cred_env_lines}"
           [[ -n "$_k8s_env_lines" ]] && _all_env="${_all_env}
 ${_k8s_env_lines}"
-          stream_in_box "$name" "$log_file" remote_exec_stdout "$svc" "$hook" "$_all_env"
+          stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" remote_exec_stdout "$svc" "$hook" "$_all_env"
         else
           # ── Local deploy ──
           if [[ -n "$_cred_env_lines" ]]; then
@@ -484,7 +493,7 @@ ${_k8s_env_lines}"
             done <<< "$_cred_env_lines"
           fi
 
-          stream_in_box "$name" "$log_file" "$hook"
+          stream_in_box "$name" "$log_file" _run_with_timeout "$_hook_timeout" "$hook"
         fi
         local rc=$?
         unset _SIB_REDRAW_FN
@@ -588,7 +597,11 @@ ${_k8s_env_lines}"
 
           break
         else
-          err "${name} deploy failed (exit code ${rc})"
+          if (( rc == 124 )); then
+            err "${name} deploy timed out after ${_hook_timeout}s"
+          else
+            err "${name} deploy failed (exit code ${rc})"
+          fi
           # Re-capture SHA after hook (may have done git pull before failing)
           if [[ "$_git_in_repo" == "true" ]]; then
             _git_sha=$(_git_current_sha)

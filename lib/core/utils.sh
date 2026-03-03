@@ -79,6 +79,67 @@ has_cmd() {
   command -v "$1" &>/dev/null
 }
 
+# ── Hook timeout wrapper ──
+
+# Run a command with a timeout. Returns the command's exit code, or 124 on timeout.
+# Uses GNU timeout if available, falls back to bash background process + watchdog.
+# Usage: _run_with_timeout <timeout_secs> <command> [args...]
+# The command's stdout/stderr are NOT redirected — caller handles that.
+_run_with_timeout() {
+  local _timeout_secs="$1"
+  shift
+
+  # No timeout (0 or empty) — run directly
+  if [[ -z "$_timeout_secs" || "$_timeout_secs" == "0" ]]; then
+    "$@"
+    return $?
+  fi
+
+  # Try GNU timeout (available on Linux, Homebrew gtimeout on macOS)
+  if has_cmd timeout; then
+    timeout "$_timeout_secs" "$@"
+    return $?
+  fi
+  if has_cmd gtimeout; then
+    gtimeout "$_timeout_secs" "$@"
+    return $?
+  fi
+
+  # Fallback: bash background process + watchdog (macOS bash 3.2 compatible)
+  "$@" &
+  local _cmd_pid=$!
+
+  # Watchdog: sleep then kill the command if still running
+  (
+    local _elapsed=0
+    while (( _elapsed < _timeout_secs )); do
+      sleep 1
+      _elapsed=$(( _elapsed + 1 ))
+      kill -0 "$_cmd_pid" 2>/dev/null || exit 0
+    done
+    # Timeout reached — kill the command
+    kill -TERM "$_cmd_pid" 2>/dev/null
+    sleep 2
+    kill -KILL "$_cmd_pid" 2>/dev/null
+  ) &
+  local _watchdog_pid=$!
+
+  wait "$_cmd_pid" 2>/dev/null
+  local _rc=$?
+
+  # Clean up watchdog
+  kill "$_watchdog_pid" 2>/dev/null
+  wait "$_watchdog_pid" 2>/dev/null
+
+  # Detect if killed by signal (bash reports 128+signal for killed processes)
+  # SIGTERM=15 → 143, SIGKILL=9 → 137
+  if (( _rc == 143 || _rc == 137 )); then
+    return 124
+  fi
+
+  return "$_rc"
+}
+
 # ── .env file loading ──
 
 # Tracks variable names loaded from .env for cleanup

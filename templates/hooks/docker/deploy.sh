@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Deploy {{SERVICE_NAME}} via Docker
 
 SERVICE="{{SERVICE_NAME}}"
 TAG="${IMAGE_TAG:-latest}"
+: "${SERVICE:?SERVICE is required}"
 
 echo "Building ${SERVICE}..."
 docker build -t "${SERVICE}:${TAG}" -f "{{DOCKERFILE}}" .

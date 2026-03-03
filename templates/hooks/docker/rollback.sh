@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Rollback {{SERVICE_NAME}} via Docker
 
 SERVICE="{{SERVICE_NAME}}"

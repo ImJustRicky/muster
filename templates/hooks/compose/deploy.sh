@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Deploy {{SERVICE_NAME}} via Docker Compose
 
 COMPOSE_FILE="${COMPOSE_FILE:-{{COMPOSE_FILE}}}"
+: "${COMPOSE_FILE:?COMPOSE_FILE is required}"
 
 echo "Building {{SERVICE_NAME}}..."
 docker compose -f "$COMPOSE_FILE" build {{SERVICE_NAME}}

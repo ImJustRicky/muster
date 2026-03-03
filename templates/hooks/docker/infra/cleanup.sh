@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Cleanup {{SERVICE_NAME}} (infrastructure) via Docker
 
 echo "Removing stopped containers..."

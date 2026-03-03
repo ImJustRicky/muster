@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Rollback {{SERVICE_NAME}} — restart the dev process
 
 SERVICE="{{SERVICE_NAME}}"
 PORT="{{PORT}}"
-START_CMD="{{START_CMD}}"
+START_CMD='{{START_CMD}}'
 PID_DIR=".muster/pids"
 LOG_DIR=".muster/logs"
 

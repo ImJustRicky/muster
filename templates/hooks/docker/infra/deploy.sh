@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Deploy {{SERVICE_NAME}} (infrastructure) via Docker
 
 SERVICE="{{SERVICE_NAME}}"
 IMAGE="{{SERVICE_IMAGE}}"
+: "${SERVICE:?SERVICE is required}"
 
 echo "Pulling ${IMAGE}..."
 docker pull "${IMAGE}"

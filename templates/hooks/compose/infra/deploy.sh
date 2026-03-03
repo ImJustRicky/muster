@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Deploy {{SERVICE_NAME}} (infrastructure) via Docker Compose
 
 COMPOSE_FILE="${COMPOSE_FILE:-{{COMPOSE_FILE}}}"
+: "${COMPOSE_FILE:?COMPOSE_FILE is required}"
 
 echo "Pulling {{SERVICE_NAME}} image..."
 docker compose -f "$COMPOSE_FILE" pull {{SERVICE_NAME}}

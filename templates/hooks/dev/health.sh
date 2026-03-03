@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Health check for {{SERVICE_NAME}} — PID alive + optional HTTP ping
 
 SERVICE="{{SERVICE_NAME}}"
 PORT="{{PORT}}"
 PID_FILE=".muster/pids/${SERVICE}.pid"
+: "${SERVICE:?SERVICE is required}"
 
 # Check PID is alive
 if [[ ! -f "$PID_FILE" ]]; then

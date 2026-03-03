@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 # Rollback {{SERVICE_NAME}} on Kubernetes
 
 NAMESPACE="${MUSTER_K8S_NAMESPACE:-{{NAMESPACE}}}"

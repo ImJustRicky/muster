@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Cleanup {{SERVICE_NAME}} — kill process, remove PID + log files
 
 SERVICE="{{SERVICE_NAME}}"

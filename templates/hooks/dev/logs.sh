@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Stream logs for {{SERVICE_NAME}}
 
 SERVICE="{{SERVICE_NAME}}"

@@ -844,6 +844,7 @@ _group_deploy_remote() {
     cmd="cd ${_escaped_dir} && ${cmd}"
   fi
 
+  # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
   ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" >> "$log_file" 2>&1
 }
 
@@ -1020,6 +1021,7 @@ _group_cmd_status() {
       _groups_load_remote "$group_name" "$i"
       _groups_build_ssh_opts
 
+      # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
       if ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
         local cmd="muster status --json"
         if [[ -n "$_GP_PROJECT_DIR" ]]; then
@@ -1028,6 +1030,7 @@ _group_cmd_status() {
           cmd="cd ${_escaped_dir} && ${cmd}"
         fi
         local _result=""
+        # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
         _result=$(ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" 2>/dev/null) || true
 
         if [[ -n "$_result" ]] && printf '%s' "$_result" | jq -e '.services' &>/dev/null; then
