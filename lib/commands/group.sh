@@ -753,6 +753,7 @@ _group_cmd_deploy() {
   echo ""
 
   local _preview_lines=3
+  local _redraw_lines=4
   local _w=$(( TERM_COLS - 6 ))
   (( _w > 70 )) && _w=70
   (( _w < 20 )) && _w=20
@@ -770,10 +771,11 @@ _group_cmd_deploy() {
     local rc=0
 
     while true; do
-      # Draw progress bar
+      # Draw progress bar + service info + preview
       progress_bar "$i" "$total" "${_pname}"
       echo ""
       echo ""
+      printf '  %b⠋%b %bStarting...%b\n' "${ACCENT}" "${RESET}" "${DIM}" "${RESET}"
 
       # Print empty preview lines (to be overwritten)
       local _pi=0
@@ -805,10 +807,35 @@ _group_cmd_deploy() {
           break
         fi
 
-        # Move cursor up to overwrite preview lines
-        printf '\033[%dA' "$_preview_lines"
+        # Move cursor up to overwrite service info + preview lines
+        printf '\033[%dA' "$_redraw_lines"
 
-        # Read last N lines from log
+        # Parse current service from log markers
+        local _cur_svc_label="Deploying..."
+        local _last_marker=""
+        _last_marker=$(grep '@@SVC:' "$log_file" 2>/dev/null | tail -1)
+        if [[ -n "$_last_marker" ]]; then
+          local _sm="${_last_marker#*@@SVC:}"
+          _sm="${_sm%@@*}"
+          local _sm_name _sm_idx _sm_total
+          _sm_name=$(printf '%s' "$_sm" | cut -d: -f2)
+          _sm_idx=$(printf '%s' "$_sm" | cut -d: -f3)
+          _sm_total=$(printf '%s' "$_sm" | cut -d: -f4)
+          _cur_svc_label="Deploying ${_sm_name} (${_sm_idx}/${_sm_total})"
+        fi
+
+        # Service info line with spinner
+        local _spin="${_frames[$_fi]}"
+        _fi=$(( (_fi + 1) % ${#_frames[@]} ))
+        local _svc_pad_len=$(( _w - ${#_cur_svc_label} - 2 ))
+        (( _svc_pad_len < 0 )) && _svc_pad_len=0
+        local _svc_pad
+        _svc_pad=$(printf '%*s' "$_svc_pad_len" "")
+        printf '\033[K  %b%s%b %b%s%b%s\n' \
+          "${ACCENT}" "$_spin" "${RESET}" \
+          "${WHITE}" "$_cur_svc_label" "${RESET}" "$_svc_pad"
+
+        # Read last N lines from log (filtering out markers)
         local _tl=()
         local _tl_count=0
         while IFS= read -r _tline; do
@@ -816,7 +843,7 @@ _group_cmd_deploy() {
           _tline=$(printf '%s' "$_tline" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
           _tl[${#_tl[@]}]="$_tline"
           _tl_count=$(( _tl_count + 1 ))
-        done < <(tail -n "$_preview_lines" "$log_file" 2>/dev/null)
+        done < <(grep -v '^@@SVC' "$log_file" 2>/dev/null | tail -n "$_preview_lines")
 
         _pi=0
         while (( _pi < _preview_lines )); do
@@ -850,10 +877,10 @@ _group_cmd_deploy() {
 
       # Check if interrupted
       if [[ "$_group_interrupted" == "true" ]]; then
-        # Clear preview lines
-        printf '\033[%dA' "$_preview_lines"
+        # Clear service info + preview lines
+        printf '\033[%dA' "$_redraw_lines"
         _pi=0
-        while (( _pi < _preview_lines )); do printf '\033[K\n'; _pi=$((_pi+1)); done
+        while (( _pi < _redraw_lines )); do printf '\033[K\n'; _pi=$((_pi+1)); done
         err "${_pname} deploy interrupted"
         failed=$(( total - succeeded - skipped ))
         echo ""
@@ -862,26 +889,46 @@ _group_cmd_deploy() {
         return 130
       fi
 
-      # Clear preview lines
-      printf '\033[%dA' "$_preview_lines"
+      # Clear service info + preview lines
+      printf '\033[%dA' "$_redraw_lines"
       _pi=0
-      while (( _pi < _preview_lines )); do printf '\033[K\n'; _pi=$((_pi+1)); done
+      while (( _pi < _redraw_lines )); do printf '\033[K\n'; _pi=$((_pi+1)); done
       # Move back up past the cleared lines
-      printf '\033[%dA' "$_preview_lines"
+      printf '\033[%dA' "$_redraw_lines"
 
       if (( rc == 0 )); then
+        # Count services deployed from markers
+        local _svc_count=0
+        _svc_count=$(grep -c '@@SVC_RC:' "$log_file" 2>/dev/null || true)
         progress_bar "$current" "$total" "${_pname}"
         echo ""
-        ok "${_pname} deployed"
+        if (( _svc_count > 1 )); then
+          ok "${_pname} deployed (${_svc_count} services)"
+        else
+          ok "${_pname} deployed"
+        fi
         succeeded=$(( succeeded + 1 ))
         break
       else
-        err "${_pname} deploy failed"
+        # Determine which service failed from markers
+        local _fail_svc=""
+        local _fail_marker=""
+        _fail_marker=$(grep '@@SVC:' "$log_file" 2>/dev/null | tail -1)
+        if [[ -n "$_fail_marker" ]]; then
+          local _fm="${_fail_marker#*@@SVC:}"
+          _fm="${_fm%@@*}"
+          _fail_svc=$(printf '%s' "$_fm" | cut -d: -f2)
+        fi
+        if [[ -n "$_fail_svc" ]]; then
+          err "${_pname} failed on ${_fail_svc}"
+        else
+          err "${_pname} deploy failed"
+        fi
 
-        # Show last few lines in red
+        # Show last few lines in red (filtering out markers)
         if [[ -f "$log_file" ]] && [[ -s "$log_file" ]]; then
           echo ""
-          tail -10 "$log_file" | while IFS= read -r _line; do
+          grep -v '^@@SVC' "$log_file" | tail -10 | while IFS= read -r _line; do
             _line=$(printf '%s' "$_line" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
             printf '  %b%s%b\n' "${RED}" "$_line" "${RESET}"
           done
@@ -925,23 +972,113 @@ _group_deploy_local() {
   _path=$(jq -r --arg n "$group_name" --argjson i "$index" \
     '.groups[$n].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
 
-  # Pre-flight checks (errors print to screen, not log)
+  # Pre-flight checks
   if [[ -z "$_path" || "$_path" == "null" ]]; then
-    printf 'Project has no path configured — re-add it to the group\n' > "$log_file"
+    printf 'Project has no path configured\n' >> "$log_file"
     return 1
   fi
   if [[ ! -d "$_path" ]]; then
-    printf 'Project directory not found: %s\n' "$_path" > "$log_file"
-    return 1
-  fi
-  if [[ ! -f "${_path}/deploy.json" && ! -f "${_path}/muster.json" ]]; then
-    printf 'No deploy.json found in %s — run muster setup first\n' "$_path" > "$log_file"
+    printf 'Project directory not found: %s\n' "$_path" >> "$log_file"
     return 1
   fi
 
-  # Run muster deploy in a subshell — minimal mode avoids TUI feedback loops
-  local _muster_bin="${MUSTER_ROOT}/bin/muster"
-  (cd "$_path" && MUSTER_MINIMAL=true "$_muster_bin" deploy --quiet) >> "$log_file" 2>&1 < /dev/null
+  local _cfg=""
+  if [[ -f "${_path}/deploy.json" ]]; then
+    _cfg="${_path}/deploy.json"
+  elif [[ -f "${_path}/muster.json" ]]; then
+    _cfg="${_path}/muster.json"
+  else
+    printf 'No deploy.json found in %s\n' "$_path" >> "$log_file"
+    return 1
+  fi
+
+  # Get deploy order
+  local _services=()
+  local _svc_line
+  while IFS= read -r _svc_line; do
+    [[ -z "$_svc_line" ]] && continue
+    local _skip
+    _skip=$(jq -r --arg s "$_svc_line" '.services[$s].skip_deploy // "false"' "$_cfg" 2>/dev/null)
+    [[ "$_skip" == "true" ]] && continue
+    _services[${#_services[@]}]="$_svc_line"
+  done < <(jq -r '.deploy_order[]? // empty' "$_cfg" 2>/dev/null)
+
+  # Fallback: service keys
+  if (( ${#_services[@]} == 0 )); then
+    while IFS= read -r _svc_line; do
+      [[ -z "$_svc_line" ]] && continue
+      local _skip
+      _skip=$(jq -r --arg s "$_svc_line" '.services[$s].skip_deploy // "false"' "$_cfg" 2>/dev/null)
+      [[ "$_skip" == "true" ]] && continue
+      _services[${#_services[@]}]="$_svc_line"
+    done < <(jq -r '.services | keys[]' "$_cfg" 2>/dev/null)
+  fi
+
+  local _svc_total=${#_services[@]}
+  if (( _svc_total == 0 )); then
+    printf 'No services to deploy\n' >> "$log_file"
+    return 0
+  fi
+
+  # Load .env if present
+  if [[ -f "${_path}/.env" ]]; then
+    while IFS= read -r _envline || [[ -n "$_envline" ]]; do
+      _envline=$(printf '%s' "$_envline" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [[ -z "$_envline" || "$_envline" == \#* ]] && continue
+      local _ek="${_envline%%=*}" _ev="${_envline#*=}"
+      [[ -z "$_ek" ]] && continue
+      if [[ -z "${!_ek:-}" ]]; then
+        export "$_ek=$_ev"
+      fi
+    done < "${_path}/.env"
+  fi
+
+  local _svc_idx=0
+  for _svc in "${_services[@]}"; do
+    _svc_idx=$(( _svc_idx + 1 ))
+    local _svc_name
+    _svc_name=$(jq -r --arg s "$_svc" '.services[$s].name // $s' "$_cfg" 2>/dev/null)
+
+    # Write service marker to log
+    printf '@@SVC:%s:%s:%d:%d@@\n' "$_svc" "$_svc_name" "$_svc_idx" "$_svc_total" >> "$log_file"
+
+    # Find deploy hook
+    local _hook="${_path}/.muster/hooks/${_svc}/deploy.sh"
+    if [[ ! -x "$_hook" ]]; then
+      printf 'No deploy hook for %s, skipping\n' "$_svc_name" >> "$log_file"
+      printf '@@SVC_RC:%s:0@@\n' "$_svc" >> "$log_file"
+      continue
+    fi
+
+    # Export k8s env vars if configured
+    local _k8s_dep _k8s_ns
+    _k8s_dep=$(jq -r --arg s "$_svc" '.services[$s].k8s.deployment // ""' "$_cfg" 2>/dev/null)
+    _k8s_ns=$(jq -r --arg s "$_svc" '.services[$s].k8s.namespace // ""' "$_cfg" 2>/dev/null)
+    [[ -n "$_k8s_dep" && "$_k8s_dep" != "null" ]] && export MUSTER_K8S_DEPLOYMENT="$_k8s_dep"
+    [[ -n "$_k8s_ns" && "$_k8s_ns" != "null" ]] && export MUSTER_K8S_NAMESPACE="$_k8s_ns"
+    export MUSTER_K8S_SERVICE="${_svc//_/-}"
+    export MUSTER_SERVICE_NAME="$_svc_name"
+
+    local _timeout
+    _timeout=$(jq -r --arg s "$_svc" '.services[$s].deploy_timeout // 120' "$_cfg" 2>/dev/null)
+    export MUSTER_DEPLOY_TIMEOUT="$_timeout"
+
+    local _deploy_mode
+    _deploy_mode=$(jq -r --arg s "$_svc" '.services[$s].deploy_mode // ""' "$_cfg" 2>/dev/null)
+    [[ -n "$_deploy_mode" && "$_deploy_mode" != "null" ]] && export MUSTER_DEPLOY_MODE="$_deploy_mode"
+
+    # Run deploy hook
+    local _svc_rc=0
+    (cd "$_path" && "$_hook") >> "$log_file" 2>&1 || _svc_rc=$?
+
+    printf '@@SVC_RC:%s:%d@@\n' "$_svc" "$_svc_rc" >> "$log_file"
+
+    if (( _svc_rc != 0 )); then
+      return "$_svc_rc"
+    fi
+  done
+
+  return 0
 }
 
 _group_deploy_remote() {
