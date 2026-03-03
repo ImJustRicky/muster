@@ -20,6 +20,9 @@ _deploy_run_hook() {
   shift 2
   if [[ -t 0 && "$MUSTER_MINIMAL" != "true" ]]; then
     stream_in_box "$_drh_title" "$_drh_log" "$@"
+  elif [[ "${MUSTER_DEPLOY_SOURCE:-}" != "" ]]; then
+    # Fleet deploy (non-interactive): tee to log + stdout so deployer sees progress
+    "$@" 2>&1 | tee -a "$_drh_log"
   else
     # Non-interactive: run directly, output to log file
     "$@" >> "$_drh_log" 2>&1
@@ -618,20 +621,25 @@ ${_k8s_env_lines}"
           if (( _gp_rc != 0 )); then
             err "git pull failed for ${name}"
             printf '  %b%s%b\n' "${DIM}" "$_gp_output" "${RESET}"
-            echo ""
-            menu_select "Git pull failed. What do you want to do?" "Retry" "Skip git pull" "Abort"
-            case "$MENU_RESULT" in
-              "Retry")
-                continue
-                ;;
-              "Skip git pull")
-                warn "Skipping git pull, deploying with current code"
-                ;;
-              "Abort")
-                _unload_env_file
-                return 1
-                ;;
-            esac
+            if [[ ! -t 0 ]]; then
+              # Non-interactive: skip git pull, continue with deploy
+              warn "Skipping git pull (non-interactive), deploying with current code"
+            else
+              echo ""
+              menu_select "Git pull failed. What do you want to do?" "Retry" "Skip git pull" "Abort"
+              case "$MENU_RESULT" in
+                "Retry")
+                  continue
+                  ;;
+                "Skip git pull")
+                  warn "Skipping git pull, deploying with current code"
+                  ;;
+                "Abort")
+                  _unload_env_file
+                  return 1
+                  ;;
+              esac
+            fi
           else
             ok "Pulled ${_gp_remote}/${_gp_branch}"
           fi
@@ -739,43 +747,48 @@ ${_k8s_env_lines}"
             else
               stop_spinner
               err "${name} health check failed"
-              echo ""
-              menu_select "Health check failed. What do you want to do?" "Continue anyway" "Rollback ${name}" "Abort"
-              case "$MENU_RESULT" in
-                "Rollback ${name}")
-                  local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
-                  local _has_rb=false
-                  if [[ -x "$rb_hook" ]]; then
-                    _has_rb=true
-                  elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
-                    _has_rb=true
-                  fi
-                  if [[ "$_has_rb" == "true" ]]; then
-                    if remote_is_enabled "$svc"; then
-                      _remote_load_config "$svc"
-                      _remote_build_opts
-                      if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback" && _just_remote_available; then
-                        _just_remote_run "$svc" "rollback" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
-                      else
-                        remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
-                      fi
+              if [[ ! -t 0 ]]; then
+                # Non-interactive: log and continue
+                warn "Continuing despite health check failure (non-interactive)"
+              else
+                echo ""
+                menu_select "Health check failed. What do you want to do?" "Continue anyway" "Rollback ${name}" "Abort"
+                case "$MENU_RESULT" in
+                  "Rollback ${name}")
+                    local rb_hook="${project_dir}/.muster/hooks/${svc}/rollback.sh"
+                    local _has_rb=false
+                    if [[ -x "$rb_hook" ]]; then
+                      _has_rb=true
                     elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
-                      just --justfile "${_hook_dir}/justfile" rollback 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
-                    else
-                      "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                      _has_rb=true
                     fi
-                    ok "${name} rolled back"
-                    _history_log_event "$svc" "rollback" "ok"
-                  else
-                    err "No rollback hook for ${name}"
-                  fi
-                  ;;
-                "Abort")
-                  err "Deploy aborted"
-                  _unload_env_file
-                  return 1
-                  ;;
-              esac
+                    if [[ "$_has_rb" == "true" ]]; then
+                      if remote_is_enabled "$svc"; then
+                        _remote_load_config "$svc"
+                        _remote_build_opts
+                        if _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback" && _just_remote_available; then
+                          _just_remote_run "$svc" "rollback" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                        else
+                          remote_exec_stdout "$svc" "$rb_hook" "$_cred_env_lines" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                        fi
+                      elif _just_available "$_hook_dir" && _just_has_recipe "$_hook_dir" "rollback"; then
+                        just --justfile "${_hook_dir}/justfile" rollback 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                      else
+                        "$rb_hook" 2>&1 | tee "${log_dir}/${svc}-rollback-$(date +%Y%m%d-%H%M%S).log"
+                      fi
+                      ok "${name} rolled back"
+                      _history_log_event "$svc" "rollback" "ok"
+                    else
+                      err "No rollback hook for ${name}"
+                    fi
+                    ;;
+                  "Abort")
+                    err "Deploy aborted"
+                    _unload_env_file
+                    return 1
+                    ;;
+                esac
+              fi
             fi
           fi
 
@@ -832,6 +845,12 @@ ${_k8s_env_lines}"
           # Notify skills immediately so team knows action is needed
           export MUSTER_DEPLOY_STATUS="failed"
           run_skill_hooks "post-deploy" "$svc"
+
+          if [[ ! -t 0 ]]; then
+            # Non-interactive: abort on deploy failure
+            _unload_env_file
+            return 1
+          fi
 
           # Build menu options (add "Rollback & restart" for k8s update deploys)
           local _fail_opts=()

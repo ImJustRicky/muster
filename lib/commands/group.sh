@@ -1431,8 +1431,9 @@ _group_cmd_deploy() {
         (( _pw > 68 )) && _pw=68
         (( _pw < 10 )) && _pw=10
 
-        # Full-section redraw: bar + results + spinner + 3 preview
-        _section_h=$(( 1 + ${#_result_lines[@]} + 4 ))
+        # Full-section redraw: bar + results + spinner + 5 preview lines
+        local _preview_n=5
+        _section_h=$(( 1 + ${#_result_lines[@]} + 1 + _preview_n ))
         _bar_state=""
         # Print initial frame
         progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
@@ -1444,7 +1445,8 @@ _group_cmd_deploy() {
         done
         printf '  %b%s%b %bDeploying %s remotely%b\033[K\n' \
           "${ACCENT}" "${_sp_f[0]}" "${RESET}" "${WHITE}" "$_pname" "${RESET}"
-        printf '\033[K\n\033[K\n\033[K\n'
+        local _pi_init=0
+        while (( _pi_init < _preview_n )); do printf '\033[K\n'; _pi_init=$((_pi_init+1)); done
 
         while kill -0 "$_remote_pid" 2>/dev/null; do
           [[ "$_group_interrupted" == "true" ]] && { kill "$_remote_pid" 2>/dev/null; break; }
@@ -1461,17 +1463,20 @@ _group_cmd_deploy() {
             "${WHITE}" "$_pname" "${RESET}"
           _sp_i=$(( _sp_i + 1 ))
 
-          local _t0="" _t1="" _t2="" _ti=0
+          # Read last N lines from log for streaming preview
+          local _tlines=()
           while IFS= read -r _tl; do
             _tl=$(printf '%s' "$_tl" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
-            case $_ti in 0) _t0="$_tl" ;; 1) _t1="$_tl" ;; 2) _t2="$_tl" ;; esac
-            _ti=$((_ti + 1))
-          done < <(tail -3 "$log_file" 2>/dev/null)
+            [[ -z "$_tl" ]] && continue
+            _tlines[${#_tlines[@]}]="$_tl"
+          done < <(tail -"$_preview_n" "$log_file" 2>/dev/null)
 
-          local _tp=""
-          for _tp in "$_t0" "$_t1" "$_t2"; do
+          local _tp_i=0
+          while (( _tp_i < _preview_n )); do
+            local _tp="${_tlines[$_tp_i]:-}"
             (( ${#_tp} > _pw )) && _tp="${_tp:0:$((_pw - 3))}..."
             printf '    %b%s%b\033[K\n' "${DIM}" "$_tp" "${RESET}"
+            _tp_i=$(( _tp_i + 1 ))
           done
 
           sleep 1
@@ -1634,7 +1639,7 @@ REMOTECMD
   )"
   cmd="${cmd}; export MUSTER_DEPLOY_SOURCE='${_source_label}'"
   cmd="${cmd}; mkdir -p .muster; printf '%s\n' '${_source_label}' > .muster/.fleet_deploying"
-  cmd="${cmd}; _rc=0; muster deploy --quiet --force || _rc=\$?"
+  cmd="${cmd}; _rc=0; muster deploy --force || _rc=\$?"
   cmd="${cmd}; rm -f .muster/.fleet_deploying; exit \$_rc"
 
   if [[ "$_GP_CLOUD" == "true" ]]; then
