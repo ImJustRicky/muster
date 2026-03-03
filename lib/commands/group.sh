@@ -460,6 +460,8 @@ _group_cmd_add() {
         fi
         printf '  Project dir on remote: '
         IFS= read -r remote_path
+        # Strip leading colon (common mistake from user@host:/path muscle memory)
+        remote_path="${remote_path#:}"
         ;;
       *)
         # Match selected project from registry
@@ -1032,18 +1034,23 @@ _group_cmd_deploy() {
         if [[ "$_already" == "false" ]]; then
           _groups_load_ssh_password
           _prompted_hosts[${#_prompted_hosts[@]}]="$_host_key"
-          printf '  %b✓%b SSH %s\n' "${GREEN}" "${RESET}" "$_host_key"
-          printf '    %bSave?%b  0) Close  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
-          local _ssh_ch=""
-          IFS= read -rsn1 _ssh_ch 2>/dev/null || true
-          case "$_ssh_ch" in
-            1) printf '\r\033[K    %b✓%b Keychain\n' "${GREEN}" "${RESET}"
-               local _cred_key="ssh_${_GP_USER}@${_GP_HOST}:${_GP_PORT}"
-               _cred_keychain_save "groups" "$_cred_key" "$_GP_PASSWORD" 2>/dev/null || true ;;
-            2) printf '\r\033[K    %b✓%b Session\n' "${GREEN}" "${RESET}" ;;
-            3) printf '\r\033[K    %b✓%b Skip\n' "${GREEN}" "${RESET}" ;;
-            *) printf '\r\033[K' ;;
-          esac
+          if [[ "$_GP_AUTH_MODE" == "save" ]]; then
+            # "save" mode auto-saves to keychain in _groups_load_ssh_password
+            printf '  %b✓%b SSH %s %b(keychain)%b\n' "${GREEN}" "${RESET}" "$_host_key" "${DIM}" "${RESET}"
+          else
+            printf '  %b✓%b SSH %s\n' "${GREEN}" "${RESET}" "$_host_key"
+            printf '    %bSave?%b  0) Close  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
+            local _ssh_ch=""
+            IFS= read -rsn1 _ssh_ch 2>/dev/null || true
+            case "$_ssh_ch" in
+              1) printf '\r\033[K    %b✓%b Keychain\n' "${GREEN}" "${RESET}"
+                 local _cred_key="ssh_${_GP_USER}@${_GP_HOST}:${_GP_PORT}"
+                 _cred_keychain_save "groups" "$_cred_key" "$_GP_PASSWORD" 2>/dev/null || true ;;
+              2) printf '\r\033[K    %b✓%b Session\n' "${GREEN}" "${RESET}" ;;
+              3) printf '\r\033[K    %b✓%b Skip\n' "${GREEN}" "${RESET}" ;;
+              *) printf '\r\033[K' ;;
+            esac
+          fi
         fi
       fi
     fi
@@ -1538,13 +1545,15 @@ _group_deploy_remote() {
     # SSH transport
     _groups_build_ssh_opts
 
-    # Pre-flight: check connectivity
+    # Pre-flight: check connectivity (capture stderr for diagnostics)
+    local _ssh_err=""
     if [[ "$_GP_AUTH_METHOD" == "password" ]]; then
       export SSHPASS="$_GP_PASSWORD"
       # shellcheck disable=SC2086
-      if ! sshpass -e ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
+      if ! _ssh_err=$(sshpass -e ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" 2>&1); then
         unset SSHPASS
-        printf 'Cannot reach %s@%s — check SSH config and connectivity\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+        printf 'Cannot reach %s@%s\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+        [[ -n "$_ssh_err" ]] && printf '%s\n' "$_ssh_err" >> "$log_file"
         return 1
       fi
       # shellcheck disable=SC2086
@@ -1554,8 +1563,10 @@ _group_deploy_remote() {
       return $_rc
     else
       # shellcheck disable=SC2086
-      if ! ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
-        printf 'Cannot reach %s@%s — check SSH config and connectivity\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+      if ! _ssh_err=$(ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" 2>&1); then
+        printf 'Cannot reach %s@%s\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+        [[ -n "$_ssh_err" ]] && printf '%s\n' "$_ssh_err" >> "$log_file"
+        [[ "$_GP_AUTH_METHOD" == "key" ]] && printf 'Hint: auth method is "key" — use --auth password if this host requires a password\n' >> "$log_file"
         return 1
       fi
       # shellcheck disable=SC2086

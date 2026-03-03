@@ -114,7 +114,9 @@ groups_project_name() {
     # Fallback to directory name
     basename "$_path"
   else
-    groups_project_desc "$name" "$index"
+    # Remote: use host as name (desc already shows user@host)
+    jq -r --arg n "$name" --argjson i "$index" \
+      '.groups[$n].projects[$i].host' "$GROUPS_CONFIG_FILE" 2>/dev/null
   fi
 }
 
@@ -319,6 +321,8 @@ _groups_load_remote() {
   [[ -z "$_GP_PORT" || "$_GP_PORT" == "null" ]] && _GP_PORT="22"
   [[ "$_GP_IDENTITY" == "null" ]] && _GP_IDENTITY=""
   [[ "$_GP_PROJECT_DIR" == "null" ]] && _GP_PROJECT_DIR=""
+  # Strip leading colons (common input mistake: user@host:/path → just the path part)
+  _GP_PROJECT_DIR="${_GP_PROJECT_DIR#:}"
   [[ -z "$_GP_AUTH_METHOD" || "$_GP_AUTH_METHOD" == "null" ]] && _GP_AUTH_METHOD="key"
   [[ "$_GP_AUTH_MODE" == "null" ]] && _GP_AUTH_MODE=""
   _GP_PASSWORD=""
@@ -353,6 +357,10 @@ _groups_load_ssh_password() {
   case "$_GP_AUTH_MODE" in
     save)
       _GP_PASSWORD=$(_cred_keychain_get "groups" "$cred_key" 2>/dev/null) || true
+      if [[ -z "$_GP_PASSWORD" ]]; then
+        # Fallback: try session cache (background subshells can't access keychain on some systems)
+        _GP_PASSWORD=$(_cred_session_get "$cred_key" 2>/dev/null) || true
+      fi
       if [[ -z "$_GP_PASSWORD" ]]; then
         _GP_PASSWORD=$(_cred_prompt_password "SSH password for ${_GP_USER}@${_GP_HOST}")
         _cred_keychain_save "groups" "$cred_key" "$_GP_PASSWORD" 2>/dev/null || true
