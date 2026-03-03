@@ -10,6 +10,7 @@ source "$MUSTER_ROOT/lib/core/credentials.sh"
 source "$MUSTER_ROOT/lib/core/remote.sh"
 source "$MUSTER_ROOT/lib/core/k8s_diag.sh"
 source "$MUSTER_ROOT/lib/core/just_runner.sh"
+source "$MUSTER_ROOT/lib/core/hook_security.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
@@ -285,6 +286,13 @@ cmd_deploy() {
 
   for svc in "${services[@]}"; do
     (( current++ ))
+
+    # Validate service key — block path traversal attacks
+    if ! _hook_validate_service_key "$svc"; then
+      err "Invalid service key: ${svc} — skipping (possible path traversal)"
+      continue
+    fi
+
     local name
     name=$(config_get ".services.${svc}.name")
     local hook="${project_dir}/.muster/hooks/${svc}/deploy.sh"
@@ -691,7 +699,13 @@ ${_k8s_env_lines}"
             done <<< "$_cred_env_lines"
           fi
 
-          if [[ "$_use_just" == "true" ]]; then
+          # Security gate: verify hook integrity + scan for dangerous commands
+          local _hook_check_path="$hook"
+          [[ "$_use_just" == "true" ]] && _hook_check_path="${_hook_dir}/justfile"
+          if ! _hook_security_check "$_hook_check_path" "$project_dir"; then
+            warn "Skipping ${name} — hook blocked by security check"
+            rc=1
+          elif [[ "$_use_just" == "true" ]]; then
             _deploy_run_hook "$name" "$log_file" _run_with_timeout "$_hook_timeout" just --justfile "${_hook_dir}/justfile" deploy
           else
             _deploy_run_hook "$name" "$log_file" _run_with_timeout "$_hook_timeout" "$hook"

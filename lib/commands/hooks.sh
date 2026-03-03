@@ -6,18 +6,34 @@ cmd_hooks() {
   local _service=""
   local _hook=""
 
+  # Route security subcommands first
+  case "${1:-}" in
+    verify)   shift; _hooks_cmd_verify "$@"; return $? ;;
+    approve)  shift; _hooks_cmd_approve "$@"; return $? ;;
+    lock)     shift; _hooks_cmd_lock "$@"; return $? ;;
+    unlock)   shift; _hooks_cmd_unlock "$@"; return $? ;;
+  esac
+
   # Parse arguments
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --help|-h)
-        echo "Usage: muster hooks [service] [hook] [flags]"
+        echo "Usage: muster hooks [command] [service] [hook] [flags]"
         echo ""
         echo "List and inspect hook scripts for your services."
+        echo ""
+        echo "Commands:"
+        echo "  verify [service]    Check hooks against integrity manifest"
+        echo "  approve [service]   Re-sign hooks after intentional edits"
+        echo "  lock [service]      Set hooks read-only (chmod 555)"
+        echo "  unlock [service]    Allow editing (chmod 755)"
         echo ""
         echo "Examples:"
         echo "  muster hooks              List all services and their hooks"
         echo "  muster hooks api          Show hooks for a service"
         echo "  muster hooks api deploy   Print the deploy hook script"
+        echo "  muster hooks verify       Check all hooks for tampering"
+        echo "  muster hooks approve api  Re-sign after editing api hooks"
         echo "  muster hooks --json       JSON output of all hooks info"
         echo ""
         echo "Flags:"
@@ -220,12 +236,34 @@ _hooks_service_detail() {
     if [[ -f "$_hp" ]]; then
       local _lines
       _lines=$(wc -l < "$_hp" | tr -d ' ')
-      if [[ -x "$_hp" ]]; then
-        printf '%b\n' "  ${GREEN}✓${RESET} ${BOLD}${_h}.sh${RESET} ${DIM}(${_lines} lines)${RESET}"
-      else
-        printf '%b\n' "  ${YELLOW}!${RESET} ${BOLD}${_h}.sh${RESET} ${DIM}(${_lines} lines, not executable)${RESET}"
+
+      # Integrity check
+      local _integrity_icon=""
+      if [[ -f "${hooks_dir}/../hooks.manifest" ]]; then
+        source "$MUSTER_ROOT/lib/core/hook_security.sh"
+        local _proj_dir
+        _proj_dir=$(cd "${hooks_dir}/.." 2>/dev/null && pwd)
+        _hook_manifest_verify "$_hp" "$_proj_dir"
+        case $? in
+          0) _integrity_icon=" ${GREEN}✓${RESET}" ;;
+          1) _integrity_icon=" ${RED}tampered${RESET}" ;;
+          2) _integrity_icon=" ${YELLOW}unsigned${RESET}" ;;
+        esac
       fi
+
+      # Permissions + last modified
+      local _perms _modified
+      _perms=$(stat -f '%Sp' "$_hp" 2>/dev/null || stat -c '%A' "$_hp" 2>/dev/null || echo "?")
+      _modified=$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$_hp" 2>/dev/null || stat -c '%y' "$_hp" 2>/dev/null | cut -d. -f1 || echo "?")
+
+      if [[ -x "$_hp" ]]; then
+        printf '%b' "  ${GREEN}✓${RESET} ${BOLD}${_h}.sh${RESET}"
+      else
+        printf '%b' "  ${YELLOW}!${RESET} ${BOLD}${_h}.sh${RESET}"
+      fi
+      printf '%b\n' "${_integrity_icon} ${DIM}(${_lines} lines)${RESET}"
       printf '%b\n' "    ${DIM}${_desc}${RESET}"
+      printf '%b\n' "    ${DIM}${_perms}  modified ${_modified}${RESET}"
     else
       printf '%b\n' "  ${DIM}✗ ${_h}.sh (missing)${RESET}"
       printf '%b\n' "    ${DIM}${_desc}${RESET}"
@@ -381,4 +419,161 @@ ${_row}"
   fi
   printf '%b\n' "$_summary"
   echo ""
+}
+
+# ── Security subcommands ──
+
+_hooks_cmd_verify() {
+  if ! find_config &>/dev/null; then
+    err "No muster project found. Run 'muster setup' first."
+    return 1
+  fi
+  load_config
+
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Hook Integrity Check${RESET}"
+  echo ""
+
+  if _hook_manifest_verify_all "$project_dir"; then
+    echo ""
+    ok "All hooks verified"
+  else
+    echo ""
+    err "Integrity issues found"
+    printf '  %bRun %bmuster hooks approve%b%b to re-sign after intentional edits%b\n' \
+      "${DIM}" "${RESET}${WHITE}" "${RESET}" "${DIM}" "${RESET}"
+  fi
+  echo ""
+}
+
+_hooks_cmd_approve() {
+  local service="${1:-}"
+
+  if ! find_config &>/dev/null; then
+    err "No muster project found. Run 'muster setup' first."
+    return 1
+  fi
+  load_config
+
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+
+  # Require authentication to approve hooks
+  if ! sudo -v 2>/dev/null; then
+    err "Authentication required to approve hooks"
+    return 1
+  fi
+
+  # Scan for dangerous commands before approving
+  local hooks_dir="${project_dir}/.muster/hooks"
+  local danger_found=false
+  local svc_dir
+  for svc_dir in "${hooks_dir}"/*/; do
+    [[ ! -d "$svc_dir" ]] && continue
+    local svc
+    svc=$(basename "$svc_dir")
+    [[ "$svc" == "logs" || "$svc" == "pids" ]] && continue
+    [[ -n "$service" && "$svc" != "$service" ]] && continue
+
+    local hook_file
+    for hook_file in "${svc_dir}"*.sh; do
+      [[ ! -f "$hook_file" ]] && continue
+      if ! _hook_scan_dangerous "$hook_file"; then
+        danger_found=true
+      fi
+    done
+  done
+
+  if [[ "$danger_found" == "true" ]]; then
+    err "Cannot approve — dangerous commands found"
+    printf '  %bFix the hooks first, or set MUSTER_HOOK_UNSAFE=1 to bypass%b\n' "${DIM}" "${RESET}"
+    return 1
+  fi
+
+  _hook_manifest_approve "$project_dir" "$service"
+
+  if [[ -n "$service" ]]; then
+    ok "Approved: ${service}"
+  else
+    ok "All hooks approved"
+  fi
+}
+
+_hooks_cmd_lock() {
+  local service="${1:-}"
+
+  if ! find_config &>/dev/null; then
+    err "No muster project found. Run 'muster setup' first."
+    return 1
+  fi
+  load_config
+
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+  local hooks_dir="${project_dir}/.muster/hooks"
+
+  if [[ -n "$service" ]]; then
+    if [[ ! -d "${hooks_dir}/${service}" ]]; then
+      err "Service not found: ${service}"
+      return 1
+    fi
+    _hook_lock "${hooks_dir}/${service}"
+    ok "Locked: ${service}"
+  else
+    local svc_dir
+    for svc_dir in "${hooks_dir}"/*/; do
+      [[ ! -d "$svc_dir" ]] && continue
+      local svc
+      svc=$(basename "$svc_dir")
+      [[ "$svc" == "logs" || "$svc" == "pids" ]] && continue
+      _hook_lock "$svc_dir"
+    done
+    ok "All hooks locked (read-only)"
+  fi
+}
+
+_hooks_cmd_unlock() {
+  local service="${1:-}"
+
+  if ! find_config &>/dev/null; then
+    err "No muster project found. Run 'muster setup' first."
+    return 1
+  fi
+  load_config
+
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+  local project_dir
+  project_dir="$(dirname "$CONFIG_FILE")"
+  local hooks_dir="${project_dir}/.muster/hooks"
+
+  # Require authentication to unlock hooks
+  if ! sudo -v 2>/dev/null; then
+    err "Authentication required to unlock hooks"
+    return 1
+  fi
+
+  if [[ -n "$service" ]]; then
+    if [[ ! -d "${hooks_dir}/${service}" ]]; then
+      err "Service not found: ${service}"
+      return 1
+    fi
+    _hook_unlock "${hooks_dir}/${service}"
+    ok "Unlocked: ${service}"
+  else
+    local svc_dir
+    for svc_dir in "${hooks_dir}"/*/; do
+      [[ ! -d "$svc_dir" ]] && continue
+      local svc
+      svc=$(basename "$svc_dir")
+      [[ "$svc" == "logs" || "$svc" == "pids" ]] && continue
+      _hook_unlock "$svc_dir"
+    done
+    ok "All hooks unlocked (editable)"
+  fi
 }

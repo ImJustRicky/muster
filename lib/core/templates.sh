@@ -161,7 +161,7 @@ _setup_copy_hooks() {
       -e "s|{{K8S_DIR}}|${esc_k8s_path}|g" \
       -e "s|{{START_CMD}}|${esc_start_cmd}|g" \
       "$f" > "${hook_dir}/${basename}"
-    chmod +x "${hook_dir}/${basename}"
+    chmod 555 "${hook_dir}/${basename}"
   done
 }
 

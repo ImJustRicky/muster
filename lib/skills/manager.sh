@@ -638,6 +638,14 @@ print('yes' if sys.argv[2] in d.get('hooks',[]) else 'no')
       if [[ "$has_hook" == "true" ]]; then
         _ran_skills="${_ran_skills} ${skill_name}"
 
+        # Scan skill script for dangerous commands
+        if type _hook_scan_dangerous &>/dev/null; then
+          if ! _hook_scan_dangerous "${skill_dir}/run.sh"; then
+            warn "Skill '${skill_name}' blocked — dangerous commands detected in run.sh"
+            continue
+          fi
+        fi
+
         # Export context
         if [[ -n "${CONFIG_FILE:-}" ]]; then
           export MUSTER_PROJECT_DIR="$(dirname "$CONFIG_FILE")"

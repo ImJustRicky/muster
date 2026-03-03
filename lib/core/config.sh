@@ -291,22 +291,34 @@ print(data if isinstance(data, str) else json.dumps(data))
   fi
 }
 
-# List service names from deploy.json
+# List service names from deploy.json (validates keys against path traversal)
 config_services() {
+  local _raw_keys=""
   if has_cmd jq; then
-    jq -r '.services | keys[]' "$CONFIG_FILE"
+    _raw_keys=$(jq -r '.services | keys[]' "$CONFIG_FILE")
   elif has_cmd python3; then
-    python3 -c "
+    _raw_keys=$(python3 -c "
 import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
 for k in data.get('services', {}):
     print(k)
-" "$CONFIG_FILE"
+" "$CONFIG_FILE")
   else
     err "jq or python3 required to read config"
     return 1
   fi
+
+  # Validate each key — skip dangerous ones
+  local _key
+  while IFS= read -r _key; do
+    [[ -z "$_key" ]] && continue
+    # Block path traversal: .., absolute paths, special chars
+    case "$_key" in
+      *..*|/*|*$'\0'*) continue ;;
+    esac
+    printf '%s\n' "$_key"
+  done <<< "$_raw_keys"
 }
 
 # Write deploy.json from stdin

@@ -65,6 +65,15 @@ cmd_status() {
     local hook="${project_dir}/.muster/hooks/${svc}/health.sh"
     local _status_hook_dir="${project_dir}/.muster/hooks/${svc}"
 
+    # Silent security check for health hooks
+    if [[ -f "$hook" ]]; then
+      source "$MUSTER_ROOT/lib/core/hook_security.sh"
+      if ! _hook_security_check "$hook" "$project_dir" "silent"; then
+        printf '  %b!%b %s: %bhook blocked by security check%b\n' "${YELLOW}" "${RESET}" "$name" "${DIM}" "${RESET}"
+        continue
+      fi
+    fi
+
     local health_enabled
     health_enabled=$(config_get ".services.${svc}.health.enabled")
 

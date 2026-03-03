@@ -46,6 +46,18 @@ cmd_cleanup() {
     local _clean_hook_dir="${project_dir}/.muster/hooks/${svc}"
     local name
     name=$(config_get ".services.${svc}.name")
+
+    # Security check (silent — don't break cleanup flow)
+    source "$MUSTER_ROOT/lib/core/hook_security.sh"
+    local _clean_check="$hook"
+    if _just_available "$_clean_hook_dir" && _just_has_recipe "$_clean_hook_dir" "cleanup"; then
+      _clean_check="${_clean_hook_dir}/justfile"
+    fi
+    if [[ -f "$_clean_check" ]] && ! _hook_security_check "$_clean_check" "$project_dir" "silent"; then
+      warn "${name}: hook blocked by security check"
+      continue
+    fi
+
     if _just_available "$_clean_hook_dir" && _just_has_recipe "$_clean_hook_dir" "cleanup"; then
       start_spinner "Cleaning up ${name}..."
       just --justfile "${_clean_hook_dir}/justfile" cleanup &>/dev/null

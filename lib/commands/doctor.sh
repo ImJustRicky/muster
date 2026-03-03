@@ -332,6 +332,68 @@ $(cat "$_hf" 2>/dev/null)"
       _doc_pass "All hook scripts present and executable"
     fi
 
+    # Hook integrity (manifest verification)
+    source "$MUSTER_ROOT/lib/core/hook_security.sh"
+    local _manifest_file="${project_dir}/.muster/hooks.manifest"
+    if [[ -f "$_manifest_file" ]]; then
+      # Manifest signature check
+      _hook_manifest_verify_sig "$_manifest_file"
+      local _sig_rc=$?
+      if [[ "$_sig_rc" == "1" ]]; then
+        _doc_fail "Hooks manifest signature invalid (possible tampering)"
+      elif [[ "$_sig_rc" == "0" ]]; then
+        _doc_pass "Hooks manifest signature valid"
+      fi
+
+      # Hook integrity check
+      local _tampered=0 _untracked=0
+      local _sd
+      for _sd in "${hooks_dir}"/*/; do
+        [[ ! -d "$_sd" ]] && continue
+        local _sv
+        _sv=$(basename "$_sd")
+        [[ "$_sv" == "logs" || "$_sv" == "pids" ]] && continue
+        local _hf
+        for _hf in "${_sd}"*.sh "${_sd}"justfile; do
+          [[ ! -f "$_hf" ]] && continue
+          _hook_manifest_verify "$_hf" "$project_dir"
+          case $? in
+            1) _tampered=$(( _tampered + 1 )) ;;
+            2) _untracked=$(( _untracked + 1 )) ;;
+          esac
+        done
+      done
+      if (( _tampered > 0 )); then
+        _doc_fail "${_tampered} hook(s) tampered (run 'muster hooks approve' to re-sign)"
+      elif (( _untracked > 0 )); then
+        _doc_warn "${_untracked} hook(s) not in manifest"
+      else
+        _doc_pass "All hooks pass integrity check"
+      fi
+
+      # Config file integrity
+      _config_integrity_check "$project_dir"
+      local _cfg_rc=$?
+      if [[ "$_cfg_rc" == "1" ]]; then
+        _doc_fail "Config file tampered (run 'muster hooks approve' to re-sign)"
+      elif [[ "$_cfg_rc" == "0" ]]; then
+        _doc_pass "Config file passes integrity check"
+      fi
+
+      # .env integrity
+      if [[ -f "${project_dir}/.env" ]]; then
+        _env_integrity_check "$project_dir"
+        local _env_rc=$?
+        if [[ "$_env_rc" == "1" ]]; then
+          _doc_warn ".env file modified since last approve (run 'muster hooks approve')"
+        elif [[ "$_env_rc" == "0" ]]; then
+          _doc_pass ".env file passes integrity check"
+        fi
+      fi
+    else
+      _doc_warn "No hooks manifest (run 'muster hooks approve' to create)"
+    fi
+
     # Justfile checks
     if (( _justfile_count > 0 )); then
       if (( _justfile_no_just > 0 )); then

@@ -926,6 +926,10 @@ print(json.dumps(data, indent=2))
   # Register project in global registry
   _registry_touch "$project_path"
 
+  # Generate hook security manifest and lock hooks
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+  _hook_manifest_generate "$project_path"
+
   ok "Setup complete"
 
   # Check for build context overlaps in the new config
@@ -1888,6 +1892,10 @@ print(json.dumps(data, indent=2))
 
   # Register project in global registry
   _registry_touch "$project_path"
+
+  # Generate hook security manifest and lock hooks
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+  _hook_manifest_generate "$project_path"
 
   _SETUP_CUR_PROMPT="false"
   _setup_screen 7 "Setup complete"

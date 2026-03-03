@@ -193,6 +193,202 @@ _settings_global_cli() {
   return 0
 }
 
+# ── Hook Security settings ──
+
+_settings_hook_security() {
+  source "$MUSTER_ROOT/lib/core/hook_security.sh"
+
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Hook Security${RESET}"
+    echo ""
+
+    # Show current setting
+    local _sec_val
+    _sec_val=$(global_config_get "hook_security" 2>/dev/null || true)
+    [[ -z "$_sec_val" || "$_sec_val" == "null" ]] && _sec_val="on"
+    printf '  %bStatus:%b %s\n' "${DIM}" "${RESET}" "$_sec_val"
+
+    # Show manifest signature status if in a project
+    if find_config &>/dev/null; then
+      load_config
+      local _pd0
+      _pd0="$(dirname "$CONFIG_FILE")"
+      local _mf0="${_pd0}/.muster/hooks.manifest"
+      if [[ -f "$_mf0" ]]; then
+        _hook_manifest_verify_sig "$_mf0"
+        case $? in
+          0) printf '  %bManifest:%b %b✓%b signed\n' "${DIM}" "${RESET}" "${GREEN}" "${RESET}" ;;
+          1) printf '  %bManifest:%b %b✗%b signature invalid\n' "${DIM}" "${RESET}" "${RED}" "${RESET}" ;;
+          2) printf '  %bManifest:%b %b?%b not signed\n' "${DIM}" "${RESET}" "${YELLOW}" "${RESET}" ;;
+        esac
+      fi
+    fi
+    echo ""
+
+    # Show hook table if in a project
+    if find_config &>/dev/null; then
+      load_config
+      local _pd
+      _pd="$(dirname "$CONFIG_FILE")"
+      local _hd="${_pd}/.muster/hooks"
+
+      if [[ -d "$_hd" ]]; then
+        printf '  %b%-20s %-10s %-10s %-20s%b\n' "${DIM}" "HOOK" "INTEGRITY" "PERMS" "MODIFIED" "${RESET}"
+
+        local _sd
+        for _sd in "${_hd}"/*/; do
+          [[ ! -d "$_sd" ]] && continue
+          local _svc
+          _svc=$(basename "$_sd")
+          [[ "$_svc" == "logs" || "$_svc" == "pids" ]] && continue
+
+          local _hf
+          for _hf in "${_sd}"*.sh; do
+            [[ ! -f "$_hf" ]] && continue
+            local _hn
+            _hn=$(basename "$_hf")
+            local _key="${_svc}/${_hn}"
+
+            # Integrity
+            local _int_icon
+            _hook_manifest_verify "$_hf" "$_pd"
+            case $? in
+              0) _int_icon="${GREEN}✓${RESET}" ;;
+              1) _int_icon="${RED}✗${RESET}" ;;
+              2) _int_icon="${YELLOW}?${RESET}" ;;
+            esac
+
+            # Permissions
+            local _perms
+            _perms=$(stat -f '%Sp' "$_hf" 2>/dev/null || stat -c '%A' "$_hf" 2>/dev/null || echo "?")
+
+            # Modified
+            local _mod
+            _mod=$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$_hf" 2>/dev/null || stat -c '%y' "$_hf" 2>/dev/null | cut -d. -f1 || echo "?")
+
+            printf '  %-20s %b  %-10s %-20s\n' "$_key" "$_int_icon" "$_perms" "$_mod"
+          done
+        done
+        echo ""
+      fi
+    fi
+
+    local _actions=()
+    _actions[${#_actions[@]}]="Verify all hooks"
+    _actions[${#_actions[@]}]="Approve all hooks"
+    _actions[${#_actions[@]}]="Lock all hooks"
+    _actions[${#_actions[@]}]="Unlock all hooks"
+    if [[ "$_sec_val" == "on" ]]; then
+      _actions[${#_actions[@]}]="Disable hook security"
+    else
+      _actions[${#_actions[@]}]="Enable hook security"
+    fi
+    _actions[${#_actions[@]}]="Back"
+
+    menu_select "Hook Security" "${_actions[@]}"
+
+    case "$MENU_RESULT" in
+      "Verify all hooks")
+        if find_config &>/dev/null; then
+          load_config
+          local _pd2
+          _pd2="$(dirname "$CONFIG_FILE")"
+          echo ""
+          _hook_manifest_verify_all "$_pd2"
+          echo ""
+          printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+          IFS= read -rsn1 || true
+        else
+          warn "No project found"
+        fi
+        ;;
+      "Approve all hooks")
+        if find_config &>/dev/null; then
+          load_config
+          local _pd3
+          _pd3="$(dirname "$CONFIG_FILE")"
+          # Require sudo for approve
+          if ! sudo -v 2>/dev/null; then
+            err "Authentication required to approve hooks"
+            printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+            IFS= read -rsn1 || true
+            continue
+          fi
+          _hook_manifest_approve "$_pd3"
+          ok "All hooks approved"
+          printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "Lock all hooks")
+        if find_config &>/dev/null; then
+          load_config
+          local _pd4
+          _pd4="$(dirname "$CONFIG_FILE")"
+          local _hd4="${_pd4}/.muster/hooks"
+          local _sd4
+          for _sd4 in "${_hd4}"/*/; do
+            [[ ! -d "$_sd4" ]] && continue
+            local _s4
+            _s4=$(basename "$_sd4")
+            [[ "$_s4" == "logs" || "$_s4" == "pids" ]] && continue
+            _hook_lock "$_sd4"
+          done
+          ok "All hooks locked"
+          printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "Unlock all hooks")
+        if find_config &>/dev/null; then
+          load_config
+          local _pd5
+          _pd5="$(dirname "$CONFIG_FILE")"
+          # Require sudo for unlock
+          if ! sudo -v 2>/dev/null; then
+            err "Authentication required to unlock hooks"
+            printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+            IFS= read -rsn1 || true
+            continue
+          fi
+          local _hd5="${_pd5}/.muster/hooks"
+          local _sd5
+          for _sd5 in "${_hd5}"/*/; do
+            [[ ! -d "$_sd5" ]] && continue
+            local _s5
+            _s5=$(basename "$_sd5")
+            [[ "$_s5" == "logs" || "$_s5" == "pids" ]] && continue
+            _hook_unlock "$_sd5"
+          done
+          ok "All hooks unlocked"
+          printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "Enable hook security")
+        global_config_set "hook_security" '"on"'
+        ok "Hook security enabled"
+        ;;
+      "Disable hook security")
+        # Require sudo to disable
+        if ! sudo -v 2>/dev/null; then
+          err "Authentication required to disable hook security"
+          printf '  %bPress any key to continue...%b' "${DIM}" "${RESET}"
+          IFS= read -rsn1 || true
+          continue
+        fi
+        global_config_set "hook_security" '"off"'
+        warn "Hook security disabled"
+        ;;
+      Back|__back__)
+        return 0
+        ;;
+    esac
+  done
+}
+
 # ── Interactive global settings ──
 
 
@@ -246,9 +442,9 @@ cmd_settings() {
     echo ""
 
     if [[ "$_has_project" == "true" ]]; then
-      menu_select "Settings" "Project Settings" "Muster Settings" "Fleet Groups" "Fleet Trust" "Projects" "Back"
+      menu_select "Settings" "Project Settings" "Muster Settings" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     else
-      menu_select "Settings" "Muster Settings" "Fleet Groups" "Fleet Trust" "Projects" "Back"
+      menu_select "Settings" "Muster Settings" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     fi
 
     case "$MENU_RESULT" in
@@ -257,6 +453,9 @@ cmd_settings() {
         ;;
       "Muster Settings")
         _settings_muster_global
+        ;;
+      "Hook Security")
+        _settings_hook_security
         ;;
       "Fleet Groups")
         _group_cmd_manager
