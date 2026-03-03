@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # muster/lib/tui/checklist.sh — Toggle checklist (bash 3.2+, macOS compatible)
 # Uses tput cuu1 + tput ed for reliable in-place redraw
+# Falls back to numbered input when MUSTER_MINIMAL=true
 
 CHECKLIST_RESULT=""
 
@@ -21,6 +22,76 @@ checklist_select() {
   shift
   local items=("$@")
   local count=${#items[@]}
+
+  # ── Minimal mode: numbered choices ──
+  if [[ "$MUSTER_MINIMAL" == "true" ]]; then
+    echo ""
+    printf '  %s\n' "$title"
+    local i=0
+    while (( i < count )); do
+      local _mark="x"
+      (( _cl_default == 0 )) && _mark=" "
+      printf '    %d) [%s] %s\n' "$(( i + 1 ))" "$_mark" "${items[$i]}"
+      i=$((i + 1))
+    done
+    echo ""
+    if (( _cl_default == 1 )); then
+      printf '  Enter numbers to deselect (comma-separated), or Enter for all: '
+    else
+      printf '  Enter numbers to select (comma-separated), or "all": '
+    fi
+    local _input
+    read -r _input
+
+    # Build checked array
+    local checked=()
+    i=0
+    while (( i < count )); do checked[$i]=$_cl_default; i=$((i + 1)); done
+
+    if [[ -n "$_input" ]]; then
+      if [[ "$_input" == "all" ]]; then
+        i=0
+        while (( i < count )); do checked[$i]=1; i=$((i + 1)); done
+      elif [[ "$_input" == "none" ]]; then
+        i=0
+        while (( i < count )); do checked[$i]=0; i=$((i + 1)); done
+      else
+        # Toggle the specified numbers
+        local _num
+        local _old_ifs="$IFS"
+        IFS=','
+        for _num in $_input; do
+          IFS="$_old_ifs"
+          _num="${_num// /}"
+          if [[ "$_num" =~ ^[0-9]+$ ]] && (( _num >= 1 && _num <= count )); then
+            if (( _cl_default == 1 )); then
+              checked[$(( _num - 1 ))]=0
+            else
+              checked[$(( _num - 1 ))]=1
+            fi
+          fi
+        done
+        IFS="$_old_ifs"
+      fi
+    fi
+
+    # Build result
+    CHECKLIST_RESULT=""
+    i=0
+    while (( i < count )); do
+      if (( checked[i] == 1 )); then
+        if [[ -n "$CHECKLIST_RESULT" ]]; then
+          CHECKLIST_RESULT="${CHECKLIST_RESULT}"$'\n'"${items[$i]}"
+        else
+          CHECKLIST_RESULT="${items[$i]}"
+        fi
+      fi
+      i=$((i + 1))
+    done
+    return 0
+  fi
+
+  # ── TUI mode: arrow-key toggle ──
   local selected=0
   local checked=()
 

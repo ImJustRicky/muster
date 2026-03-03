@@ -6,6 +6,14 @@ progress_bar() {
   local total=$2
   local label="${3:-}"
   local state="${4:-}"
+
+  # Minimal mode: plain text progress
+  if [[ "${MUSTER_MINIMAL:-false}" == "true" ]]; then
+    printf '\r  [%d/%d] %s' "$current" "$total" "$label"
+    (( current == total )) && echo ""
+    return 0
+  fi
+
   local bar_width=$(( TERM_COLS - 16 ))
   (( bar_width > 50 )) && bar_width=50
   (( bar_width < 10 )) && bar_width=10

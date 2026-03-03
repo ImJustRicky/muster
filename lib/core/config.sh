@@ -17,7 +17,8 @@ _GLOBAL_DEFAULTS='{
   "scanner_exclude": [],
   "update_check": "on",
   "cloud": {},
-  "machine_role": ""
+  "machine_role": "",
+  "minimal": false
 }'
 
 # Ensure global config exists with defaults

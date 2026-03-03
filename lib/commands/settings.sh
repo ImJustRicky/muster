@@ -60,11 +60,11 @@ _settings_global_cli() {
 
   # Validate key
   case "$key" in
-    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check) ;;
+    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|minimal|machine_role) ;;
     *)
       err "Unknown global setting: ${key}"
       echo "  Valid keys: tui_mode, color_mode, log_color_mode, log_retention_days, default_stack,"
-      echo "              default_health_timeout, scanner_exclude, update_check"
+      echo "              default_health_timeout, scanner_exclude, update_check, minimal, machine_role"
       return 1
       ;;
   esac
@@ -173,6 +173,20 @@ _settings_global_cli() {
       esac
       global_config_set "$key" "\"$value\""
       ;;
+    minimal)
+      case "$value" in
+        true|false) ;;
+        *) err "minimal must be true or false"; return 1 ;;
+      esac
+      global_config_set "$key" "$value"
+      ;;
+    machine_role)
+      case "$value" in
+        local|control|target|both|"") ;;
+        *) err "machine_role must be local, control, target, or both"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
+      ;;
   esac
 
   ok "${key} = ${value}"
@@ -195,10 +209,11 @@ cmd_settings() {
       echo "  -h, --help                Show this help"
       echo ""
       echo "Examples:"
-      echo "  muster settings                          Interactive editor"
-      echo "  muster settings --global                 Dump all global settings"
-      echo "  muster settings --global color_mode      Get a setting"
-      echo "  muster settings --global color_mode never  Set a setting"
+      echo "  muster settings                              Interactive editor"
+      echo "  muster settings --global                     Dump all global settings"
+      echo "  muster settings --global color_mode          Get a setting"
+      echo "  muster settings --global color_mode never    Set a setting"
+      echo "  muster settings --global minimal true        Always use plain text mode"
       return 0
       ;;
   esac

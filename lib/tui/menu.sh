@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # muster/lib/tui/menu.sh — Arrow-key interactive menu (bash 3.2+, macOS compatible)
 # Uses tput cuu1 + tput ed for reliable in-place redraw (no tput sc/rc)
+# Falls back to numbered input when MUSTER_MINIMAL=true
 
 MENU_RESULT=""
 
@@ -14,8 +15,32 @@ menu_select() {
   local title="$1"
   shift
   local options=("$@")
-  local selected=0
   local count=${#options[@]}
+
+  # ── Minimal mode: numbered choices ──
+  if [[ "$MUSTER_MINIMAL" == "true" ]]; then
+    echo ""
+    printf '  %s\n' "$title"
+    local i=0
+    while (( i < count )); do
+      printf '    %d) %s\n' "$(( i + 1 ))" "${options[$i]}"
+      i=$((i + 1))
+    done
+    printf '  Choose [1-%d]: ' "$count"
+    local _choice
+    read -r _choice
+    _choice="${_choice:-1}"
+    # Validate
+    if [[ "$_choice" =~ ^[0-9]+$ ]] && (( _choice >= 1 && _choice <= count )); then
+      MENU_RESULT="${options[$(( _choice - 1 ))]}"
+    else
+      MENU_RESULT="${options[0]}"
+    fi
+    return 0
+  fi
+
+  # ── TUI mode: arrow-key selection ──
+  local selected=0
 
   # Calculate bar width for highlighted selection
   local _menu_w=$(( TERM_COLS - 4 ))

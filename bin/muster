@@ -50,6 +50,16 @@ source "$MUSTER_ROOT/lib/core/config.sh"
 source "$MUSTER_ROOT/lib/core/platform.sh"
 source "$MUSTER_ROOT/lib/core/registry.sh"
 
+# ── Apply persistent minimal setting ──
+if [[ "$MUSTER_MINIMAL" != "true" ]]; then
+  _min_val=$(global_config_get "minimal" 2>/dev/null || true)
+  if [[ "$_min_val" == "true" ]]; then
+    MUSTER_MINIMAL=true
+    export MUSTER_MINIMAL
+  fi
+  unset _min_val
+fi
+
 # ── Route commands ──
 case "${1:-}" in
   setup)
@@ -197,8 +207,11 @@ case "${1:-}" in
     echo "  -v, --version   Show version"
     echo "  -q, --quiet     Suppress info output (errors and warnings still shown)"
     echo "  --verbose       Show debug output"
-    echo "  --minimal       Plain text output, no TUI (for scripts and CI)"
+    echo "  --minimal       Plain text output, numbered menus, no TUI"
     echo "  -h, --help      Show this help"
+    echo ""
+    echo "To always use minimal mode:"
+    echo "  muster settings --global minimal true"
     ;;
   "")
     # Minimal mode: plain text status, no TUI

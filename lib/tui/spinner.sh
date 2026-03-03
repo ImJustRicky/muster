@@ -7,6 +7,13 @@ _SPINNER_PREV_EXIT=""
 
 start_spinner() {
   local msg="$1"
+
+  # Minimal mode: just print the message, no animation
+  if [[ "${MUSTER_MINIMAL:-false}" == "true" ]]; then
+    printf '  %s...\n' "$msg"
+    return 0
+  fi
+
   local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
   # Save existing traps before overwriting
   _SPINNER_PREV_INT=$(trap -p INT 2>/dev/null || true)

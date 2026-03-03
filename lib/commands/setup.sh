@@ -386,10 +386,11 @@ _setup_deploy_target_intro() {
         echo ""
         printf '%b\n' "  ${DIM}Installing muster-agent...${RESET}"
         echo ""
+        local _agent_prefix="${MUSTER_BIN_DIR:-$HOME/.local/bin}"
         if command -v curl >/dev/null 2>&1; then
-          bash <(curl -fsSL https://raw.githubusercontent.com/Muster-dev/muster-fleet-cloud/main/install.sh) --agent </dev/tty
+          bash <(curl -fsSL https://raw.githubusercontent.com/Muster-dev/muster-fleet-cloud/main/install.sh) --agent --prefix "$_agent_prefix" </dev/tty
         elif command -v wget >/dev/null 2>&1; then
-          bash <(wget -qO- https://raw.githubusercontent.com/Muster-dev/muster-fleet-cloud/main/install.sh) --agent </dev/tty
+          bash <(wget -qO- https://raw.githubusercontent.com/Muster-dev/muster-fleet-cloud/main/install.sh) --agent --prefix "$_agent_prefix" </dev/tty
         else
           printf '%b\n' "  ${RED}x${RESET} curl or wget required to install muster-agent"
           printf '%b\n' "  ${DIM}Install manually:${RESET}"

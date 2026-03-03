@@ -32,11 +32,13 @@ _MUSTER_TUI_FULLSCREEN="false"
 
 # Call this when entering TUI mode (dashboard, menus with cursor hidden, etc.)
 muster_tui_enter() {
+  [[ "${MUSTER_MINIMAL:-false}" == "true" ]] && return 0
   _MUSTER_TUI_ACTIVE="true"
 }
 
 # Call this when entering full-screen TUI (dashboard) — clear on exit
 muster_tui_fullscreen() {
+  [[ "${MUSTER_MINIMAL:-false}" == "true" ]] && return 0
   _MUSTER_TUI_ACTIVE="true"
   _MUSTER_TUI_FULLSCREEN="true"
 }
