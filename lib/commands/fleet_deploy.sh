@@ -288,6 +288,35 @@ _fleet_deploy_muster() {
     return 1
   fi
 
+  # Deploy gate: verify trust
+  source "$MUSTER_ROOT/lib/core/trust.sh"
+  local _my_fp
+  _my_fp=$(trust_fingerprint)
+  local _trust_status=""
+  _trust_status=$(fleet_exec "$machine" \
+    "muster trust verify --fingerprint '${_my_fp}'" 2>/dev/null) || true
+
+  case "$_trust_status" in
+    trusted) ;; # proceed
+    pending)
+      printf 'Deploy rejected: trust request pending on %s\n' "$(fleet_desc "$machine")" > "$log_file"
+      return 1
+      ;;
+    unknown)
+      # Remote has trust system but doesn't know us — auto-send a join request
+      local _my_label
+      _my_label=$(trust_label)
+      fleet_exec "$machine" \
+        "muster trust request --fingerprint '${_my_fp}' --label '${_my_label}'" &>/dev/null || true
+      printf 'Trust request auto-sent to %s\n' "$(fleet_desc "$machine")" > "$log_file"
+      printf 'Deploy blocked until remote accepts: muster trust accept %s\n' "$_my_fp" >> "$log_file"
+      return 1
+      ;;
+    "")
+      # Empty = older muster without trust, allow deploy
+      ;;
+  esac
+
   info "Deploying on ${machine} via muster ($(fleet_desc "$machine"))"
 
   # Run muster deploy on remote with token

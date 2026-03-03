@@ -140,12 +140,25 @@ _dashboard_header() {
     _fleet_deploy_source=$(cat "${project_dir}/.muster/.fleet_deploying" 2>/dev/null)
   fi
 
+  # Check for pending fleet trust requests
+  local _trust_pending_count=0
+  if [[ -f "$HOME/.muster/fleet/pending.json" ]] && has_cmd jq; then
+    _trust_pending_count=$(jq 'length' "$HOME/.muster/fleet/pending.json" 2>/dev/null)
+    [[ -z "$_trust_pending_count" || "$_trust_pending_count" == "null" ]] && _trust_pending_count=0
+  fi
+
   # Section header
   printf '  %b%bServices%b' "${BOLD}" "${WHITE}" "${RESET}"
   if [[ "$_fleet_deploying" == "true" ]]; then
     printf '  %b⟳ deploying via %s%b' "${YELLOW}" "${_fleet_deploy_source:-remote}" "${RESET}"
   fi
   printf '\n'
+
+  if (( _trust_pending_count > 0 )); then
+    printf '  %b⚠ %d trust request%s pending%b\n' \
+      "${YELLOW}" "$_trust_pending_count" \
+      "$([ "$_trust_pending_count" != "1" ] && echo "s")" "${RESET}"
+  fi
 
   # Render each service from cached health status
   local _idx=0
@@ -649,6 +662,11 @@ cmd_dashboard() {
       fi
     fi
 
+    # Trust requests badge
+    if (( _trust_pending_count > 0 )); then
+      actions[${#actions[@]}]="Trust requests (${_trust_pending_count} pending)"
+    fi
+
     actions[${#actions[@]}]="Settings"
 
     # Add installed skills from project and global dirs (check for updates via cached registry)
@@ -810,6 +828,10 @@ cmd_dashboard() {
       Fleet:\ *)
         source "$MUSTER_ROOT/lib/commands/group.sh"
         _group_detail_menu "$_fleet_key"
+        ;;
+      "Trust requests"*)
+        source "$MUSTER_ROOT/lib/commands/trust.sh"
+        _trust_cmd_manager
         ;;
       Settings)
         source "$MUSTER_ROOT/lib/commands/settings.sh"

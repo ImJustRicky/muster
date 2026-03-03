@@ -3,6 +3,7 @@
 
 source "$MUSTER_ROOT/lib/core/groups.sh"
 source "$MUSTER_ROOT/lib/core/credentials.sh"
+source "$MUSTER_ROOT/lib/core/trust.sh"
 source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/tui/progress.sh"
@@ -551,14 +552,75 @@ _group_cmd_add() {
       ok "SSH connection succeeded"
 
       # Verify muster is installed
+      local _muster_on_remote=false
       start_spinner "Checking muster on remote..."
       if groups_remote_exec "$group_name" "$_idx" "command -v muster" &>/dev/null; then
         stop_spinner
         ok "muster found on remote"
+        _muster_on_remote=true
       else
         stop_spinner
         warn "muster not installed on remote"
         printf '  %bInstall muster on the remote to enable group deploys%b\n' "${DIM}" "${RESET}"
+      fi
+
+      # Send fleet trust join request
+      if [[ "$_muster_on_remote" == "true" ]]; then
+        local _my_fp _my_label
+        _my_fp=$(trust_fingerprint)
+        _my_label=$(trust_label)
+
+        start_spinner "Sending trust request..."
+        local _req_result
+        _req_result=$(groups_remote_exec "$group_name" "$_idx" \
+          "muster trust request --fingerprint '${_my_fp}' --label '${_my_label}'" 2>/dev/null) || true
+        stop_spinner
+
+        case "$_req_result" in
+          already_trusted)
+            ok "Already trusted on remote"
+            ;;
+          already_pending)
+            info "Trust request already pending on remote"
+            ;;
+          pending)
+            ok "Trust request sent"
+            # Poll for acceptance
+            info "Waiting for remote to accept... (Ctrl+C to skip)"
+            local _poll_start _poll_elapsed _trust_accepted=false
+            _poll_start=$(date +%s)
+            trap 'true' INT
+            while true; do
+              _poll_elapsed=$(( $(date +%s) - _poll_start ))
+              (( _poll_elapsed > 120 )) && break
+
+              local _verify_result
+              _verify_result=$(groups_remote_exec "$group_name" "$_idx" \
+                "muster trust verify --fingerprint '${_my_fp}'" 2>/dev/null) || true
+
+              if [[ "$_verify_result" == "trusted" ]]; then
+                _trust_accepted=true
+                break
+              fi
+
+              printf '\r  %bi%b Waiting for acceptance (%ds)... ' "${ACCENT}" "${RESET}" "$_poll_elapsed"
+              sleep 3
+            done
+            trap - INT
+            printf '\r\033[K'
+
+            if [[ "$_trust_accepted" == "true" ]]; then
+              ok "Trust accepted — deploys are authorized"
+            else
+              info "Trust request pending. Remote must run:"
+              printf '  %bmuster trust accept %s%b\n' "${DIM}" "${_my_fp:0:20}..." "${RESET}"
+              printf '  %bOr accept via the dashboard on the remote machine%b\n' "${DIM}" "${RESET}"
+            fi
+            ;;
+          *)
+            warn "Could not send trust request (muster trust may not be available on remote)"
+            ;;
+        esac
       fi
     else
       stop_spinner
@@ -1623,6 +1685,36 @@ _group_deploy_remote() {
   if [[ "$_GP_AUTH_METHOD" == "password" ]]; then
     _groups_load_ssh_password
   fi
+
+  # Deploy gate: verify trust before deploying
+  local _my_fp
+  _my_fp=$(trust_fingerprint)
+  local _trust_status=""
+  _trust_status=$(groups_remote_exec "$group_name" "$index" \
+    "muster trust verify --fingerprint '${_my_fp}'" 2>/dev/null) || true
+
+  case "$_trust_status" in
+    trusted) ;; # proceed
+    pending)
+      printf 'Deploy rejected: trust request pending approval on %s@%s\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+      printf 'Accept on remote: muster trust accept %s\n' "$_my_fp" >> "$log_file"
+      return 1
+      ;;
+    unknown)
+      # Remote has trust system but doesn't know us — auto-send a join request
+      # This handles groups added before the trust update
+      local _my_label
+      _my_label=$(trust_label)
+      groups_remote_exec "$group_name" "$index" \
+        "muster trust request --fingerprint '${_my_fp}' --label '${_my_label}'" &>/dev/null || true
+      printf 'Trust request auto-sent to %s@%s\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+      printf 'Deploy blocked until remote accepts. Run on remote: muster trust accept %s\n' "$_my_fp" >> "$log_file"
+      return 1
+      ;;
+    "")
+      # Empty = older muster without trust system, or muster not installed — allow deploy
+      ;;
+  esac
 
   # Build remote deploy command:
   # 1. Fix PATH for non-interactive SSH (muster installs to ~/.local/bin)

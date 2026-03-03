@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/Muster-dev/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.31"
+MUSTER_VERSION="0.5.32"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -167,6 +167,11 @@ case "${1:-}" in
     source "$MUSTER_ROOT/lib/commands/group.sh"
     cmd_group "$@"
     ;;
+  trust)
+    shift
+    source "$MUSTER_ROOT/lib/commands/trust.sh"
+    cmd_trust "$@"
+    ;;
   update|--update)
     source "$MUSTER_ROOT/lib/core/updater.sh"
     update_apply
@@ -195,6 +200,7 @@ case "${1:-}" in
     echo "Fleet commands:"
     echo "  fleet       Deploy one project to multiple machines (SSH or cloud)"
     echo "  group       Orchestrate multiple projects as one deploy (local, SSH, or cloud)"
+    echo "  trust       Manage fleet deploy trust (accept, reject, revoke)"
     echo "  deploy fleet <group>   Shortcut for 'muster group deploy <group>'"
     echo ""
     echo "Other:"
