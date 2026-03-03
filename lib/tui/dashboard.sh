@@ -245,6 +245,7 @@ _dashboard_header() {
 }
 
 _dashboard_home() {
+  set +u
   source "$MUSTER_ROOT/lib/core/registry.sh"
   source "$MUSTER_ROOT/lib/core/groups.sh"
 
@@ -488,16 +489,23 @@ _dashboard_home() {
 }
 
 cmd_dashboard() {
+  # Disable strict unset checking in the TUI — many variables are conditionally set
+  # and set -u causes silent exits that are hard to debug
+  set +u
+
   if [[ ! -t 0 ]]; then
     printf '%b\n' "${RED}Error: interactive terminal required${RESET}" >&2
     printf '%b\n' "Use flag-based setup instead: muster setup --help" >&2
+    set -u
     return 1
   fi
 
   # If not inside a project, show the home screen
   if ! find_config &>/dev/null; then
     _dashboard_home
-    return $?
+    local _rc=$?
+    set -u
+    return $_rc
   fi
 
   # Kick off background update check (non-blocking)
