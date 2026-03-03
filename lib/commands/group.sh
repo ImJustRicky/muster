@@ -806,6 +806,43 @@ _group_cmd_deploy() {
     "$display_name" "$total" "$([ "$total" != "1" ] && echo "s")"
   echo ""
 
+  # Pre-calculate total deploy steps (services across all projects)
+  local _total_steps=0
+  local _steps_done=0
+  local _lsb=0
+  local _pi=0
+  while (( _pi < total )); do
+    local _pt
+    _pt=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$_pi].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    if [[ "$_pt" == "local" ]]; then
+      local _pp
+      _pp=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+        '.groups[$n].projects[$_pi].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+      local _pc=""
+      [[ -f "${_pp}/deploy.json" ]] && _pc="${_pp}/deploy.json"
+      [[ -z "$_pc" && -f "${_pp}/muster.json" ]] && _pc="${_pp}/muster.json"
+      if [[ -n "$_pc" ]]; then
+        local _ns
+        _ns=$(jq '[.services | to_entries[] | select((.value.skip_deploy // false) | tostring != "true")] | length' "$_pc" 2>/dev/null)
+        [[ -z "$_ns" || "$_ns" == "null" ]] && _ns=0
+        (( _ns > 0 )) && _total_steps=$(( _total_steps + _ns )) || _total_steps=$(( _total_steps + 1 ))
+      else
+        _total_steps=$(( _total_steps + 1 ))
+      fi
+    else
+      _total_steps=$(( _total_steps + 1 ))
+    fi
+    _pi=$(( _pi + 1 ))
+  done
+
+  # Single progress bar — printed once, updated in-place via cursor
+  local _first_pname
+  _first_pname=$(groups_project_name "$group_name" "0")
+  progress_bar 0 "$_total_steps" "$_first_pname"
+  echo ""
+  _lsb=1
+
   local i=0
   while (( i < total )); do
     local current=$(( i + 1 ))
@@ -815,14 +852,18 @@ _group_cmd_deploy() {
       '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
     _pname=$(groups_project_name "$group_name" "$i")
 
+    # Update bar label for current project
+    printf '\033[%dA' "$_lsb"
+    progress_bar "$_steps_done" "$_total_steps" "$_pname"
+    printf '\033[%dB' "$_lsb"
+
     local log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
     local rc=0
     local _svc_total=0
+    local _svc_idx=0
+    local _steps_before="$_steps_done"
 
     while true; do
-      # Progress bar
-      progress_bar "$i" "$total" "${_pname}"
-      echo ""
 
       if [[ "$_type" == "local" ]]; then
         # ── Local project: iterate services individually ──
@@ -833,9 +874,11 @@ _group_cmd_deploy() {
         # Pre-flight checks
         if [[ -z "$_path" || "$_path" == "null" ]]; then
           err "Project has no path configured"
+          _lsb=$(( _lsb + 1 ))
           rc=1
         elif [[ ! -d "$_path" ]]; then
           err "Project directory not found: ${_path}"
+          _lsb=$(( _lsb + 1 ))
           rc=1
         else
           local _cfg=""
@@ -844,6 +887,7 @@ _group_cmd_deploy() {
 
           if [[ -z "$_cfg" ]]; then
             err "No deploy.json found in ${_path}"
+            _lsb=$(( _lsb + 1 ))
             rc=1
           else
             # Get deploy order
@@ -1028,14 +1072,29 @@ _group_cmd_deploy() {
               fi
               printf '\033[K\n\033[K\n\033[K'
               printf '\033[2A'
+              _lsb=$(( _lsb + 1 ))
+
+              # Update progress bar in-place
+              if (( _svc_rc == 0 )); then
+                _steps_done=$(( _steps_done + 1 ))
+                printf '\033[%dA' "$_lsb"
+                progress_bar "$_steps_done" "$_total_steps" "$_pname"
+                printf '\033[%dB' "$_lsb"
+              else
+                printf '\033[%dA' "$_lsb"
+                progress_bar "$_steps_done" "$_total_steps" "$_pname" "error"
+                printf '\033[%dB' "$_lsb"
+              fi
 
               if (( _svc_rc != 0 )); then
                 echo ""
+                _lsb=$(( _lsb + 1 ))
                 if [[ -s "$_svc_log" ]]; then
-                  tail -5 "$_svc_log" | while IFS= read -r _eline; do
+                  while IFS= read -r _eline; do
                     _eline=$(printf '%s' "$_eline" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
                     printf '    %b%s%b\n' "${RED}" "$_eline" "${RESET}"
-                  done
+                    _lsb=$(( _lsb + 1 ))
+                  done < <(tail -5 "$_svc_log")
                 fi
                 rc="$_svc_rc"
                 break
@@ -1105,14 +1164,29 @@ _group_cmd_deploy() {
         fi
         printf '\033[K\n\033[K\n\033[K'
         printf '\033[2A'
+        _lsb=$(( _lsb + 1 ))
+
+        # Update progress bar in-place
+        if (( rc == 0 )); then
+          _steps_done=$(( _steps_done + 1 ))
+          printf '\033[%dA' "$_lsb"
+          progress_bar "$_steps_done" "$_total_steps" "$_pname"
+          printf '\033[%dB' "$_lsb"
+        else
+          printf '\033[%dA' "$_lsb"
+          progress_bar "$_steps_done" "$_total_steps" "$_pname" "error"
+          printf '\033[%dB' "$_lsb"
+        fi
 
         if (( rc != 0 )); then
           echo ""
+          _lsb=$(( _lsb + 1 ))
           if [[ -s "$log_file" ]]; then
-            tail -5 "$log_file" | while IFS= read -r _eline; do
+            while IFS= read -r _eline; do
               _eline=$(printf '%s' "$_eline" | sed $'s/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r')
               printf '    %b%s%b\n' "${RED}" "$_eline" "${RESET}"
-            done
+              _lsb=$(( _lsb + 1 ))
+            done < <(tail -5 "$log_file")
           fi
         fi
       fi
@@ -1129,29 +1203,46 @@ _group_cmd_deploy() {
 
       if (( rc == 0 )); then
         echo ""
-        progress_bar "$current" "$total" "${_pname}"
-        echo ""
+        _lsb=$(( _lsb + 1 ))
         if (( _svc_total > 1 )); then
           printf '  %b✓%b %s deployed (%d services)\n' "${GREEN}" "${RESET}" "$_pname" "$_svc_total"
         else
           printf '  %b✓%b %s deployed\n' "${GREEN}" "${RESET}" "$_pname"
         fi
+        _lsb=$(( _lsb + 1 ))
         succeeded=$(( succeeded + 1 ))
         break
       else
+        # Bar already turned red in service/remote handler above
         echo ""
-        progress_bar "$i" "$total" "${_pname}" "error"
-        echo ""
-        echo ""
+        _lsb=$(( _lsb + 1 ))
         menu_select "Deploy failed on ${_pname}" \
           "Retry" "Skip and continue" "Abort"
 
         case "$MENU_RESULT" in
           "Retry")
+            # Clear everything below bar, restart this project
+            _lsb=$(( _lsb + 3 ))
+            printf '\033[%dA' "$_lsb"
+            _steps_done="$_steps_before"
+            progress_bar "$_steps_done" "$_total_steps" "$_pname"
+            printf '\n\033[J'
+            _lsb=1
             log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
             continue
             ;;
           "Skip and continue")
+            # Remove un-deployed steps for this project from total
+            if (( _svc_total > 0 )); then
+              _total_steps=$(( _total_steps - _svc_total + (_steps_done - _steps_before) ))
+            else
+              _total_steps=$(( _total_steps - 1 ))
+            fi
+            # Update bar to show adjusted progress (no longer error state)
+            _lsb=$(( _lsb + 3 ))
+            printf '\033[%dA' "$_lsb"
+            progress_bar "$_steps_done" "$_total_steps" "$_pname"
+            printf '\033[%dB' "$_lsb"
             skipped=$(( skipped + 1 ))
             break
             ;;
