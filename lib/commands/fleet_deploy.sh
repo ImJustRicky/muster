@@ -491,7 +491,7 @@ ${_ke}"
       done
 
       printf '\r  %b%s%b Deploying (%d/%d done...)' "${DIM}" "⠋" "${RESET}" "$_done" "${#pids[@]}"
-      sleep 1
+      sleep 0.2
     done
     printf '\r%*s\r' 60 ''
 

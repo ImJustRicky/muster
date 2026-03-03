@@ -727,7 +727,7 @@ _deploy_lock_acquire() {
                 "${ACCENT}" "${_lock_frames[$_lock_fi]}" "${RESET}" \
                 "${DIM}" "$_wait_dur" "${RESET}"
               _lock_fi=$(( (_lock_fi + 1) % ${#_lock_frames[@]} ))
-              sleep 1
+              sleep 0.2
             done
             printf '\r\033[K'
             tput cnorm 2>/dev/null || true

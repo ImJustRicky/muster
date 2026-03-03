@@ -1359,7 +1359,7 @@ _group_cmd_deploy() {
                   (( ${#_tp} > _pw )) && _tp="${_tp:0:$((_pw - 3))}..."
                   printf '    %b%s%b\033[K\n' "${DIM}" "$_tp" "${RESET}"
                 done
-                sleep 1
+                sleep 0.2
               done
 
               wait "$_hook_pid" 2>/dev/null
