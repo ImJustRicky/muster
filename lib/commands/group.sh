@@ -890,7 +890,17 @@ _group_cmd_deploy() {
               fi
             done
             if [[ "$_any_sudo" == "true" ]]; then
-              sudo -v 2>/dev/null || true
+              # Check if sudo is already cached (no password needed)
+              local _sudo_was_cached=false
+              sudo -n true 2>/dev/null && _sudo_was_cached=true
+              sudo -v || true
+              if [[ "$_sudo_was_cached" == "false" ]]; then
+                printf '  %b✓%b Authenticated\n' "${GREEN}" "${RESET}"
+                printf '    %bSave?%b  1) Session  2) Always ask  3) Never ' "${DIM}" "${RESET}"
+                local _sudo_ch=""
+                IFS= read -rsn1 -t 3 _sudo_ch 2>/dev/null || true
+                printf '\r\033[K'
+              fi
             fi
 
             # Deploy each service with animated preview
@@ -917,6 +927,23 @@ _group_cmd_deploy() {
                   [[ -z "$_ck" ]] && continue
                   export "$_ck=$_cv"
                 done <<< "$_cred_env"
+
+                # Credential save prompt (passive, 3s timeout)
+                local _g_cur_mode
+                _g_cur_mode=$(jq -r --arg s "$_svc" '.services[$s].credentials.mode // ""' "$_cfg" 2>/dev/null)
+                if [[ "$_g_cur_mode" == "session" || "$_g_cur_mode" == "always" ]]; then
+                  printf '    %bSave?%b  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
+                  local _save_ch=""
+                  IFS= read -rsn1 -t 3 _save_ch 2>/dev/null || true
+                  case "$_save_ch" in
+                    1)
+                      local _tmp_cfg
+                      _tmp_cfg=$(jq --arg s "$_svc" '.services[$s].credentials.mode = "save"' "$_cfg") && printf '%s' "$_tmp_cfg" > "$_cfg"
+                      printf ' %bsaved%b' "${GREEN}" "${RESET}"
+                      ;;
+                  esac
+                  printf '\r\033[K'
+                fi
               fi
 
               # Export k8s env vars
@@ -1012,25 +1039,6 @@ _group_cmd_deploy() {
                 fi
                 rc="$_svc_rc"
                 break
-              fi
-
-              # Credential save prompt (passive, 2s timeout)
-              if [[ -n "$_cred_env" ]]; then
-                local _g_cur_mode
-                _g_cur_mode=$(jq -r --arg s "$_svc" '.services[$s].credentials.mode // ""' "$_cfg" 2>/dev/null)
-                if [[ "$_g_cur_mode" == "session" || "$_g_cur_mode" == "always" ]]; then
-                  printf '    %bSave password?%b  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
-                  local _save_ch=""
-                  IFS= read -rsn1 -t 2 _save_ch 2>/dev/null || true
-                  case "$_save_ch" in
-                    1)
-                      local _tmp_cfg
-                      _tmp_cfg=$(jq --arg s "$_svc" '.services[$s].credentials.mode = "save"' "$_cfg") && printf '%s' "$_tmp_cfg" > "$_cfg"
-                      printf ' %bsaved%b' "${GREEN}" "${RESET}"
-                      ;;
-                  esac
-                  printf '\r\033[K'
-                fi
               fi
 
               # Cleanup credential env vars
