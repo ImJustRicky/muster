@@ -738,12 +738,6 @@ _group_cmd_deploy() {
   display_name=$(groups_get ".groups.\"${group_name}\".name")
   [[ "$display_name" == "null" || -z "$display_name" ]] && display_name="$group_name"
 
-  echo ""
-  printf '  %b%bGroup Deploy%b — %s (%d project%s)\n' \
-    "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" \
-    "$display_name" "$total" "$([ "$total" != "1" ] && echo "s")"
-  echo ""
-
   local succeeded=0 failed=0 skipped=0
   local log_dir="$HOME/.muster/logs"
   mkdir -p "$log_dir"
@@ -757,12 +751,20 @@ _group_cmd_deploy() {
       '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
     _pname=$(groups_project_name "$group_name" "$i")
 
-    progress_bar "$i" "$total" "${_pname}"
-
     local log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
     local rc=0
 
     while true; do
+      # Redraw header + progress on each attempt (clears previous failure output)
+      clear
+      echo ""
+      printf '  %b%bGroup Deploy%b — %s (%d project%s)\n' \
+        "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" \
+        "$display_name" "$total" "$([ "$total" != "1" ] && echo "s")"
+      echo ""
+      progress_bar "$i" "$total" "${_pname}"
+      echo ""
+
       if [[ "$_type" == "local" ]]; then
         _group_deploy_local "$group_name" "$i" "$log_file"
         rc=$?
@@ -778,6 +780,7 @@ _group_cmd_deploy() {
         succeeded=$(( succeeded + 1 ))
         break
       else
+        echo ""
         err "${_pname} deploy failed"
 
         # Show last few lines
@@ -824,6 +827,10 @@ _group_deploy_local() {
   _path=$(jq -r --arg n "$group_name" --argjson i "$index" \
     '.groups[$n].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
 
+  if [[ -z "$_path" || "$_path" == "null" ]]; then
+    err "Project has no path configured — re-add it to the group"
+    return 1
+  fi
   if [[ ! -d "$_path" ]]; then
     err "Project directory not found: ${_path}"
     return 1
