@@ -12,8 +12,8 @@ _build_context_cache_stale() {
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
   local cache_mtime config_mtime ignore_mtime
-  cache_mtime=$(stat -f %m "$_BUILD_CONTEXT_CACHE" 2>/dev/null || stat -c %Y "$_BUILD_CONTEXT_CACHE" 2>/dev/null || echo 0)
-  config_mtime=$(stat -f %m "$CONFIG_FILE" 2>/dev/null || stat -c %Y "$CONFIG_FILE" 2>/dev/null || echo 0)
+  cache_mtime=$(stat -c %Y "$_BUILD_CONTEXT_CACHE" 2>/dev/null || stat -f %m "$_BUILD_CONTEXT_CACHE" 2>/dev/null || echo 0)
+  config_mtime=$(stat -c %Y "$CONFIG_FILE" 2>/dev/null || stat -f %m "$CONFIG_FILE" 2>/dev/null || echo 0)
 
   # Config changed since cache
   if (( config_mtime > cache_mtime )); then
@@ -22,7 +22,7 @@ _build_context_cache_stale() {
 
   # .dockerignore changed since cache
   if [[ -f "${project_dir}/.dockerignore" ]]; then
-    ignore_mtime=$(stat -f %m "${project_dir}/.dockerignore" 2>/dev/null || stat -c %Y "${project_dir}/.dockerignore" 2>/dev/null || echo 0)
+    ignore_mtime=$(stat -c %Y "${project_dir}/.dockerignore" 2>/dev/null || stat -f %m "${project_dir}/.dockerignore" 2>/dev/null || echo 0)
     if (( ignore_mtime > cache_mtime )); then
       return 0
     fi
