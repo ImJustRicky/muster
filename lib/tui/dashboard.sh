@@ -420,6 +420,17 @@ _dashboard_home() {
     fi
 
     echo ""
+    # If we're in a project directory, offer quick access
+    local _cwd_project="" _cwd_project_name=""
+    if find_config &>/dev/null; then
+      _cwd_project=$(find_config)
+      if has_cmd jq; then
+        _cwd_project_name=$(jq -r '.project // "project"' "$_cwd_project" 2>/dev/null)
+      else
+        _cwd_project_name="project"
+      fi
+      actions[${#actions[@]}]="Current: ${_cwd_project_name}"
+    fi
     actions[${#actions[@]}]="Setup new project"
     actions[${#actions[@]}]="Settings"
     if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
@@ -432,6 +443,10 @@ _dashboard_home() {
     case "$MENU_RESULT" in
       "Update muster")
         update_apply
+        ;;
+      Current:\ *)
+        cmd_dashboard
+        return 0
         ;;
       "Setup new project")
         source "$MUSTER_ROOT/lib/commands/setup.sh"
@@ -707,6 +722,7 @@ cmd_dashboard() {
 
     actions[${#actions[@]}]="Skill Marketplace"
 
+    actions[${#actions[@]}]="Home"
     if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
       actions[${#actions[@]}]="Update muster"
     fi
@@ -877,6 +893,10 @@ cmd_dashboard() {
         ;;
       "Update muster")
         update_apply
+        ;;
+      Home)
+        _dashboard_home
+        return 0
         ;;
       Quit)
         echo ""
