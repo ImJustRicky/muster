@@ -1634,7 +1634,7 @@ REMOTECMD
   )"
   cmd="${cmd}; export MUSTER_DEPLOY_SOURCE='${_source_label}'"
   cmd="${cmd}; mkdir -p .muster; printf '%s\n' '${_source_label}' > .muster/.fleet_deploying"
-  cmd="${cmd}; _rc=0; muster deploy --quiet || _rc=\$?"
+  cmd="${cmd}; _rc=0; muster deploy --quiet --force || _rc=\$?"
   cmd="${cmd}; rm -f .muster/.fleet_deploying; exit \$_rc"
 
   if [[ "$_GP_CLOUD" == "true" ]]; then

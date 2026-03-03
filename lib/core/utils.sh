@@ -700,10 +700,10 @@ _deploy_lock_acquire() {
     local lock_started="$_LOCK_STARTED" lock_terminal="$_LOCK_TERMINAL"
     local lock_services="$_LOCK_SERVICES"
 
-    # Check if PID is still alive
-    if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+    # Check if PID is still alive (empty PID = malformed lock = stale)
+    if [[ -z "$lock_pid" ]] || ! kill -0 "$lock_pid" 2>/dev/null; then
       # Stale lock — remove it
-      warn "Removing stale deploy lock (PID ${lock_pid} is dead)"
+      warn "Removing stale deploy lock (PID ${lock_pid:-unknown} is dead)"
       rm -f "$lock_file"
     else
       # Active lock — show enhanced TUI and offer options
