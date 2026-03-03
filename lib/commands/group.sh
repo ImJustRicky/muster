@@ -1275,7 +1275,15 @@ _group_cmd_status() {
     # Parse service results
     local _svc_keys="" _svc_count=0 _healthy=0
     if [[ -n "$_result" ]] && printf '%s' "$_result" | jq -e '.services' &>/dev/null; then
-      _svc_keys=$(printf '%s' "$_result" | jq -r '.services | keys[]' 2>/dev/null)
+      # Use deploy_order for local projects, keys[] for remote/fallback
+      _svc_keys=""
+      if [[ "$_type" == "local" && -n "${_path:-}" ]]; then
+        local _svc_cfg=""
+        [[ -f "${_path}/deploy.json" ]] && _svc_cfg="${_path}/deploy.json"
+        [[ -z "$_svc_cfg" && -f "${_path}/muster.json" ]] && _svc_cfg="${_path}/muster.json"
+        [[ -n "$_svc_cfg" ]] && _svc_keys=$(jq -r '(.deploy_order[]? // empty)' "$_svc_cfg" 2>/dev/null)
+      fi
+      [[ -z "$_svc_keys" ]] && _svc_keys=$(printf '%s' "$_result" | jq -r '.services | keys[]' 2>/dev/null)
       _svc_count=$(printf '%s' "$_result" | jq '[.services | to_entries[]] | length' 2>/dev/null)
       _healthy=$(printf '%s' "$_result" | jq '[.services | to_entries[] | select(.value.status == "healthy")] | length' 2>/dev/null)
       [[ -z "$_svc_count" ]] && _svc_count=0
@@ -1825,7 +1833,8 @@ _group_detail_menu() {
           fi
           if [[ -n "$_cfg" ]] && has_cmd jq; then
             local _svc_list
-            _svc_list=$(jq -r '.services | keys[]' "$_cfg" 2>/dev/null)
+            _svc_list=$(jq -r '(.deploy_order[]? // empty)' "$_cfg" 2>/dev/null)
+            [[ -z "$_svc_list" ]] && _svc_list=$(jq -r '.services | keys[]' "$_cfg" 2>/dev/null)
             if [[ -n "$_svc_list" ]]; then
               while IFS= read -r _sk; do
                 [[ -z "$_sk" ]] && continue
