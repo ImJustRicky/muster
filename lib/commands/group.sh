@@ -860,10 +860,15 @@ _group_cmd_deploy() {
     sudo -v || true
     if [[ "$_sudo_was_cached" == "false" ]]; then
       printf '  %b✓%b Authenticated\n' "${GREEN}" "${RESET}"
-      printf '    %bSave?%b  1) Session  2) Always ask  3) Never ' "${DIM}" "${RESET}"
+      printf '    %bSave?%b  0) Close  1) Session  2) Always ask  3) Never ' "${DIM}" "${RESET}"
       local _sudo_ch=""
-      IFS= read -rsn1 -t 5 _sudo_ch 2>/dev/null || true
-      printf '\r\033[K'
+      IFS= read -rsn1 _sudo_ch 2>/dev/null || true
+      case "$_sudo_ch" in
+        1) printf '\r\033[K    %b✓%b Session\n' "${GREEN}" "${RESET}" ;;
+        2) printf '\r\033[K    %b✓%b Always ask\n' "${GREEN}" "${RESET}" ;;
+        3) printf '\r\033[K    %b✓%b Never\n' "${GREEN}" "${RESET}" ;;
+        *) printf '\r\033[K' ;;
+      esac
     fi
   fi
 
@@ -980,14 +985,17 @@ _group_cmd_deploy() {
                 local _g_cur_mode
                 _g_cur_mode=$(jq -r --arg s "$_svc" '.services[$s].credentials.mode // ""' "$_cfg" 2>/dev/null)
                 if [[ "$_g_cur_mode" == "session" || "$_g_cur_mode" == "always" ]]; then
-                  printf '    %bSave?%b  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
+                  printf '    %bSave?%b  0) Close  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
                   local _save_ch=""
-                  IFS= read -rsn1 -t 5 _save_ch 2>/dev/null || true
+                  IFS= read -rsn1 _save_ch 2>/dev/null || true
                   case "$_save_ch" in
                     1) local _tmp_cfg
-                       _tmp_cfg=$(jq --arg s "$_svc" '.services[$s].credentials.mode = "save"' "$_cfg") && printf '%s' "$_tmp_cfg" > "$_cfg" ;;
+                       _tmp_cfg=$(jq --arg s "$_svc" '.services[$s].credentials.mode = "save"' "$_cfg") && printf '%s' "$_tmp_cfg" > "$_cfg"
+                       printf '\r\033[K    %b✓%b Keychain\n' "${GREEN}" "${RESET}" ;;
+                    2) printf '\r\033[K    %b✓%b Session\n' "${GREEN}" "${RESET}" ;;
+                    3) printf '\r\033[K    %b✓%b Skip\n' "${GREEN}" "${RESET}" ;;
+                    *) printf '\r\033[K' ;;
                   esac
-                  printf '\r\033[K'
                 fi
               fi
 
