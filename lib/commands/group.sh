@@ -1605,7 +1605,8 @@ _group_deploy_remote() {
     _groups_load_ssh_password
   fi
 
-  local cmd="muster deploy --quiet"
+  # Use full path or ensure ~/.local/bin is in PATH (non-interactive SSH skips .bashrc)
+  local cmd='export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; muster deploy --quiet'
 
   if [[ "$_GP_CLOUD" == "true" ]]; then
     # Cloud transport — pass cwd natively (agent handles directory change)

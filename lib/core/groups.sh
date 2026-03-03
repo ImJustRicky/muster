@@ -405,9 +405,15 @@ _groups_build_ssh_opts() {
   fi
 }
 
+# Wrap a command with PATH setup for non-interactive SSH (muster installs to ~/.local/bin)
+_groups_wrap_cmd() {
+  printf 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; %s' "$1"
+}
+
 # Execute a command on a remote group project (SSH or cloud)
 groups_remote_exec() {
-  local name="$1" index="$2" cmd="$3"
+  local name="$1" index="$2" cmd
+  cmd=$(_groups_wrap_cmd "$3")
   _groups_load_remote "$name" "$index"
   [[ "$_GP_AUTH_METHOD" == "password" ]] && _groups_load_ssh_password
 
