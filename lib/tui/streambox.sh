@@ -73,7 +73,10 @@ _log_viewer() {
 
     # Separator
     tput cup 1 0
-    printf '%b%s%b' "${DIM}" "$(printf '%*s' "$_lv_cols" "" | sed 's/ /─/g')" "${RESET}"
+    local _lv_rule
+    printf -v _lv_rule '%*s' "$_lv_cols" ""
+    _lv_rule="${_lv_rule// /─}"
+    printf '%b%s%b' "${DIM}" "$_lv_rule" "${RESET}"
 
     # Content — read last N lines from log file
     local _lv_lines=()
@@ -158,7 +161,8 @@ stream_in_box() {
 
   # Bottom border
   local bottom
-  bottom=$(printf '%*s' "$box_w" "" | sed 's/ /─/g')
+  printf -v bottom '%*s' "$box_w" ""
+  bottom="${bottom// /─}"
 
   # Title in top border
   local tcut="$title"
@@ -168,7 +172,8 @@ stream_in_box() {
   local pad_len=$(( box_w - ${#tcut} - 3 ))
   (( pad_len < 1 )) && pad_len=1
   local pad
-  pad=$(printf '%*s' "$pad_len" "" | sed 's/ /─/g')
+  printf -v pad '%*s' "$pad_len" ""
+  pad="${pad// /─}"
 
   # Ctrl+O hint line
   local _hint="Ctrl+O expand"
@@ -179,7 +184,7 @@ stream_in_box() {
   local r=0
   while (( r < box_lines )); do
     local empty_pad
-    empty_pad=$(printf '%*s' "$((inner - 1))" "")
+    printf -v empty_pad '%*s' "$((inner - 1))" ""
     printf '  %b│%b %s %b│%b\n' "${ACCENT}" "${RESET}" "$empty_pad" "${ACCENT}" "${RESET}"
     r=$((r + 1))
   done
@@ -216,7 +221,7 @@ stream_in_box() {
       local line_pad_len=$(( inner - 1 - ${#line} ))
       (( line_pad_len < 0 )) && line_pad_len=0
       local line_pad
-      line_pad=$(printf '%*s' "$line_pad_len" "")
+      printf -v line_pad '%*s' "$line_pad_len" ""
       printf '  %b│%b %s%s %b│%b\n' "${ACCENT}" "${RESET}" "$line" "$line_pad" "${ACCENT}" "${RESET}"
       r=$((r + 1))
     done
@@ -237,7 +242,7 @@ stream_in_box() {
       r=0
       while (( r < box_lines )); do
         local empty_pad
-        empty_pad=$(printf '%*s' "$((inner - 1))" "")
+        printf -v empty_pad '%*s' "$((inner - 1))" ""
         printf '  %b│%b %s %b│%b\n' "${ACCENT}" "${RESET}" "$empty_pad" "${ACCENT}" "${RESET}"
         r=$((r + 1))
       done

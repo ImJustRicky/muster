@@ -890,7 +890,8 @@ $(cat "$_hf" 2>/dev/null)"
     (( _rule_w > 50 )) && _rule_w=50
     (( _rule_w < 10 )) && _rule_w=10
     local _rule
-    _rule=$(printf '%*s' "$_rule_w" "" | sed 's/ /─/g')
+    printf -v _rule '%*s' "$_rule_w" ""
+    _rule="${_rule// /─}"
     printf '  %b%s%b\n' "${GRAY}" "$_rule" "${RESET}"
     echo ""
 

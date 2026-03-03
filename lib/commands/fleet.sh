@@ -413,7 +413,8 @@ _fleet_cmd_list() {
   local label_pad_len=$(( w - ${#label} - 3 ))
   (( label_pad_len < 1 )) && label_pad_len=1
   local label_pad
-  label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
+  printf -v label_pad '%*s' "$label_pad_len" ""
+  label_pad="${label_pad// /─}"
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
   if [[ -z "$machines" ]]; then
@@ -421,7 +422,7 @@ _fleet_cmd_list() {
     local _epad_len=$(( inner - ${#_empty} - 2 ))
     (( _epad_len < 0 )) && _epad_len=0
     local _epad
-    _epad=$(printf '%*s' "$_epad_len" "")
+    printf -v _epad '%*s' "$_epad_len" ""
     printf '  %b│%b  %b%s%b%s%b│%b\n' "${ACCENT}" "${RESET}" "${DIM}" "$_empty" "${RESET}" "$_epad" "${ACCENT}" "${RESET}"
   else
     while IFS= read -r machine; do
@@ -462,7 +463,7 @@ _fleet_cmd_list() {
       local pad_len=$(( inner - content_len ))
       (( pad_len < 0 )) && pad_len=0
       local pad
-      pad=$(printf '%*s' "$pad_len" "")
+      printf -v pad '%*s' "$pad_len" ""
 
       if [[ -n "$tag" ]]; then
         printf '  %b│%b  %b%s%b %s%s%b%s%b%b│%b\n' \
@@ -477,7 +478,8 @@ _fleet_cmd_list() {
   fi
 
   local bottom
-  bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+  printf -v bottom '%*s' "$w" ""
+  bottom="${bottom// /─}"
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
 
   # ── Groups box ──
@@ -490,7 +492,8 @@ _fleet_cmd_list() {
     local glabel_pad_len=$(( w - ${#glabel} - 3 ))
     (( glabel_pad_len < 1 )) && glabel_pad_len=1
     local glabel_pad
-    glabel_pad=$(printf '%*s' "$glabel_pad_len" "" | sed 's/ /─/g')
+    printf -v glabel_pad '%*s' "$glabel_pad_len" ""
+    glabel_pad="${glabel_pad// /─}"
     printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$glabel" "${RESET}${ACCENT}" "$glabel_pad" "${RESET}"
 
     while IFS= read -r group; do
@@ -506,14 +509,15 @@ _fleet_cmd_list() {
       local gpad_len=$(( inner - gcontent_len ))
       (( gpad_len < 0 )) && gpad_len=0
       local gpad
-      gpad=$(printf '%*s' "$gpad_len" "")
+      printf -v gpad '%*s' "$gpad_len" ""
       printf '  %b│%b  %b○%b %b%s%b%s%b│%b\n' \
         "${ACCENT}" "${RESET}" "${DIM}" "${RESET}" \
         "${WHITE}" "$gdisplay" "${RESET}" "$gpad" "${ACCENT}" "${RESET}"
     done <<< "$groups"
 
     local gbottom
-    gbottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+    printf -v gbottom '%*s' "$w" ""
+    gbottom="${gbottom// /─}"
     printf '  %b└%s┘%b\n' "${ACCENT}" "$gbottom" "${RESET}"
   fi
 
@@ -578,7 +582,8 @@ _fleet_cmd_test() {
   local label_pad_len=$(( w - ${#label} - 3 ))
   (( label_pad_len < 1 )) && label_pad_len=1
   local label_pad
-  label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
+  printf -v label_pad '%*s' "$label_pad_len" ""
+  label_pad="${label_pad// /─}"
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
   local pass=0 fail=0
@@ -636,7 +641,7 @@ _fleet_cmd_test() {
           local _plen=$(( inner - _clen ))
           (( _plen < 0 )) && _plen=0
           local _pad
-          _pad=$(printf '%*s' "$_plen" "")
+          printf -v _pad '%*s' "$_plen" ""
           printf '  %b│%b  %b%s%b %s%s%b%s%b%b│%b\n' \
             "${ACCENT}" "${RESET}" "$status_color" "$status_icon" "${RESET}" \
             "$_display" "$_pad" "$RED" "$tag" "${RESET}" "${ACCENT}" "${RESET}"
@@ -663,7 +668,7 @@ _fleet_cmd_test() {
     local pad_len=$(( inner - content_len ))
     (( pad_len < 0 )) && pad_len=0
     local pad
-    pad=$(printf '%*s' "$pad_len" "")
+    printf -v pad '%*s' "$pad_len" ""
 
     local tag_color="$GREEN"
     (( fail > 0 )) && [[ "$status_color" == "$RED" ]] && tag_color="$RED"
@@ -677,7 +682,8 @@ _fleet_cmd_test() {
   done
 
   local bottom
-  bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+  printf -v bottom '%*s' "$w" ""
+  bottom="${bottom// /─}"
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
 
   echo ""
@@ -808,7 +814,8 @@ _fleet_cmd_status() {
   local label_pad_len=$(( w - ${#label} - 3 ))
   (( label_pad_len < 1 )) && label_pad_len=1
   local label_pad
-  label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
+  printf -v label_pad '%*s' "$label_pad_len" ""
+  label_pad="${label_pad// /─}"
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
   local i=0
@@ -864,7 +871,7 @@ _fleet_cmd_status() {
     local pad_len=$(( inner - content_len ))
     (( pad_len < 0 )) && pad_len=0
     local pad
-    pad=$(printf '%*s' "$pad_len" "")
+    printf -v pad '%*s' "$pad_len" ""
 
     local tag_color="$status_color"
 
@@ -876,7 +883,8 @@ _fleet_cmd_status() {
   done
 
   local bottom
-  bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+  printf -v bottom '%*s' "$w" ""
+  bottom="${bottom// /─}"
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
   echo ""
 }

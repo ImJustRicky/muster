@@ -59,8 +59,14 @@ _toggle_select() {
     local i=0
     while (( i < count )); do
       local label="${_TOG_LABELS[$i]}"
-      local cur_opt
-      cur_opt=$(_tog_get_opt "${_TOG_OPTIONS[$i]}" "${_TOG_STATES[$i]}")
+      # Inline _tog_get_opt (avoids subshell per item)
+      local cur_opt="${_TOG_OPTIONS[$i]}"
+      local _oi=0
+      while (( _oi < _TOG_STATES[i] )); do
+        cur_opt="${cur_opt#*|}"
+        _oi=$((_oi + 1))
+      done
+      cur_opt="${cur_opt%%|*}"
 
       # Color: first option (index 0) = red/off, anything else = green/on
       local state_color="$GREEN"
@@ -72,14 +78,14 @@ _toggle_select() {
         local bar_pad=$(( _tog_w - text_len ))
         (( bar_pad < 0 )) && bar_pad=0
         local pad
-        pad=$(printf '%*s' "$bar_pad" "")
+        printf -v pad '%*s' "$bar_pad" ""
         printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
       else
         local content_len=$(( 4 + ${#label} + 2 + ${#cur_opt} ))
         local pad_len=$(( _tog_w - content_len ))
         (( pad_len < 0 )) && pad_len=0
         local pad
-        pad=$(printf '%*s' "$pad_len" "")
+        printf -v pad '%*s' "$pad_len" ""
         printf '    %s%s %b%s%b\n' "$label" "$pad" "$state_color" "$cur_opt" "${RESET}"
       fi
       i=$((i + 1))
@@ -92,7 +98,7 @@ _toggle_select() {
       local bar_pad=$(( _tog_w - text_len ))
       (( bar_pad < 0 )) && bar_pad=0
       local pad
-      pad=$(printf '%*s' "$bar_pad" "")
+      printf -v pad '%*s' "$bar_pad" ""
       printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
     else
       printf '    %bBack%b\n' "${DIM}" "${RESET}"
@@ -102,12 +108,8 @@ _toggle_select() {
   local total_lines=$(( count + 1 ))
 
   _tog_clear() {
-    local i=0
-    while (( i < total_lines )); do
-      tput cuu1
-      i=$((i + 1))
-    done
-    tput ed
+    (( total_lines > 0 )) && printf '\033[%dA' "$total_lines"
+    printf '\033[J'
   }
 
   _tog_read_key() {
@@ -475,7 +477,8 @@ _settings_project() {
     local label_pad_len=$(( w - ${#label} - 3 ))
     (( label_pad_len < 1 )) && label_pad_len=1
     local label_pad
-    label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
+    printf -v label_pad '%*s' "$label_pad_len" ""
+    label_pad="${label_pad// /─}"
     printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
     _settings_row "$inner" "Project" "$project"
@@ -508,7 +511,8 @@ _settings_project() {
     done <<< "$services"
 
     local bottom
-    bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+    printf -v bottom '%*s' "$w" ""
+    bottom="${bottom// /─}"
     printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
     printf '%b\n' "  ${DIM}D=deploy H=health R=rollback L=logs C=cleanup${RESET}"
     echo ""
@@ -798,7 +802,7 @@ _settings_row() {
   local pad_len=$(( inner - content_len ))
   (( pad_len < 0 )) && pad_len=0
   local pad
-  pad=$(printf '%*s' "$pad_len" "")
+  printf -v pad '%*s' "$pad_len" ""
 
   printf '  %b│%b %b%s%b  %s%s%b│%b\n' \
     "${ACCENT}" "${RESET}" "${WHITE}" "$key" "${RESET}" "$val" "$pad" "${ACCENT}" "${RESET}"

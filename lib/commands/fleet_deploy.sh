@@ -138,7 +138,8 @@ _fleet_deploy_dry_run() {
   local label_pad_len=$(( w - ${#label} - 3 ))
   (( label_pad_len < 1 )) && label_pad_len=1
   local label_pad
-  label_pad=$(printf '%*s' "$label_pad_len" "" | sed 's/ /─/g')
+  printf -v label_pad '%*s' "$label_pad_len" ""
+  label_pad="${label_pad// /─}"
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
 
   local idx=0
@@ -176,7 +177,7 @@ _fleet_deploy_dry_run() {
     local pad_len=$(( inner - content_len ))
     (( pad_len < 0 )) && pad_len=0
     local pad
-    pad=$(printf '%*s' "$pad_len" "")
+    printf -v pad '%*s' "$pad_len" ""
 
     if [[ -n "$tag" ]]; then
       printf '  %b│%b  %b%s%b %s%s%b%s%b%b│%b\n' \
@@ -190,7 +191,8 @@ _fleet_deploy_dry_run() {
   done
 
   local bottom
-  bottom=$(printf '%*s' "$w" "" | sed 's/ /─/g')
+  printf -v bottom '%*s' "$w" ""
+  bottom="${bottom// /─}"
   printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
 
   echo ""
@@ -488,7 +490,8 @@ ${_ke}"
   local _rlabel_pad_len=$(( _rw - ${#_rlabel} - 3 ))
   (( _rlabel_pad_len < 1 )) && _rlabel_pad_len=1
   local _rlabel_pad
-  _rlabel_pad=$(printf '%*s' "$_rlabel_pad_len" "" | sed 's/ /─/g')
+  printf -v _rlabel_pad '%*s' "$_rlabel_pad_len" ""
+  _rlabel_pad="${_rlabel_pad// /─}"
   printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$_rlabel" "${RESET}${ACCENT}" "$_rlabel_pad" "${RESET}"
 
   local succeeded=0 failed=0
@@ -526,7 +529,7 @@ ${_ke}"
     local _rs_plen=$(( _rinner - _rs_clen ))
     (( _rs_plen < 0 )) && _rs_plen=0
     local _rs_pad
-    _rs_pad=$(printf '%*s' "$_rs_plen" "")
+    printf -v _rs_pad '%*s' "$_rs_plen" ""
 
     printf '  %b│%b  %b%s%b %s%s%b%s%b%b│%b\n' \
       "${ACCENT}" "${RESET}" "$_rs_color" "$_rs_icon" "${RESET}" \
@@ -536,7 +539,8 @@ ${_ke}"
   done
 
   local _rbottom
-  _rbottom=$(printf '%*s' "$_rw" "" | sed 's/ /─/g')
+  printf -v _rbottom '%*s' "$_rw" ""
+  _rbottom="${_rbottom// /─}"
   printf '  %b└%s┘%b\n' "${ACCENT}" "$_rbottom" "${RESET}"
 
   echo ""

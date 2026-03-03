@@ -81,13 +81,13 @@ has_cmd() {
   command -v "$1" &>/dev/null
 }
 
-# ── Path input with real-time autocomplete ──
+# ── Path input with Tab autocomplete ──
 
-# Read a directory path with live autocomplete suggestions.
+# Read a directory path with Tab-triggered autocomplete.
 # Usage: _read_path "  > "
 #   Result in: REPLY
-# Types character-by-character. Suggestions appear below the input.
-# Tab: complete common prefix or cycle. Up/Down: select. Enter: accept.
+# Regular typing is instant (no subprocesses). Tab runs compgen.
+# Tab: complete/cycle. Up/Down: select suggestion. Enter: accept. Esc: cancel.
 _read_path() {
   local _rp_prompt="${1:-  > }"
   REPLY=""
@@ -105,28 +105,34 @@ _read_path() {
   local _rp_sel=-1
   local _rp_max=8
   local _rp_below=0
+  local _rp_pending=""
 
-  # Expand ~ for internal use
-  _rp_expand() {
-    local _e="$1"
-    [[ "$_e" == "~"* ]] && _e="${HOME}${_e:1}"
-    printf '%s' "$_e"
+  # Clear suggestion lines below input
+  _rp_clear_below() {
+    if (( _rp_below > 0 )); then
+      printf '\n'
+      tput ed
+      tput cuu1
+      _rp_below=0
+    fi
+    _rp_matches=()
+    _rp_sel=-1
   }
 
-  # Shorten path for display (replace $HOME with ~)
-  _rp_shorten() {
-    local _s="$1"
-    [[ "$_s" == "$HOME"* ]] && _s="~${_s#$HOME}"
-    printf '%s' "$_s"
+  # Redraw just the input line — zero subprocesses
+  _rp_redraw_input() {
+    local _d="$_rp_input"
+    [[ "$_d" == "$HOME"* ]] && _d="~${_d#$HOME}"
+    printf '\r\033[K%s%s' "$_rp_prompt" "$_d"
   }
 
-  # Get matching directories
+  # Run compgen (only called on Tab)
   _rp_get_matches() {
     _rp_matches=()
     [[ -z "$_rp_input" ]] && return
 
-    local _expanded
-    _expanded=$(_rp_expand "$_rp_input")
+    local _expanded="$_rp_input"
+    [[ "$_expanded" == "~"* ]] && _expanded="${HOME}${_expanded:1}"
 
     local _m
     while IFS= read -r _m; do
@@ -136,7 +142,7 @@ _read_path() {
     done < <(compgen -d -- "$_expanded" 2>/dev/null | head -n "$_rp_max")
   }
 
-  # Find longest common prefix among matches
+  # Longest common prefix (only called on Tab)
   _rp_common_prefix() {
     (( ${#_rp_matches[@]} == 0 )) && return
     local _cp="${_rp_matches[0]}"
@@ -145,11 +151,8 @@ _read_path() {
       local _other="${_rp_matches[$_i]}"
       local _j=0 _new=""
       while (( _j < ${#_cp} && _j < ${#_other} )); do
-        if [[ "${_cp:$_j:1}" == "${_other:$_j:1}" ]]; then
-          _new="${_new}${_cp:$_j:1}"
-        else
-          break
-        fi
+        [[ "${_cp:$_j:1}" == "${_other:$_j:1}" ]] || break
+        _new="${_new}${_cp:$_j:1}"
         _j=$((_j + 1))
       done
       _cp="$_new"
@@ -158,44 +161,34 @@ _read_path() {
     printf '%s' "$_cp"
   }
 
-  # Strip input's directory prefix from a match for short display
-  _rp_entry_display() {
-    local _full="$1"
-    local _expanded
-    _expanded=$(_rp_expand "$_rp_input")
-
-    # Find the directory part of the input
-    local _dir=""
-    if [[ "$_expanded" == */ ]]; then
-      _dir="$_expanded"
-    elif [[ "$_expanded" == */* ]]; then
-      _dir="${_expanded%/*}/"
-    fi
-
-    # Strip the directory prefix from the match
-    if [[ -n "$_dir" && "$_full" == "$_dir"* ]]; then
-      printf '%s' "${_full#$_dir}"
-    else
-      printf '%s' "$(_rp_shorten "$_full")"
-    fi
-  }
-
-  # Draw input line + suggestions below
-  _rp_draw() {
-    # Move below input line and clear everything there
+  # Draw suggestions below input — all display logic inlined (no subshells)
+  _rp_draw_suggestions() {
     printf '\n'
     tput ed
     local _newbelow=1
 
-    # Draw each suggestion
+    # Compute strip prefix inline
+    local _expanded="$_rp_input"
+    [[ "$_expanded" == "~"* ]] && _expanded="${HOME}${_expanded:1}"
+    local _strip=""
+    if [[ "$_expanded" == */ ]]; then
+      _strip="$_expanded"
+    elif [[ "$_expanded" == */* ]]; then
+      _strip="${_expanded%/*}/"
+    fi
+
     local _i=0
     while (( _i < ${#_rp_matches[@]} )); do
-      if (( _i > 0 )); then
-        printf '\n'
-        _newbelow=$((_newbelow + 1))
+      (( _i > 0 )) && { printf '\n'; _newbelow=$((_newbelow + 1)); }
+
+      # Inline entry display (no subshell)
+      local _full="${_rp_matches[$_i]}" _display
+      if [[ -n "$_strip" && "$_full" == "$_strip"* ]]; then
+        _display="${_full#$_strip}"
+      else
+        _display="$_full"
+        [[ "$_display" == "$HOME"* ]] && _display="~${_display#$HOME}"
       fi
-      local _display
-      _display=$(_rp_entry_display "${_rp_matches[$_i]}")
 
       if (( _i == _rp_sel )); then
         printf '    \033[48;5;178m\033[38;5;0m %s \033[0m' "$_display"
@@ -205,18 +198,14 @@ _read_path() {
       _i=$((_i + 1))
     done
 
-    # Move cursor back up to input line
+    # Move cursor back up
     _i=0
     while (( _i < _newbelow )); do
       tput cuu1
       _i=$((_i + 1))
     done
     _rp_below=$_newbelow
-
-    # Redraw input line with cursor at end
-    local _dinput
-    _dinput=$(_rp_shorten "$_rp_input")
-    printf '\r\033[K%s%s' "$_rp_prompt" "$_dinput"
+    _rp_redraw_input
   }
 
   # Print initial prompt
@@ -224,13 +213,20 @@ _read_path() {
 
   while true; do
     local _key
-    IFS= read -rsn1 _key || true
+    if [[ -n "$_rp_pending" ]]; then
+      _key="$_rp_pending"
+      _rp_pending=""
+    else
+      IFS= read -rsn1 _key || true
+    fi
 
-    # Detect escape sequences
+    # Detect escape sequences (arrow keys)
     if [[ "$_key" == $'\x1b' ]]; then
-      local _s1 _s2
-      IFS= read -rsn1 -t 1 _s1 || true
-      IFS= read -rsn1 -t 1 _s2 || true
+      local _s1="" _s2=""
+      IFS= read -rsn1 -t 1 _s1 2>/dev/null || true
+      if [[ -n "$_s1" ]]; then
+        IFS= read -rsn1 -t 1 _s2 2>/dev/null || true
+      fi
       _key="${_key}${_s1}${_s2}"
     fi
 
@@ -238,79 +234,86 @@ _read_path() {
       $'\x7f'|$'\x08')  # Backspace
         if [[ -n "$_rp_input" ]]; then
           _rp_input="${_rp_input%?}"
-          _rp_sel=-1
-          _rp_get_matches
-          _rp_draw
+          _rp_clear_below
+          _rp_redraw_input
         fi
         ;;
-      $'\t')  # Tab
+      $'\t')  # Tab — trigger autocomplete
+        _rp_get_matches
         if (( ${#_rp_matches[@]} == 1 )); then
-          # Single match — complete it
           _rp_input="${_rp_matches[0]}"
+          _rp_matches=()
           _rp_sel=-1
-          _rp_get_matches
-          _rp_draw
+          _rp_clear_below
+          _rp_redraw_input
         elif (( ${#_rp_matches[@]} > 1 )); then
-          # Multiple matches — try common prefix first
           local _cp
           _cp=$(_rp_common_prefix)
-          local _exp_input
-          _exp_input=$(_rp_expand "$_rp_input")
+          local _exp_input="$_rp_input"
+          [[ "$_exp_input" == "~"* ]] && _exp_input="${HOME}${_exp_input:1}"
           if [[ -n "$_cp" && "$_cp" != "$_exp_input" ]]; then
             _rp_input="$_cp"
             _rp_sel=-1
             _rp_get_matches
           else
-            # Already at common prefix — cycle through
             _rp_sel=$(( (_rp_sel + 1) % ${#_rp_matches[@]} ))
           fi
-          _rp_draw
+          _rp_draw_suggestions
         fi
         ;;
       $'\x1b[A')  # Up arrow
         if (( ${#_rp_matches[@]} > 0 && _rp_sel > 0 )); then
           _rp_sel=$((_rp_sel - 1))
-          _rp_draw
+          _rp_draw_suggestions
         fi
         ;;
       $'\x1b[B')  # Down arrow
         if (( ${#_rp_matches[@]} > 0 && _rp_sel < ${#_rp_matches[@]} - 1 )); then
           _rp_sel=$((_rp_sel + 1))
-          _rp_draw
+          _rp_draw_suggestions
         fi
         ;;
-      $'\x1b')  # Plain escape — cancel
-        printf '\n'
-        tput ed
-        tput cuu1
-        printf '\r\033[K%s\n' "$_rp_prompt"
-        REPLY=""
-        return 0
+      $'\x1b'|$'\x1b['|$'\x1b[C'|$'\x1b[D')  # Escape or L/R arrows
+        if [[ "$_key" == $'\x1b' ]]; then
+          _rp_clear_below
+          printf '\r\033[K%s\n' "$_rp_prompt"
+          REPLY=""
+          return 0
+        fi
+        # Left/Right arrows — ignore
         ;;
       ''|$'\n')  # Enter — accept
-        # Use selected suggestion if one is highlighted
         if (( _rp_sel >= 0 && _rp_sel < ${#_rp_matches[@]} )); then
           _rp_input="${_rp_matches[$_rp_sel]}"
         fi
-        # Clear suggestions
-        printf '\n'
-        tput ed
-        tput cuu1
-        # Print final selection
-        local _final
-        _final=$(_rp_shorten "$_rp_input")
+        _rp_clear_below
+        local _final="$_rp_input"
+        [[ "$_final" == "$HOME"* ]] && _final="~${_final#$HOME}"
         printf '\r\033[K%s%s\n' "$_rp_prompt" "$_final"
         REPLY="$_rp_input"
         [[ "$REPLY" == "~"* ]] && REPLY="${HOME}${REPLY:1}"
         return 0
         ;;
       *)
-        # Regular character — append and update
+        # Regular character — append (zero subprocesses)
         if [[ -n "$_key" ]]; then
           _rp_input="${_rp_input}${_key}"
-          _rp_sel=-1
-          _rp_get_matches
-          _rp_draw
+
+          # Drain queued chars from fast typing (batch before redraw)
+          while read -t 0 2>/dev/null; do
+            local _e
+            IFS= read -rsn1 _e 2>/dev/null || break
+            case "$_e" in
+              $'\x1b'|$'\t'|$'\x7f'|$'\x08'|''|$'\n')
+                _rp_pending="$_e"
+                break ;;
+              *) _rp_input="${_rp_input}${_e}" ;;
+            esac
+          done
+
+          # Dismiss suggestions if showing
+          (( _rp_below > 0 )) && _rp_clear_below
+          _rp_redraw_input
         fi
         ;;
     esac
@@ -641,7 +644,7 @@ _deploy_lock_show_tui() {
   local bar_pad_len=$(( bar_w - bar_text_len ))
   (( bar_pad_len < 1 )) && bar_pad_len=1
   local bar_pad
-  bar_pad=$(printf '%*s' "$bar_pad_len" "")
+  printf -v bar_pad '%*s' "$bar_pad_len" ""
   printf '\n \033[48;5;178m\033[38;5;0m\033[1m%s%s\033[0m\n' "$bar_text" "$bar_pad"
 
   # Lock details
@@ -665,7 +668,8 @@ _deploy_lock_show_tui() {
   (( rule_w > 50 )) && rule_w=50
   (( rule_w < 10 )) && rule_w=10
   local rule
-  rule=$(printf '%*s' "$rule_w" "" | sed 's/ /─/g')
+  printf -v rule '%*s' "$rule_w" ""
+  rule="${rule// /─}"
   printf '  %b%s%b\n' "${GRAY}" "$rule" "${RESET}"
   printf '  %bDeploy is running in another session.%b\n' "${DIM}" "${RESET}"
 }

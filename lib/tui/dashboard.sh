@@ -22,7 +22,7 @@ _dashboard_bar() {
   local pad_len=$(( bar_w - text_len - right_len ))
   (( pad_len < 1 )) && pad_len=1
   local pad
-  pad=$(printf '%*s' "$pad_len" "")
+  printf -v pad '%*s' "$pad_len" ""
   printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
 }
 
@@ -32,7 +32,8 @@ _dashboard_rule() {
   (( rule_w > 50 )) && rule_w=50
   (( rule_w < 10 )) && rule_w=10
   local rule
-  rule=$(printf '%*s' "$rule_w" "" | sed 's/ /─/g')
+  printf -v rule '%*s' "$rule_w" ""
+  rule="${rule// /─}"
   printf '  %b%s%b\n' "${GRAY}" "$rule" "${RESET}"
 }
 
@@ -57,7 +58,7 @@ _dashboard_print_svc_line() {
   local pad_len=$(( max_w - left_len - right_len - 4 ))
   (( pad_len < 1 )) && pad_len=1
   local pad
-  pad=$(printf '%*s' "$pad_len" "")
+  printf -v pad '%*s' "$pad_len" ""
 
   if [[ -n "$cred_warn" ]]; then
     printf '  %b%s%b %s%s%b%s%b  %b%s%b\n' \
@@ -360,7 +361,7 @@ _dashboard_home() {
         local _pad_len=$(( w - _left_len - _right_len - 2 ))
         (( _pad_len < 1 )) && _pad_len=1
         local _pad
-        _pad=$(printf '%*s' "$_pad_len" "")
+        printf -v _pad '%*s' "$_pad_len" ""
 
         printf '  %b○%b %b%s%b %s%b%s%b\n' \
           "${ACCENT}" "${RESET}" \
@@ -411,7 +412,7 @@ _dashboard_home() {
         local pad_len=$(( w - content_len ))
         (( pad_len < 0 )) && pad_len=0
         local pad
-        pad=$(printf '%*s' "$pad_len" "")
+        printf -v pad '%*s' "$pad_len" ""
 
         printf '  %b●%b %b%s%b %b%s%b%s\n' \
           "${GREEN}" "${RESET}" \

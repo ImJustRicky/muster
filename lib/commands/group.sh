@@ -2178,19 +2178,22 @@ _group_reorder() {
     printf '  %b↑/↓ select  ⏎ swap down  q done%b\n' "${DIM}" "${RESET}"
   }
 
-  _ro_draw() {
-    local _t
-    _t=$(groups_project_count "$group_name")
-    local ri=0
-    while (( ri < _t )); do
-      local _pname
-      _pname=$(groups_project_name "$group_name" "$ri")
-      local _type
-      _type=$(jq -r --arg n "$group_name" --argjson idx "$ri" \
-        '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  # Cache project names and types before input loop (avoid jq per redraw)
+  local _ro_names=() _ro_types=()
+  local _ri=0
+  while (( _ri < total )); do
+    _ro_names[$_ri]=$(groups_project_name "$group_name" "$_ri")
+    _ro_types[$_ri]=$(jq -r --arg n "$group_name" --argjson idx "$_ri" \
+      '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    _ri=$((_ri + 1))
+  done
 
+  _ro_draw() {
+    local ri=0
+    while (( ri < total )); do
+      local _pname="${_ro_names[$ri]}"
       local _icon
-      [[ "$_type" == "local" ]] && _icon="●" || _icon="◆"
+      [[ "${_ro_types[$ri]}" == "local" ]] && _icon="●" || _icon="◆"
 
       if (( ri == selected )); then
         local text="  ▸ ${_icon} ${_pname}"
@@ -2198,7 +2201,7 @@ _group_reorder() {
         local bar_pad=$(( _ro_w - text_len ))
         (( bar_pad < 0 )) && bar_pad=0
         local pad
-        pad=$(printf '%*s' "$bar_pad" "")
+        printf -v pad '%*s' "$bar_pad" ""
         printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
       else
         printf '    %s %s\n' "$_icon" "$_pname"
@@ -2207,13 +2210,13 @@ _group_reorder() {
     done
 
     # Done row
-    if (( selected == _t )); then
+    if (( selected == total )); then
       local text="  ▸ Done"
       local text_len=${#text}
       local bar_pad=$(( _ro_w - text_len ))
       (( bar_pad < 0 )) && bar_pad=0
       local pad
-      pad=$(printf '%*s' "$bar_pad" "")
+      printf -v pad '%*s' "$bar_pad" ""
       printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
     else
       printf '    %bDone%b\n' "${DIM}" "${RESET}"
@@ -2223,12 +2226,8 @@ _group_reorder() {
   local total_lines=$(( total + 1 ))
 
   _ro_clear() {
-    local ci=0
-    while (( ci < total_lines )); do
-      tput cuu1
-      ci=$(( ci + 1 ))
-    done
-    tput ed
+    (( total_lines > 0 )) && printf '\033[%dA' "$total_lines"
+    printf '\033[J'
   }
 
   _ro_read_key() {
@@ -2277,6 +2276,12 @@ _group_reorder() {
             .groups[$g].projects[$a] = $p[$b] |
             .groups[$g].projects[$b] = $p[$a]
           ' "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+          # Swap cached display data
+          local _swap_n="${_ro_names[$selected]}" _swap_t="${_ro_types[$selected]}"
+          _ro_names[$selected]="${_ro_names[$next]}"
+          _ro_types[$selected]="${_ro_types[$next]}"
+          _ro_names[$next]="$_swap_n"
+          _ro_types[$next]="$_swap_t"
           selected=$next
         fi
         ;;

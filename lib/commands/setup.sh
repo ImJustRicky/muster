@@ -45,7 +45,7 @@ _setup_bar() {
   local pad_len=$(( bar_w - text_len - right_len ))
   (( pad_len < 1 )) && pad_len=1
   local pad
-  pad=$(printf '%*s' "$pad_len" "")
+  printf -v pad '%*s' "$pad_len" ""
   printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
 }
 

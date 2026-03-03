@@ -71,12 +71,10 @@ _dev_show_status() {
   if [[ "${_dev_first_status:-true}" == "false" ]]; then
     # Clear the previous status block
     local line_count="${_dev_status_lines:-0}"
-    local i=0
-    while (( i < line_count )); do
-      tput cuu1
-      tput el
-      i=$(( i + 1 ))
-    done
+    if (( line_count > 0 )); then
+      printf '\033[%dA' "$line_count"
+      printf '\033[J'
+    fi
   fi
   _dev_first_status=false
 

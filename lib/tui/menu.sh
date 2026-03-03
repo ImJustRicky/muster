@@ -66,7 +66,7 @@ menu_select() {
         local bar_pad=$(( _menu_w - text_len ))
         (( bar_pad < 0 )) && bar_pad=0
         local pad
-        pad=$(printf '%*s' "$bar_pad" "")
+        printf -v pad '%*s' "$bar_pad" ""
         printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
       else
         printf '    %b%s%b\n' "${DIM}" "$label" "${RESET}"
@@ -76,12 +76,8 @@ menu_select() {
   }
 
   _menu_clear() {
-    local i=0
-    while (( i < count )); do
-      tput cuu1
-      i=$((i + 1))
-    done
-    tput ed
+    (( count > 0 )) && printf '\033[%dA' "$count"
+    printf '\033[J'
   }
 
   _menu_read_key() {

@@ -52,7 +52,7 @@ order_select() {
         local bar_pad=$(( _ord_w - text_len ))
         (( bar_pad < 0 )) && bar_pad=0
         local pad
-        pad=$(printf '%*s' "$bar_pad" "")
+        printf -v pad '%*s' "$bar_pad" ""
         printf '\033[48;5;220m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
       elif (( i == selected )); then
         # Selected — mustard highlight bar
@@ -61,7 +61,7 @@ order_select() {
         local bar_pad=$(( _ord_w - text_len ))
         (( bar_pad < 0 )) && bar_pad=0
         local pad
-        pad=$(printf '%*s' "$bar_pad" "")
+        printf -v pad '%*s' "$bar_pad" ""
         printf '\033[48;5;178m\033[38;5;0m%s%s\033[0m\n' "$text" "$pad"
       elif (( i == grabbed )); then
         printf '    %b%s. %b%s%b\n' "${DIM}" "$num" "${ACCENT_BRIGHT}" "$label" "${RESET}"
@@ -75,12 +75,8 @@ order_select() {
   local total_lines=$((count))
 
   _ord_clear() {
-    local i=0
-    while (( i < total_lines )); do
-      tput cuu1
-      i=$((i + 1))
-    done
-    tput ed
+    (( total_lines > 0 )) && printf '\033[%dA' "$total_lines"
+    printf '\033[J'
   }
 
   _ord_read_key() {
