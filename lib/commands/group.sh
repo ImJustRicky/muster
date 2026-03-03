@@ -782,11 +782,11 @@ _group_cmd_deploy() {
         echo ""
         err "${_pname} deploy failed"
 
-        # Show last few lines
-        if [[ -f "$log_file" ]]; then
+        # Show last few lines in red
+        if [[ -f "$log_file" ]] && [[ -s "$log_file" ]]; then
           echo ""
-          tail -5 "$log_file" | while IFS= read -r _line; do
-            printf '  %b%s%b\n' "${DIM}" "$_line" "${RESET}"
+          tail -10 "$log_file" | while IFS= read -r _line; do
+            printf '  %b%s%b\n' "${RED}" "$_line" "${RESET}"
           done
           echo ""
         fi
@@ -826,12 +826,17 @@ _group_deploy_local() {
   _path=$(jq -r --arg n "$group_name" --argjson i "$index" \
     '.groups[$n].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
 
+  # Pre-flight checks (errors print to screen, not log)
   if [[ -z "$_path" || "$_path" == "null" ]]; then
-    err "Project has no path configured — re-add it to the group"
+    printf 'Project has no path configured — re-add it to the group\n' > "$log_file"
     return 1
   fi
   if [[ ! -d "$_path" ]]; then
-    err "Project directory not found: ${_path}"
+    printf 'Project directory not found: %s\n' "$_path" > "$log_file"
+    return 1
+  fi
+  if [[ ! -f "${_path}/deploy.json" && ! -f "${_path}/muster.json" ]]; then
+    printf 'No deploy.json found in %s — run muster setup first\n' "$_path" > "$log_file"
     return 1
   fi
 
@@ -844,6 +849,13 @@ _group_deploy_remote() {
   local group_name="$1" index="$2" log_file="$3"
   _groups_load_remote "$group_name" "$index"
   _groups_build_ssh_opts
+
+  # Pre-flight: check SSH connectivity
+  # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
+  if ! ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
+    printf 'Cannot reach %s@%s — check SSH config and connectivity\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+    return 1
+  fi
 
   local cmd="muster deploy --quiet"
   if [[ -n "$_GP_PROJECT_DIR" ]]; then
@@ -1541,7 +1553,7 @@ _group_detail_menu() {
       "${DIM}" "$total" "$([ "$total" != "1" ] && echo "s")" "${RESET}"
     echo ""
 
-    # Show projects
+    # Show projects with services
     if (( total > 0 )); then
       local pi=0
       while (( pi < total )); do
@@ -1555,7 +1567,9 @@ _group_detail_menu() {
         if [[ "$_type" == "local" ]]; then
           _icon="●"; _color="${GREEN}"
           _desc="${_desc/#$HOME/~}"
-          [[ ! -d "$(groups_project_desc "$group_name" "$pi")" ]] && _color="${RED}"
+          local _raw_path
+          _raw_path=$(groups_project_desc "$group_name" "$pi")
+          [[ ! -d "$_raw_path" ]] && _color="${RED}"
         else
           _icon="◆"; _color="${ACCENT}"
         fi
@@ -1564,6 +1578,28 @@ _group_detail_menu() {
           "$_color" "$_icon" "${RESET}" \
           "${WHITE}" "$_pname" "${RESET}" \
           "${DIM}" "$_desc" "${RESET}"
+
+        # Show services under each project
+        if [[ "$_type" == "local" && -d "$_raw_path" ]]; then
+          local _cfg=""
+          if [[ -f "${_raw_path}/deploy.json" ]]; then
+            _cfg="${_raw_path}/deploy.json"
+          elif [[ -f "${_raw_path}/muster.json" ]]; then
+            _cfg="${_raw_path}/muster.json"
+          fi
+          if [[ -n "$_cfg" ]] && has_cmd jq; then
+            local _svc_list
+            _svc_list=$(jq -r '.services | keys[]' "$_cfg" 2>/dev/null)
+            if [[ -n "$_svc_list" ]]; then
+              while IFS= read -r _sk; do
+                [[ -z "$_sk" ]] && continue
+                local _sn
+                _sn=$(jq -r --arg k "$_sk" '.services[$k].name // $k' "$_cfg" 2>/dev/null)
+                printf '      %b-%b %b%s%b\n' "${DIM}" "${RESET}" "${DIM}" "$_sn" "${RESET}"
+              done <<< "$_svc_list"
+            fi
+          fi
+        fi
 
         pi=$(( pi + 1 ))
       done
