@@ -318,6 +318,35 @@ _setup_control_cloud() {
     return 1
   fi
 
+  # Verify relay is reachable
+  echo ""
+  start_spinner "Verifying relay..."
+
+  local _relay_ok=false
+  # Convert wss:// to https:// for health check
+  local _health_url="$_relay"
+  _health_url="${_health_url/wss:\/\//https://}"
+  _health_url="${_health_url/ws:\/\//http://}"
+  # Strip trailing path and add /healthz
+  _health_url="${_health_url%/}"
+  _health_url="${_health_url}/healthz"
+
+  if curl -fsSL --connect-timeout 5 --max-time 10 "$_health_url" >/dev/null 2>&1; then
+    _relay_ok=true
+  fi
+  stop_spinner
+
+  if [[ "$_relay_ok" == "true" ]]; then
+    printf '  %b✓%b Relay reachable\n' "${GREEN}" "${RESET}"
+  else
+    printf '  %b!%b Could not reach relay at %s\n' "${YELLOW}" "${RESET}" "$_health_url"
+    echo ""
+    menu_select "Save config anyway?" "Yes — save and fix later" "No — re-enter URL"
+    if [[ "$MENU_RESULT" == *"No"* ]]; then
+      return 1
+    fi
+  fi
+
   # Save to global settings
   global_config_set "cloud.relay" "\"$_relay\""
   global_config_set "cloud.org_id" "\"$_org\""
