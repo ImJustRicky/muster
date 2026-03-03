@@ -43,6 +43,18 @@ _test_contains() {
   fi
 }
 
+_test_not_contains() {
+  TOTAL=$(( TOTAL + 1 ))
+  local desc="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    PASS=$(( PASS + 1 ))
+    printf '  \033[38;5;114m✓\033[0m %s\n' "$desc"
+  else
+    FAIL=$(( FAIL + 1 ))
+    printf '  \033[38;5;203m✗\033[0m %s (should NOT contain: "%s")\n' "$desc" "$needle"
+  fi
+}
+
 _test_file_exists() {
   TOTAL=$(( TOTAL + 1 ))
   local desc="$1" path="$2"
