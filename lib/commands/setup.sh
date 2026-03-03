@@ -1254,6 +1254,45 @@ print(json.dumps(data, indent=2))
     # Register project in global registry
     _registry_touch "$project_path"
 
+    # ── Offer to add project to a fleet group ──
+    if has_cmd jq && [[ -f "$HOME/.muster/groups.json" ]]; then
+      local _grp_count
+      _grp_count=$(jq '.groups | length' "$HOME/.muster/groups.json" 2>/dev/null)
+      if [[ -n "$_grp_count" && "$_grp_count" != "0" ]]; then
+        echo ""
+        printf '%b\n' "  ${DIM}You have fleet groups configured. Add this project to one?${RESET}"
+        echo ""
+        local _grp_options=()
+        local _grp_keys=()
+        local _gi=0
+        while (( _gi < _grp_count )); do
+          local _gk _gd
+          _gk=$(jq -r ".groups | keys[$_gi]" "$HOME/.muster/groups.json")
+          _gd=$(jq -r --arg g "$_gk" '.groups[$g].name // $g' "$HOME/.muster/groups.json")
+          _grp_keys[${#_grp_keys[@]}]="$_gk"
+          _grp_options[${#_grp_options[@]}]="$_gd"
+          _gi=$(( _gi + 1 ))
+        done
+        _grp_options[${#_grp_options[@]}]="Skip"
+        menu_select "Add to fleet" "${_grp_options[@]}"
+        if [[ "$MENU_RESULT" != "Skip" && "$MENU_RESULT" != "__back__" ]]; then
+          # Find matching group key
+          local _gmi=0
+          while (( _gmi < ${#_grp_keys[@]} )); do
+            local _gmd
+            _gmd=$(jq -r --arg g "${_grp_keys[$_gmi]}" '.groups[$g].name // $g' "$HOME/.muster/groups.json")
+            if [[ "$MENU_RESULT" == "$_gmd" ]]; then
+              source "$MUSTER_ROOT/lib/core/groups.sh"
+              groups_add_local "${_grp_keys[$_gmi]}" "$project_path" 2>/dev/null && \
+                ok "Added to fleet: ${MENU_RESULT}" || true
+              break
+            fi
+            _gmi=$(( _gmi + 1 ))
+          done
+        fi
+      fi
+    fi
+
     _SETUP_CUR_PROMPT="false"
     _setup_screen 7 "Setup complete"
     read -rs

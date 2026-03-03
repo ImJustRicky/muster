@@ -198,6 +198,7 @@ _projects_manage() {
 
     local actions=()
     if (( count > 0 )); then
+      actions[${#actions[@]}]="Open in file manager"
       actions[${#actions[@]}]="Remove project"
       actions[${#actions[@]}]="Prune stale entries"
     fi
@@ -206,6 +207,9 @@ _projects_manage() {
     menu_select "Projects" "${actions[@]}"
 
     case "$MENU_RESULT" in
+      "Open in file manager")
+        _projects_open_picker
+        ;;
       "Remove project")
         _projects_remove_picker
         ;;
@@ -266,6 +270,53 @@ _projects_remove_picker() {
         printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
         IFS= read -rsn1 || true
       fi
+      return 0
+    fi
+    mi=$(( mi + 1 ))
+  done
+}
+
+_projects_open_picker() {
+  local count
+  count=$(jq '.projects | length' "$MUSTER_PROJECTS_FILE" 2>/dev/null)
+  [[ -z "$count" || "$count" == "0" ]] && return 0
+
+  local options=()
+  local paths=()
+  local i=0
+  while (( i < count )); do
+    local _name _path
+    _name=$(jq -r ".projects[$i].name" "$MUSTER_PROJECTS_FILE")
+    _path=$(jq -r ".projects[$i].path" "$MUSTER_PROJECTS_FILE")
+    options[${#options[@]}]="${_name} (${_path/#$HOME/~})"
+    paths[${#paths[@]}]="$_path"
+    i=$(( i + 1 ))
+  done
+  options[${#options[@]}]="Back"
+
+  echo ""
+  menu_select "Open which project?" "${options[@]}"
+  [[ "$MENU_RESULT" == "Back" || "$MENU_RESULT" == "__back__" ]] && return 0
+
+  # Find the matching path
+  local mi=0
+  while (( mi < ${#paths[@]} )); do
+    if [[ "$MENU_RESULT" == *"${paths[$mi]/#$HOME/~}"* ]]; then
+      local _target="${paths[$mi]}"
+      echo ""
+      if [[ ! -d "$_target" ]]; then
+        err "Directory not found: ${_target}"
+      elif [[ "$MUSTER_OS" == "macos" ]]; then
+        open "$_target" 2>/dev/null && ok "Opened in Finder"
+      elif [[ "$MUSTER_OS" == "linux" ]] && has_cmd xdg-open; then
+        xdg-open "$_target" 2>/dev/null & ok "Opened file manager"
+      else
+        info "Project directory:"
+        printf '%b\n' "  ${WHITE}${_target}${RESET}"
+      fi
+      echo ""
+      printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+      IFS= read -rsn1 || true
       return 0
     fi
     mi=$(( mi + 1 ))

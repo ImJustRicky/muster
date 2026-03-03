@@ -504,6 +504,7 @@ cmd_dashboard() {
   update_check_start
 
   # Detect fleet membership for current project
+  load_config
   source "$MUSTER_ROOT/lib/core/groups.sh"
   local _fleet_key="" _fleet_display=""
   local _project_abs
