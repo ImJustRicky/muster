@@ -742,6 +742,12 @@ _group_cmd_deploy() {
   local log_dir="$HOME/.muster/logs"
   mkdir -p "$log_dir"
 
+  echo ""
+  printf '  %b%bGroup Deploy%b — %s (%d project%s)\n' \
+    "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" \
+    "$display_name" "$total" "$([ "$total" != "1" ] && echo "s")"
+  echo ""
+
   local i=0
   while (( i < total )); do
     local current=$(( i + 1 ))
@@ -755,13 +761,6 @@ _group_cmd_deploy() {
     local rc=0
 
     while true; do
-      # Redraw header + progress on each attempt (clears previous failure output)
-      clear
-      echo ""
-      printf '  %b%bGroup Deploy%b — %s (%d project%s)\n' \
-        "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" \
-        "$display_name" "$total" "$([ "$total" != "1" ] && echo "s")"
-      echo ""
       progress_bar "$i" "$total" "${_pname}"
       echo ""
 
@@ -992,38 +991,18 @@ _group_cmd_status() {
       '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
     _pname=$(groups_project_name "$group_name" "$i")
 
-    local _icon _color _tag
+    local _icon _color _tag _result=""
 
     if [[ "$_type" == "local" ]]; then
       local _path
       _path=$(jq -r --arg n "$group_name" --argjson idx "$i" \
         '.groups[$n].projects[$idx].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
 
-      if [[ ! -d "$_path" ]]; then
+      if [[ -z "$_path" || "$_path" == "null" || ! -d "$_path" ]]; then
         _icon="●"; _color="${RED}"; _tag="missing"
       else
-        # Run muster status --json in subshell
         local _muster_bin="${MUSTER_ROOT}/bin/muster"
-        local _result=""
         _result=$(cd "$_path" && "$_muster_bin" status --json 2>/dev/null) || true
-
-        if [[ -n "$_result" ]] && printf '%s' "$_result" | jq -e '.services' &>/dev/null; then
-          local _svc_count _healthy
-          _svc_count=$(printf '%s' "$_result" | jq '[.services | to_entries[]] | length' 2>/dev/null)
-          _healthy=$(printf '%s' "$_result" | jq '[.services | to_entries[] | select(.value.status == "healthy")] | length' 2>/dev/null)
-          [[ -z "$_svc_count" ]] && _svc_count=0
-          [[ -z "$_healthy" ]] && _healthy=0
-
-          if (( _healthy == _svc_count && _svc_count > 0 )); then
-            _icon="●"; _color="${GREEN}"; _tag="${_healthy}/${_svc_count} healthy"
-          elif (( _healthy > 0 )); then
-            _icon="●"; _color="${YELLOW}"; _tag="${_healthy}/${_svc_count} healthy"
-          else
-            _icon="●"; _color="${RED}"; _tag="0/${_svc_count} healthy"
-          fi
-        else
-          _icon="●"; _color="${YELLOW}"; _tag="no status"
-        fi
       fi
     else
       # Remote: check SSH then muster status
@@ -1038,33 +1017,39 @@ _group_cmd_status() {
           printf -v _escaped_dir '%q' "$_GP_PROJECT_DIR"
           cmd="cd ${_escaped_dir} && ${cmd}"
         fi
-        local _result=""
         # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
         _result=$(ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" 2>/dev/null) || true
-
-        if [[ -n "$_result" ]] && printf '%s' "$_result" | jq -e '.services' &>/dev/null; then
-          local _svc_count _healthy
-          _svc_count=$(printf '%s' "$_result" | jq '[.services | to_entries[]] | length' 2>/dev/null)
-          _healthy=$(printf '%s' "$_result" | jq '[.services | to_entries[] | select(.value.status == "healthy")] | length' 2>/dev/null)
-          [[ -z "$_svc_count" ]] && _svc_count=0
-          [[ -z "$_healthy" ]] && _healthy=0
-
-          if (( _healthy == _svc_count && _svc_count > 0 )); then
-            _icon="●"; _color="${GREEN}"; _tag="${_healthy}/${_svc_count} healthy"
-          elif (( _healthy > 0 )); then
-            _icon="●"; _color="${YELLOW}"; _tag="${_healthy}/${_svc_count} healthy"
-          else
-            _icon="●"; _color="${RED}"; _tag="0/${_svc_count} healthy"
-          fi
-        else
-          _icon="●"; _color="${GREEN}"; _tag="reachable"
-        fi
       else
         _icon="●"; _color="${RED}"; _tag="unreachable"
       fi
     fi
 
-    # Render status line
+    # Parse service results
+    local _svc_keys="" _svc_count=0 _healthy=0
+    if [[ -n "$_result" ]] && printf '%s' "$_result" | jq -e '.services' &>/dev/null; then
+      _svc_keys=$(printf '%s' "$_result" | jq -r '.services | keys[]' 2>/dev/null)
+      _svc_count=$(printf '%s' "$_result" | jq '[.services | to_entries[]] | length' 2>/dev/null)
+      _healthy=$(printf '%s' "$_result" | jq '[.services | to_entries[] | select(.value.status == "healthy")] | length' 2>/dev/null)
+      [[ -z "$_svc_count" ]] && _svc_count=0
+      [[ -z "$_healthy" ]] && _healthy=0
+
+      if (( _healthy == _svc_count && _svc_count > 0 )); then
+        _icon="●"; _color="${GREEN}"; _tag="${_healthy}/${_svc_count} healthy"
+      elif (( _healthy > 0 )); then
+        _icon="●"; _color="${YELLOW}"; _tag="${_healthy}/${_svc_count} healthy"
+      else
+        _icon="●"; _color="${RED}"; _tag="0/${_svc_count} healthy"
+      fi
+    elif [[ -z "$_tag" ]]; then
+      # No result and no tag set yet (not missing/unreachable)
+      if [[ "$_type" != "local" ]]; then
+        _icon="●"; _color="${GREEN}"; _tag="reachable"
+      else
+        _icon="●"; _color="${YELLOW}"; _tag="no status"
+      fi
+    fi
+
+    # ── Render project header line ──
     local w=$(( TERM_COLS - 4 ))
     (( w > 50 )) && w=50
     (( w < 10 )) && w=10
@@ -1084,6 +1069,38 @@ _group_cmd_status() {
       "${WHITE}" "$_pname" "${RESET}" \
       "${DIM}" "$dots" "${RESET}" \
       "$_color" "$_tag" "${RESET}"
+
+    # ── Render per-service lines ──
+    if [[ -n "$_svc_keys" ]]; then
+      while IFS= read -r _sk; do
+        [[ -z "$_sk" ]] && continue
+        local _s_status _s_name _s_icon _s_color
+        _s_status=$(printf '%s' "$_result" | jq -r --arg k "$_sk" '.services[$k].status // "unknown"' 2>/dev/null)
+        _s_name=$(printf '%s' "$_result" | jq -r --arg k "$_sk" '.services[$k].name // $k' 2>/dev/null)
+
+        case "$_s_status" in
+          healthy)   _s_icon="●"; _s_color="${GREEN}" ;;
+          unhealthy) _s_icon="●"; _s_color="${RED}" ;;
+          *)         _s_icon="○"; _s_color="${GRAY}" ;;
+        esac
+
+        local _s_content_len=$(( 10 + ${#_s_name} + ${#_s_status} ))
+        local _s_dots_len=$(( w - _s_content_len ))
+        (( _s_dots_len < 3 )) && _s_dots_len=3
+        local _s_dots=""
+        local _sdi=0
+        while (( _sdi < _s_dots_len )); do
+          _s_dots="${_s_dots}·"
+          _sdi=$(( _sdi + 1 ))
+        done
+
+        printf '      %b%s%b %b%s%b %b%s%b %b%s%b\n' \
+          "$_s_color" "$_s_icon" "${RESET}" \
+          "${DIM}" "$_s_name" "${RESET}" \
+          "${DIM}" "$_s_dots" "${RESET}" \
+          "$_s_color" "$_s_status" "${RESET}"
+      done <<< "$_svc_keys"
+    fi
 
     i=$(( i + 1 ))
   done
