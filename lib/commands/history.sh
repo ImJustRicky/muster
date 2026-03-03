@@ -14,7 +14,8 @@ _history_log_event() {
   mkdir -p "$log_dir"
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
-  echo "${ts}|${svc}|${action}|${status}|${commit}" >> "${log_dir}/deploy-events.log"
+  printf '{"ts":"%s","service":"%s","action":"%s","status":"%s","commit":"%s"}\n' \
+    "$ts" "$svc" "$action" "$status" "$commit" >> "${log_dir}/deploy-events.log"
 }
 
 # ── History display ──
@@ -91,15 +92,24 @@ cmd_history() {
 
     local commit=""
 
-    if [[ "$line" == *"|"* ]]; then
-      # Format: YYYY-MM-DD HH:MM:SS|service|action|status[|commit]
+    if [[ "$line" == "{"* ]]; then
+      # NDJSON format
+      local _parsed
+      _parsed=$(printf '%s' "$line" | jq -r '[.ts,.service,.action,.status,.commit] | join("|")' 2>/dev/null) || continue
+      [[ -z "$_parsed" ]] && continue
+      ts="${_parsed%%|*}"; local _r="${_parsed#*|}"
+      svc="${_r%%|*}"; _r="${_r#*|}"
+      action="${_r%%|*}"; _r="${_r#*|}"
+      status="${_r%%|*}"
+      commit="${_r#*|}"
+    elif [[ "$line" == *"|"* ]]; then
+      # Legacy pipe-delimited: YYYY-MM-DD HH:MM:SS|service|action|status[|commit]
       ts="${line%%|*}"
       local rest="${line#*|}"
       svc="${rest%%|*}"
       rest="${rest#*|}"
       action="${rest%%|*}"
       rest="${rest#*|}"
-      # status may be followed by |commit
       if [[ "$rest" == *"|"* ]]; then
         status="${rest%%|*}"
         commit="${rest#*|}"

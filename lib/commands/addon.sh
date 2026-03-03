@@ -2,7 +2,6 @@
 # muster/lib/commands/addon.sh — Addon management (fleet-cloud, tui)
 
 ADDON_MANIFEST="${HOME}/.muster/install.json"
-ADDON_BIN_DIR="${HOME}/.muster/bin"
 ADDON_LOCAL_BIN="${HOME}/.local/bin"
 
 # ── Addon registry ──
@@ -255,12 +254,12 @@ addon_add() {
         fi
         ;;
       fleet-cloud)
-        # Check PATH for ~/.muster/bin
+        # Check PATH
         if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$dest"; then
           echo ""
           warn "${dest} is not in your PATH"
           echo "  Add it with:"
-          echo "    export PATH=\"\$HOME/.muster/bin:\$PATH\""
+          echo "    export PATH=\"${dest}:\$PATH\""
         fi
         ;;
     esac

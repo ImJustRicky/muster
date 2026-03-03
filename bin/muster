@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/Muster-dev/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.10"
+MUSTER_VERSION="0.5.11"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -15,6 +15,22 @@ while [[ -L "$_muster_self" ]]; do
 done
 MUSTER_ROOT="$(cd "$(dirname "$_muster_self")/.." && pwd)"
 unset _muster_self _muster_dir
+
+# ── Global flags ──
+MUSTER_QUIET="${MUSTER_QUIET:-false}"
+MUSTER_VERBOSE="${MUSTER_VERBOSE:-false}"
+
+_muster_args=()
+for _arg in "$@"; do
+  case "$_arg" in
+    --quiet|-q) MUSTER_QUIET=true ;;
+    --verbose)  MUSTER_VERBOSE=true ;;
+    *)          _muster_args[${#_muster_args[@]}]="$_arg" ;;
+  esac
+done
+set -- "${_muster_args[@]+"${_muster_args[@]}"}"
+unset _muster_args _arg
+export MUSTER_QUIET MUSTER_VERBOSE
 
 # ── Fast path: no lib loading needed ──
 case "${1:-}" in
@@ -160,6 +176,8 @@ case "${1:-}" in
     echo ""
     echo "Options:"
     echo "  -v, --version   Show version"
+    echo "  -q, --quiet     Suppress info output (errors and warnings still shown)"
+    echo "  --verbose       Show debug output"
     echo "  -h, --help      Show this help"
     ;;
   "")
@@ -173,8 +191,15 @@ case "${1:-}" in
 
     # Launch Go TUI if tui_mode is "go" and muster-tui is installed
     if [[ "$_tui_mode" == "go" ]] && command -v muster-tui >/dev/null 2>&1; then
-      _tui_config="$HOME/.muster-tui/config.json"
+      _tui_config="$HOME/.muster/tui/config.json"
       _tui_has_token=false
+
+      # Migrate old muster-tui config
+      if [[ -f "$HOME/.muster-tui/config.json" && ! -f "$_tui_config" ]]; then
+        mkdir -p "$HOME/.muster/tui"
+        cp "$HOME/.muster-tui/config.json" "$_tui_config"
+        chmod 600 "$_tui_config"
+      fi
 
       # Check if muster-tui already has a token
       if [[ -f "$_tui_config" ]] && has_cmd jq; then

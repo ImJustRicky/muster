@@ -2,7 +2,7 @@
 # muster/lib/core/auth.sh — Token-based authentication for JSON API
 # Tokens are SHA-256 hashed before storage. Raw tokens shown only once at creation.
 
-MUSTER_TOKENS_FILE="$HOME/.muster/tokens.json"
+MUSTER_TOKENS_FILE="$HOME/.muster/tokens/auth.json"
 AUTH_SCOPE=""
 
 # Ensure tokens file exists with secure permissions
@@ -11,8 +11,15 @@ _auth_ensure_file() {
     mkdir -p "$HOME/.muster"
     chmod 700 "$HOME/.muster"
   fi
-  # Enforce directory permissions every time
   chmod 700 "$HOME/.muster"
+  if [[ ! -d "$HOME/.muster/tokens" ]]; then
+    mkdir -p "$HOME/.muster/tokens"
+    chmod 700 "$HOME/.muster/tokens"
+  fi
+  # Migrate from old path
+  if [[ -f "$HOME/.muster/tokens.json" && ! -f "$MUSTER_TOKENS_FILE" ]]; then
+    mv "$HOME/.muster/tokens.json" "$MUSTER_TOKENS_FILE"
+  fi
   if [[ ! -f "$MUSTER_TOKENS_FILE" ]]; then
     printf '{"tokens":[]}\n' > "$MUSTER_TOKENS_FILE"
   fi

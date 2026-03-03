@@ -169,10 +169,9 @@ _history_log_event "redis" "rollback" "ok" ""
 log_file="$TMPDIR/.muster/logs/deploy-events.log"
 _test "event log file exists" test -f "$log_file"
 
-# Check 5-field format
+# Check NDJSON format
 line1=$(head -1 "$log_file")
-field_count=$(echo "$line1" | awk -F'|' '{print NF}')
-_test_eq "log line has 5 pipe-delimited fields" "5" "$field_count"
+_test_contains "log line is NDJSON" '{"ts":' "$line1"
 
 _test_contains "log contains commit SHA" "$new_sha" "$line1"
 

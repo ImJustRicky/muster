@@ -5,12 +5,20 @@ FLEET_CONFIG_FILE=""
 
 # ── Token storage ──
 
-FLEET_TOKENS_FILE="$HOME/.muster/fleet-tokens.json"
+FLEET_TOKENS_FILE="$HOME/.muster/tokens/fleet.json"
 
 _fleet_token_file() {
   if [[ ! -d "$HOME/.muster" ]]; then
     mkdir -p "$HOME/.muster"
     chmod 700 "$HOME/.muster"
+  fi
+  if [[ ! -d "$HOME/.muster/tokens" ]]; then
+    mkdir -p "$HOME/.muster/tokens"
+    chmod 700 "$HOME/.muster/tokens"
+  fi
+  # Migrate from old path
+  if [[ -f "$HOME/.muster/fleet-tokens.json" && ! -f "$FLEET_TOKENS_FILE" ]]; then
+    mv "$HOME/.muster/fleet-tokens.json" "$FLEET_TOKENS_FILE"
   fi
   if [[ ! -f "$FLEET_TOKENS_FILE" ]]; then
     printf '{"tokens":{}}\n' > "$FLEET_TOKENS_FILE"
@@ -72,7 +80,7 @@ fleet_auto_pair() {
 
   # 2. Check if remote already has tokens (can't bootstrap if tokens exist)
   local token_count
-  token_count=$(fleet_exec "$machine" "test -f ~/.muster/tokens.json && jq '.tokens | length' ~/.muster/tokens.json 2>/dev/null || echo 0" 2>/dev/null)
+  token_count=$(fleet_exec "$machine" "{ test -f ~/.muster/tokens/auth.json && jq '.tokens | length' ~/.muster/tokens/auth.json 2>/dev/null; } || { test -f ~/.muster/tokens.json && jq '.tokens | length' ~/.muster/tokens.json 2>/dev/null; } || echo 0" 2>/dev/null)
   token_count=$(printf '%s' "$token_count" | tr -d '[:space:]')
 
   if [[ -n "$token_count" && "$token_count" != "0" ]]; then

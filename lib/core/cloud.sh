@@ -36,12 +36,20 @@ _fleet_cloud_config() {
 
 # ── Cloud token storage (~/.muster/cloud-tokens.json) ──
 
-FLEET_CLOUD_TOKENS_FILE="$HOME/.muster/cloud-tokens.json"
+FLEET_CLOUD_TOKENS_FILE="$HOME/.muster/tokens/cloud.json"
 
 _fleet_cloud_token_file() {
   if [[ ! -d "$HOME/.muster" ]]; then
     mkdir -p "$HOME/.muster"
     chmod 700 "$HOME/.muster"
+  fi
+  if [[ ! -d "$HOME/.muster/tokens" ]]; then
+    mkdir -p "$HOME/.muster/tokens"
+    chmod 700 "$HOME/.muster/tokens"
+  fi
+  # Migrate from old path
+  if [[ -f "$HOME/.muster/cloud-tokens.json" && ! -f "$FLEET_CLOUD_TOKENS_FILE" ]]; then
+    mv "$HOME/.muster/cloud-tokens.json" "$FLEET_CLOUD_TOKENS_FILE"
   fi
   if [[ ! -f "$FLEET_CLOUD_TOKENS_FILE" ]]; then
     printf '{"tokens":{}}\n' > "$FLEET_CLOUD_TOKENS_FILE"

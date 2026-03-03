@@ -5,7 +5,7 @@ source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/updater.sh"
 
-_HEALTH_CACHE_DIR="${HOME}/.muster/.health_cache"
+_HEALTH_CACHE_DIR="${HOME}/.muster/health_cache"
 
 _dashboard_pause() {
   echo ""
@@ -49,6 +49,10 @@ _dashboard_header() {
   project_dir="$(dirname "$CONFIG_FILE")"
 
   # Launch health checks in background (write to persistent cache)
+  # Migrate old cache dir
+  if [[ -d "${HOME}/.muster/.health_cache" && ! -d "$_HEALTH_CACHE_DIR" ]]; then
+    mv "${HOME}/.muster/.health_cache" "$_HEALTH_CACHE_DIR"
+  fi
   mkdir -p "$_HEALTH_CACHE_DIR"
   local _svc_keys=()
 
