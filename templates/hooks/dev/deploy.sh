@@ -27,7 +27,7 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 echo "Starting ${SERVICE}: ${START_CMD}"
-nohup bash -c "${START_CMD}" > "$LOG_FILE" 2>&1 &
+bash -c "${START_CMD}" > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 
 sleep 2

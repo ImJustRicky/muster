@@ -32,6 +32,13 @@ cmd_rollback() {
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
 
+  # Acquire deploy lock (prevents concurrent deploy/rollback)
+  if ! _deploy_lock_acquire "$project_dir"; then
+    _unload_env_file
+    return 1
+  fi
+  trap '_deploy_lock_release "'"$project_dir"'"; _unload_env_file; cleanup_term' EXIT
+
   # If no target, let user pick from services that have rollback hooks
   if [[ -z "$target" ]]; then
     local rollback_services=()
@@ -221,5 +228,7 @@ ${_k8s_env_lines}"
 
   echo ""
 
+  _deploy_lock_release "$project_dir"
+  trap - EXIT
   _unload_env_file
 }

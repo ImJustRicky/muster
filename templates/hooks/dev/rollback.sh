@@ -25,7 +25,7 @@ fi
 
 echo "Restarting ${SERVICE}: ${START_CMD}"
 mkdir -p "$PID_DIR" "$LOG_DIR"
-nohup bash -c "${START_CMD}" > "$LOG_FILE" 2>&1 &
+bash -c "${START_CMD}" > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 
 sleep 2

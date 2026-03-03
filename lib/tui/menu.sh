@@ -110,7 +110,7 @@ menu_select() {
       $'\x1b[B')
         (( selected < count - 1 )) && selected=$((selected + 1))
         ;;
-      $'\x1b')
+      $'\x1b'|'q'|'Q')
         _menu_clear
         tput cnorm
         MENU_RESULT="__back__"

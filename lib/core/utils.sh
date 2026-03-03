@@ -345,6 +345,93 @@ _deploy_lock_file() {
   echo "${project_dir}/.muster/deploy.lock"
 }
 
+_deploy_lock_read() {
+  local lock_file="$1"
+  _LOCK_USER="" _LOCK_PID="" _LOCK_STARTED="" _LOCK_TERMINAL="" _LOCK_SERVICES=""
+  if has_cmd jq; then
+    _LOCK_USER=$(jq -r '.user // "unknown"' "$lock_file" 2>/dev/null)
+    _LOCK_PID=$(jq -r '.pid // ""' "$lock_file" 2>/dev/null)
+    _LOCK_STARTED=$(jq -r '.started // "unknown"' "$lock_file" 2>/dev/null)
+    _LOCK_TERMINAL=$(jq -r '.terminal // "unknown"' "$lock_file" 2>/dev/null)
+    _LOCK_SERVICES=$(jq -r '(.services // []) | join(", ")' "$lock_file" 2>/dev/null)
+  elif has_cmd python3; then
+    _LOCK_USER=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('user','unknown'))" "$lock_file" 2>/dev/null)
+    _LOCK_PID=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('pid',''))" "$lock_file" 2>/dev/null)
+    _LOCK_STARTED=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('started','unknown'))" "$lock_file" 2>/dev/null)
+    _LOCK_TERMINAL=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('terminal','unknown'))" "$lock_file" 2>/dev/null)
+    _LOCK_SERVICES=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(', '.join(d.get('services',[])))" "$lock_file" 2>/dev/null)
+  fi
+}
+
+_deploy_lock_duration() {
+  local started="$1"
+  local start_epoch=0 now_epoch=0
+  if has_cmd gdate; then
+    start_epoch=$(gdate -d "$started" +%s 2>/dev/null || echo 0)
+    now_epoch=$(gdate +%s)
+  elif date -d "2000-01-01" +%s &>/dev/null; then
+    start_epoch=$(date -d "$started" +%s 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+  else
+    # macOS date
+    start_epoch=$(date -jf "%Y-%m-%d %H:%M:%S" "$started" +%s 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+  fi
+  if (( start_epoch == 0 )); then
+    echo "unknown"
+    return
+  fi
+  local diff=$(( now_epoch - start_epoch ))
+  (( diff < 0 )) && diff=0
+  local mins=$(( diff / 60 ))
+  local secs=$(( diff % 60 ))
+  if (( mins > 0 )); then
+    echo "${mins}m ${secs}s"
+  else
+    echo "${secs}s"
+  fi
+}
+
+_deploy_lock_show_tui() {
+  local lock_user="$1" lock_pid="$2" lock_started="$3" lock_terminal="$4" lock_services="$5"
+
+  # Header bar (same pattern as dashboard)
+  local bar_w=$(( TERM_COLS - 2 ))
+  (( bar_w < 20 )) && bar_w=20
+  local bar_text="  Deploy in Progress"
+  local bar_text_len=${#bar_text}
+  local bar_pad_len=$(( bar_w - bar_text_len ))
+  (( bar_pad_len < 1 )) && bar_pad_len=1
+  local bar_pad
+  bar_pad=$(printf '%*s' "$bar_pad_len" "")
+  printf '\n \033[48;5;178m\033[38;5;0m\033[1m%s%s\033[0m\n' "$bar_text" "$bar_pad"
+
+  # Lock details
+  local duration
+  duration=$(_deploy_lock_duration "$lock_started")
+  echo ""
+  printf '%b  %b*%b User:      %s\n' "" "${ACCENT}" "${RESET}" "$lock_user"
+  printf '%b  %b*%b PID:       %s\n' "" "${ACCENT}" "${RESET}" "$lock_pid"
+  printf '%b  %b*%b Started:   %s\n' "" "${ACCENT}" "${RESET}" "$lock_started"
+  printf '%b  %b*%b Duration:  %s\n' "" "${ACCENT}" "${RESET}" "$duration"
+  if [[ -n "$lock_services" ]]; then
+    printf '%b  %b*%b Services:  %s\n' "" "${ACCENT}" "${RESET}" "$lock_services"
+  fi
+  if [[ "$lock_terminal" != "unknown" && -n "$lock_terminal" ]]; then
+    printf '%b  %b*%b Terminal:  %s\n' "" "${ACCENT}" "${RESET}" "$lock_terminal"
+  fi
+
+  # Separator
+  echo ""
+  local rule_w=$(( TERM_COLS - 4 ))
+  (( rule_w > 50 )) && rule_w=50
+  (( rule_w < 10 )) && rule_w=10
+  local rule
+  rule=$(printf '%*s' "$rule_w" "" | sed 's/ /─/g')
+  printf '  %b%s%b\n' "${GRAY}" "$rule" "${RESET}"
+  printf '  %bDeploy is running in another session.%b\n' "${DIM}" "${RESET}"
+}
+
 _deploy_lock_acquire() {
   local project_dir="$1"
   shift
@@ -353,16 +440,10 @@ _deploy_lock_acquire() {
 
   if [[ -f "$lock_file" ]]; then
     # Read existing lock
-    local lock_user="" lock_pid="" lock_started=""
-    if has_cmd jq; then
-      lock_user=$(jq -r '.user // "unknown"' "$lock_file" 2>/dev/null)
-      lock_pid=$(jq -r '.pid // ""' "$lock_file" 2>/dev/null)
-      lock_started=$(jq -r '.started // "unknown"' "$lock_file" 2>/dev/null)
-    elif has_cmd python3; then
-      lock_user=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('user','unknown'))" "$lock_file" 2>/dev/null)
-      lock_pid=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('pid',''))" "$lock_file" 2>/dev/null)
-      lock_started=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('started','unknown'))" "$lock_file" 2>/dev/null)
-    fi
+    _deploy_lock_read "$lock_file"
+    local lock_user="$_LOCK_USER" lock_pid="$_LOCK_PID"
+    local lock_started="$_LOCK_STARTED" lock_terminal="$_LOCK_TERMINAL"
+    local lock_services="$_LOCK_SERVICES"
 
     # Check if PID is still alive
     if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
@@ -370,25 +451,34 @@ _deploy_lock_acquire() {
       warn "Removing stale deploy lock (PID ${lock_pid} is dead)"
       rm -f "$lock_file"
     else
-      # Active lock — warn and offer options
-      echo ""
-      warn "Deploy locked by ${lock_user} (PID ${lock_pid}) since ${lock_started}"
-      echo ""
+      # Active lock — show enhanced TUI and offer options
       if [[ -t 0 ]]; then
-        menu_select "Deploy is locked" "Wait and retry" "Override lock" "Abort"
+        _deploy_lock_show_tui "$lock_user" "$lock_pid" "$lock_started" "$lock_terminal" "$lock_services"
+        menu_select "" "Wait" "Override" "Abort"
         case "$MENU_RESULT" in
-          "Wait and retry")
-            echo ""
-            info "Waiting for lock to be released..."
+          "Wait")
+            # Live spinner with updating duration
+            local _lock_frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+            local _lock_fi=0
+            tput civis 2>/dev/null || true
             while [[ -f "$lock_file" ]]; do
               if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
                 rm -f "$lock_file"
                 break
               fi
-              sleep 3
+              local _wait_dur
+              _wait_dur=$(_deploy_lock_duration "$lock_started")
+              printf '\r  %b%s%b %bWaiting for deploy to finish... (%s)%b  ' \
+                "${ACCENT}" "${_lock_frames[$_lock_fi]}" "${RESET}" \
+                "${DIM}" "$_wait_dur" "${RESET}"
+              _lock_fi=$(( (_lock_fi + 1) % ${#_lock_frames[@]} ))
+              sleep 1
             done
+            printf '\r\033[K'
+            tput cnorm 2>/dev/null || true
+            ok "Lock released, proceeding"
             ;;
-          "Override lock")
+          "Override")
             warn "Overriding deploy lock"
             rm -f "$lock_file"
             ;;
@@ -412,8 +502,10 @@ _deploy_lock_acquire() {
     _svcs="${_svcs}\"${!_i}\""
     _i=$((_i + 1))
   done
+  local _tty_name
+  _tty_name=$(tty 2>/dev/null || echo "unknown")
   cat > "$lock_file" <<EOF
-{"user":"$(whoami)","pid":$$,"started":"$(date '+%Y-%m-%d %H:%M:%S')","services":[${_svcs}]}
+{"user":"$(whoami)","pid":$$,"started":"$(date '+%Y-%m-%d %H:%M:%S')","terminal":"${_tty_name}","services":[${_svcs}]}
 EOF
   return 0
 }

@@ -13,6 +13,53 @@ source "$MUSTER_ROOT/lib/core/just_runner.sh"
 source "$MUSTER_ROOT/lib/skills/manager.sh"
 source "$MUSTER_ROOT/lib/commands/history.sh"
 
+# Verify a deploy hook actually did something meaningful
+# Args: log_file, service_name, start_time [json]
+# Pass "json" as 4th arg to emit NDJSON warnings instead of TUI output
+# Returns 0 always (warnings only, never blocks deploy)
+_deploy_verify() {
+  local log_file="$1" svc="$2" start_time="$3"
+  local json_mode="${4:-}"
+  local warnings=0
+
+  _deploy_verify_warn() {
+    local msg="$1"
+    if [[ "$json_mode" == "json" ]]; then
+      local _escaped
+      _escaped=$(printf '%s' "$msg" | sed 's/\\/\\\\/g;s/"/\\"/g')
+      printf '{"event":"verify_warning","service":"%s","message":"%s"}\n' "$svc" "$_escaped"
+    else
+      printf '%b\n' "  ${YELLOW}!${RESET} ${svc}: ${msg}"
+    fi
+  }
+
+  # Check 1: empty log
+  if [[ ! -s "$log_file" ]]; then
+    _deploy_verify_warn "deploy produced no output"
+    warnings=$((warnings + 1))
+  fi
+
+  # Check 2: suspiciously fast
+  local end_time
+  end_time=$(date +%s)
+  local duration=$(( end_time - start_time ))
+  if (( duration < 1 )); then
+    _deploy_verify_warn "deploy completed in <1s — verify it ran"
+    warnings=$((warnings + 1))
+  fi
+
+  # Check 3: success markers in log output
+  if [[ -s "$log_file" ]]; then
+    if ! grep -qiE '(deployed|started|restarted|applied|pushed|built|running|complete|success|ready)' "$log_file" 2>/dev/null; then
+      _deploy_verify_warn "no success markers in deploy output"
+      warnings=$((warnings + 1))
+    fi
+  fi
+
+  unset -f _deploy_verify_warn
+  return 0
+}
+
 cmd_deploy() {
   local dry_run=false
   local _json_mode=false
@@ -246,6 +293,8 @@ cmd_deploy() {
       fi
 
       local _json_hook_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
+      local _json_deploy_start_time
+      _json_deploy_start_time=$(date +%s)
       {
         if remote_is_enabled "$svc"; then
           _remote_load_config "$svc"
@@ -272,6 +321,7 @@ ${_k8s_env_lines}"
 
       if (( _deploy_rc == 0 )); then
         printf '{"event":"done","service":"%s","status":"success"}\n' "$svc"
+        _deploy_verify "$log_file" "$svc" "$_json_deploy_start_time" "json"
         _history_log_event "$svc" "deploy" "ok" ""
         export MUSTER_DEPLOY_STATUS="success"
         run_skill_hooks "post-deploy" "$svc" 2>/dev/null
@@ -526,6 +576,8 @@ ${_k8s_env_lines}"
         fi
 
         local _hook_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
+        local _deploy_start_time
+        _deploy_start_time=$(date +%s)
 
         if remote_is_enabled "$svc"; then
           # ── Remote deploy via SSH ──
@@ -560,6 +612,7 @@ ${_k8s_env_lines}"
 
         if (( rc == 0 )); then
           ok "${name} deployed"
+          _deploy_verify "$log_file" "$svc" "$_deploy_start_time"
 
           # Capture SHA after hook (hook may have done git pull)
           if [[ "$_git_in_repo" == "true" ]]; then

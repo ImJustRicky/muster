@@ -177,16 +177,19 @@ skill_add() {
     if [[ -d "${SKILLS_DIR}/${skill_name}" ]]; then
       warn "Skill '${skill_name}' already installed. Updating..."
       # Preserve user config and state across update
-      local _tmp_preserve
-      _tmp_preserve=$(mktemp -d)
+      local _tmp_preserve=""
+      _tmp_preserve=$(mktemp -d) || { err "Failed to create temp dir"; return 1; }
       [[ -f "${SKILLS_DIR}/${skill_name}/config.env" ]] && cp "${SKILLS_DIR}/${skill_name}/config.env" "$_tmp_preserve/"
       [[ -f "${SKILLS_DIR}/${skill_name}/.enabled" ]] && touch "$_tmp_preserve/.enabled"
-      rm -rf "${SKILLS_DIR}/${skill_name}"
-      cp -r "$source" "${SKILLS_DIR}/${skill_name}"
+      if ! rm -rf "${SKILLS_DIR}/${skill_name}" || ! cp -r "$source" "${SKILLS_DIR}/${skill_name}"; then
+        err "Failed to update skill '${skill_name}'"
+        [[ -n "$_tmp_preserve" && -d "$_tmp_preserve" ]] && rm -rf "$_tmp_preserve"
+        return 1
+      fi
       # Restore preserved files
       [[ -f "$_tmp_preserve/config.env" ]] && cp "$_tmp_preserve/config.env" "${SKILLS_DIR}/${skill_name}/"
       [[ -f "$_tmp_preserve/.enabled" ]] && touch "${SKILLS_DIR}/${skill_name}/.enabled"
-      rm -rf "$_tmp_preserve"
+      [[ -n "$_tmp_preserve" && -d "$_tmp_preserve" ]] && rm -rf "$_tmp_preserve"
     else
       cp -r "$source" "${SKILLS_DIR}/${skill_name}"
     fi
@@ -675,15 +678,15 @@ skill_marketplace() {
     return 1
   fi
 
-  local tmp_file
-  tmp_file=$(mktemp)
+  local tmp_file=""
+  tmp_file=$(mktemp) || { err "Failed to create temp file"; return 1; }
 
   start_spinner "Fetching skill registry..."
   if ! curl -fsSL "$SKILL_REGISTRY_URL" -o "$tmp_file" 2>/dev/null \
       && ! curl -fsSL "$SKILL_REGISTRY_URL_OLD" -o "$tmp_file" 2>/dev/null; then
     stop_spinner
     err "Failed to fetch skill registry"
-    rm -f "$tmp_file"
+    [[ -n "$tmp_file" ]] && rm -f "$tmp_file"
     return 1
   fi
   stop_spinner
@@ -704,7 +707,7 @@ skill_marketplace() {
     _marketplace_browse "$tmp_file"
   fi
 
-  rm -f "$tmp_file"
+  [[ -n "$tmp_file" ]] && rm -f "$tmp_file"
 }
 
 _marketplace_search() {
@@ -858,12 +861,17 @@ _marketplace_browse() {
 
 skill_marketplace_install() {
   local name="$1"
-  local tmp_dir
-  tmp_dir=$(mktemp -d)
+  local tmp_dir=""
+  tmp_dir=$(mktemp -d) || { err "Failed to create temp dir"; return 1; }
 
   start_spinner "Installing ${name}..."
   if ! git clone --quiet --depth 1 https://github.com/Muster-dev/muster-skills.git "$tmp_dir" 2>/dev/null; then
-    git clone --quiet --depth 1 https://github.com/ImJustRicky/muster-skills.git "$tmp_dir" 2>/dev/null
+    if ! git clone --quiet --depth 1 https://github.com/ImJustRicky/muster-skills.git "$tmp_dir" 2>/dev/null; then
+      stop_spinner
+      err "Failed to clone skill registry"
+      [[ -n "$tmp_dir" && -d "$tmp_dir" ]] && rm -rf "$tmp_dir"
+      return 1
+    fi
   fi
   stop_spinner
 
@@ -878,7 +886,7 @@ skill_marketplace_install() {
     err "Skill '${name}' not found in registry"
   fi
 
-  rm -rf "$tmp_dir"
+  [[ -n "$tmp_dir" && -d "$tmp_dir" ]] && rm -rf "$tmp_dir"
 }
 
 # Enable a skill to auto-run on deploy/rollback hooks

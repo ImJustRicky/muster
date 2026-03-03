@@ -85,10 +85,176 @@ with open(sys.argv[1]) as f:
   fi
 }
 
+# ── Config validation ──
+
+_CONFIG_VALIDATED=""
+
+# Validate deploy.json / muster.json structure and values.
+# Errors (missing required fields) return 1; warnings print but continue.
+# Only runs when jq is available — skips gracefully without it.
+_config_validate() {
+  # Skip if already validated for this config file
+  [[ "$_CONFIG_VALIDATED" == "$CONFIG_FILE" ]] && return 0
+
+  # Require jq for validation
+  has_cmd jq || return 0
+
+  local _v_errors=0
+  local _v_val
+
+  # ── Required fields ──
+
+  _v_val=$(jq -r '.project // empty' "$CONFIG_FILE" 2>/dev/null)
+  if [[ -z "$_v_val" ]]; then
+    printf '%b\n' "  ${RED}x${RESET} Config error: missing \"project\" field in $(basename "$CONFIG_FILE")" >&2
+    _v_errors=$(( _v_errors + 1 ))
+  fi
+
+  _v_val=$(jq -r '.services | type' "$CONFIG_FILE" 2>/dev/null)
+  if [[ "$_v_val" != "object" ]]; then
+    printf '%b\n' "  ${RED}x${RESET} Config error: \"services\" must be an object in $(basename "$CONFIG_FILE")" >&2
+    _v_errors=$(( _v_errors + 1 ))
+  fi
+
+  _v_val=$(jq -r '.deploy_order | type' "$CONFIG_FILE" 2>/dev/null)
+  if [[ "$_v_val" != "array" ]]; then
+    printf '%b\n' "  ${RED}x${RESET} Config error: \"deploy_order\" must be an array in $(basename "$CONFIG_FILE")" >&2
+    _v_errors=$(( _v_errors + 1 ))
+  fi
+
+  # Bail early if basic structure is broken — service checks would fail
+  if (( _v_errors > 0 )); then
+    return 1
+  fi
+
+  # ── deploy_order <-> services cross-check ──
+
+  local _v_order_item
+  while IFS= read -r _v_order_item; do
+    [[ -z "$_v_order_item" ]] && continue
+    _v_val=$(jq -r --arg s "$_v_order_item" '.services[$s] // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -z "$_v_val" ]]; then
+      printf '%b\n' "  ${RED}x${RESET} Config error: service \"${_v_order_item}\" in deploy_order not found in services" >&2
+      _v_errors=$(( _v_errors + 1 ))
+    fi
+  done < <(jq -r '.deploy_order[]' "$CONFIG_FILE" 2>/dev/null)
+
+  local _v_svc_key
+  while IFS= read -r _v_svc_key; do
+    [[ -z "$_v_svc_key" ]] && continue
+    _v_val=$(jq -r --arg s "$_v_svc_key" '.deploy_order | index($s)' "$CONFIG_FILE" 2>/dev/null)
+    if [[ "$_v_val" == "null" ]]; then
+      printf '%b\n' "  ${YELLOW}!${RESET} Config warning: service \"${_v_svc_key}\" not in deploy_order" >&2
+    fi
+  done < <(jq -r '.services | keys[]' "$CONFIG_FILE" 2>/dev/null)
+
+  # ── Per-service field validation ──
+
+  local _v_health_type _v_health_port _v_health_timeout
+  local _v_cred_mode
+  local _v_k8s_deploy _v_k8s_ns
+  local _v_remote_enabled _v_remote_host _v_remote_user
+
+  while IFS= read -r _v_svc_key; do
+    [[ -z "$_v_svc_key" ]] && continue
+
+    # health.type
+    _v_health_type=$(jq -r --arg s "$_v_svc_key" '.services[$s].health.type // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$_v_health_type" ]]; then
+      case "$_v_health_type" in
+        http|tcp|command) ;;
+        *)
+          printf '%b\n' "  ${RED}x${RESET} Config error: invalid health type \"${_v_health_type}\" for \"${_v_svc_key}\" (must be http, tcp, or command)" >&2
+          _v_errors=$(( _v_errors + 1 ))
+          ;;
+      esac
+    fi
+
+    # health.port
+    _v_health_port=$(jq -r --arg s "$_v_svc_key" '.services[$s].health.port // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$_v_health_port" ]]; then
+      if ! [[ "$_v_health_port" =~ ^[0-9]+$ ]] || (( _v_health_port <= 0 )); then
+        printf '%b\n' "  ${RED}x${RESET} Config error: health port must be a positive integer for \"${_v_svc_key}\" (got \"${_v_health_port}\")" >&2
+        _v_errors=$(( _v_errors + 1 ))
+      fi
+    fi
+
+    # health.timeout
+    _v_health_timeout=$(jq -r --arg s "$_v_svc_key" '.services[$s].health.timeout // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$_v_health_timeout" ]]; then
+      if ! [[ "$_v_health_timeout" =~ ^[0-9]+$ ]] || (( _v_health_timeout <= 0 )); then
+        printf '%b\n' "  ${YELLOW}!${RESET} Config warning: health timeout ${_v_health_timeout} is too low for \"${_v_svc_key}\" (minimum 1)" >&2
+      fi
+    fi
+
+    # credentials.mode
+    _v_cred_mode=$(jq -r --arg s "$_v_svc_key" '.services[$s].credentials.mode // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$_v_cred_mode" ]]; then
+      case "$_v_cred_mode" in
+        off|save|session|always) ;;
+        *)
+          printf '%b\n' "  ${RED}x${RESET} Config error: invalid credentials mode \"${_v_cred_mode}\" for \"${_v_svc_key}\" (must be off, save, session, or always)" >&2
+          _v_errors=$(( _v_errors + 1 ))
+          ;;
+      esac
+    fi
+
+    # k8s.deployment
+    _v_k8s_deploy=$(jq -r --arg s "$_v_svc_key" '.services[$s].k8s.deployment // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ -n "$_v_k8s_deploy" ]]; then
+      # present but empty string after jq resolves — already caught by // empty
+      :
+    fi
+    # Check if k8s object exists but deployment is empty
+    _v_val=$(jq -r --arg s "$_v_svc_key" '.services[$s].k8s | has("deployment")' "$CONFIG_FILE" 2>/dev/null)
+    if [[ "$_v_val" == "true" && -z "$_v_k8s_deploy" ]]; then
+      printf '%b\n' "  ${RED}x${RESET} Config error: k8s.deployment is empty for \"${_v_svc_key}\"" >&2
+      _v_errors=$(( _v_errors + 1 ))
+    fi
+
+    # k8s.namespace
+    _v_k8s_ns=$(jq -r --arg s "$_v_svc_key" '.services[$s].k8s.namespace // empty' "$CONFIG_FILE" 2>/dev/null)
+    _v_val=$(jq -r --arg s "$_v_svc_key" '.services[$s].k8s | has("namespace")' "$CONFIG_FILE" 2>/dev/null)
+    if [[ "$_v_val" == "true" && -z "$_v_k8s_ns" ]]; then
+      printf '%b\n' "  ${RED}x${RESET} Config error: k8s.namespace is empty for \"${_v_svc_key}\"" >&2
+      _v_errors=$(( _v_errors + 1 ))
+    fi
+
+    # remote.host + remote.user (required when remote.enabled is true)
+    _v_remote_enabled=$(jq -r --arg s "$_v_svc_key" '.services[$s].remote.enabled // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [[ "$_v_remote_enabled" == "true" ]]; then
+      _v_remote_host=$(jq -r --arg s "$_v_svc_key" '.services[$s].remote.host // empty' "$CONFIG_FILE" 2>/dev/null)
+      if [[ -z "$_v_remote_host" ]]; then
+        printf '%b\n' "  ${RED}x${RESET} Config error: remote.host is required when remote is enabled for \"${_v_svc_key}\"" >&2
+        _v_errors=$(( _v_errors + 1 ))
+      fi
+      _v_remote_user=$(jq -r --arg s "$_v_svc_key" '.services[$s].remote.user // empty' "$CONFIG_FILE" 2>/dev/null)
+      if [[ -z "$_v_remote_user" ]]; then
+        printf '%b\n' "  ${RED}x${RESET} Config error: remote.user is required when remote is enabled for \"${_v_svc_key}\"" >&2
+        _v_errors=$(( _v_errors + 1 ))
+      fi
+    fi
+
+  done < <(jq -r '.services | keys[]' "$CONFIG_FILE" 2>/dev/null)
+
+  if (( _v_errors > 0 )); then
+    return 1
+  fi
+
+  # Mark as validated for this config file
+  _CONFIG_VALIDATED="$CONFIG_FILE"
+  return 0
+}
+
 # Load config from muster.json (or deploy.json fallback)
 load_config() {
   CONFIG_FILE=$(find_config) || {
     err "No muster.json found. Run 'muster setup' first."
+    exit 1
+  }
+  # Validate config structure on first load
+  _config_validate || {
+    err "Config validation failed. Fix the errors above and try again."
     exit 1
   }
   # Auto-register project in the global registry

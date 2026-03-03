@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # muster/lib/commands/cleanup.sh — Cleanup stuck processes
 
+source "$MUSTER_ROOT/lib/tui/menu.sh"
 source "$MUSTER_ROOT/lib/tui/spinner.sh"
 source "$MUSTER_ROOT/lib/core/just_runner.sh"
 
@@ -23,6 +24,13 @@ cmd_cleanup() {
 
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
+
+  # Acquire deploy lock (prevents concurrent deploy/rollback/cleanup)
+  if ! _deploy_lock_acquire "$project_dir"; then
+    return 1
+  fi
+  trap '_deploy_lock_release "'"$project_dir"'"; cleanup_term' EXIT
+
   local services
   services=$(config_services)
 
@@ -76,4 +84,7 @@ cmd_cleanup() {
   fi
 
   echo ""
+
+  _deploy_lock_release "$project_dir"
+  trap - EXIT
 }

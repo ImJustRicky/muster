@@ -38,7 +38,7 @@ checklist_select() {
   _cl_draw_header() {
     echo ""
     printf '  %b%s%b\n' "${BOLD}" "$title" "${RESET}"
-    printf '  %b↑/↓ navigate  ␣ toggle  ⏎ confirm  esc back%b\n' "${DIM}" "${RESET}"
+    printf '  %b↑/↓ navigate  ␣ toggle  ⏎ confirm  q back%b\n' "${DIM}" "${RESET}"
   }
 
   # Lines to clear = count + 1 (help text line merged into header area)
@@ -128,7 +128,7 @@ checklist_select() {
           checked[$selected]=1
         fi
         ;;
-      $'\x1b')
+      $'\x1b'|'q'|'Q')
         _cl_clear
         tput cnorm
         CHECKLIST_RESULT="__back__"
