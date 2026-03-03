@@ -122,9 +122,17 @@ cmd_doctor() {
 
     if [[ "$_json_mode" == "false" && "$MUSTER_MINIMAL" != "true" ]]; then
       start_spinner "$_spinner_msg"
-      # Run checks (they print directly)
-      local _cat_output
-      _cat_output=$("$_cat_fn" 2>&1)
+      # Run checks with master timeout (prevents any single category from hanging)
+      local _cat_output="" _cat_tmp="/tmp/.muster_cat_$$"
+      rm -f "$_cat_tmp"
+      ( "$_cat_fn" > "$_cat_tmp" 2>&1 ) &
+      local _cat_pid=$!
+      ( sleep 30 && kill "$_cat_pid" 2>/dev/null ) &
+      local _cat_kill_pid=$!
+      wait "$_cat_pid" 2>/dev/null || true
+      kill "$_cat_kill_pid" 2>/dev/null; wait "$_cat_kill_pid" 2>/dev/null || true
+      _cat_output=$(cat "$_cat_tmp" 2>/dev/null)
+      rm -f "$_cat_tmp"
       stop_spinner
       printf '  %b%b%s%b\n' "${BOLD}" "${WHITE}" "$_cat_name" "${RESET}"
       [[ -n "$_cat_output" ]] && printf '%s\n' "$_cat_output"

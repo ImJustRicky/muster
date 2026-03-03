@@ -780,7 +780,7 @@ _marketplace_search() {
 
     checklist_select --none "Select skills to install or uninstall" "${items[@]}"
 
-    if [[ -n "$CHECKLIST_RESULT" ]]; then
+    if [[ -n "$CHECKLIST_RESULT" && "$CHECKLIST_RESULT" != "__back__" ]]; then
       local IFS=$'\n'
       local selected
       for selected in $CHECKLIST_RESULT; do
@@ -837,7 +837,7 @@ _marketplace_browse() {
 
   checklist_select --none "Select skills to install or uninstall" "${items[@]}"
 
-  if [[ -n "$CHECKLIST_RESULT" ]]; then
+  if [[ -n "$CHECKLIST_RESULT" && "$CHECKLIST_RESULT" != "__back__" ]]; then
     local IFS=$'\n'
     local selected
     for selected in $CHECKLIST_RESULT; do
