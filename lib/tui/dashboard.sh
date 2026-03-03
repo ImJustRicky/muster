@@ -480,6 +480,9 @@ _dashboard_home() {
           _gsi=$(( _gsi + 1 ))
         done
         ;;
+      __back__)
+        # ESC pressed — no-op on home screen, just redraw
+        ;;
       *)
         # Must be a project selection — find matching ungrouped name
         local _si=0

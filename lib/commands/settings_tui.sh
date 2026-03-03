@@ -48,7 +48,7 @@ _toggle_select() {
   _tog_draw_header() {
     echo ""
     printf '  %b%s%b\n' "${BOLD}" "$title" "${RESET}"
-    printf '  %b↑/↓ navigate  ⏎ cycle  q back%b\n' "${DIM}" "${RESET}"
+    printf '  %b↑/↓ navigate  ⏎ cycle  q/esc back%b\n' "${DIM}" "${RESET}"
   }
 
   _tog_draw() {
@@ -142,7 +142,7 @@ _toggle_select() {
       $'\x1b[B')
         (( selected < count )) && selected=$((selected + 1))
         ;;
-      'q'|'Q')
+      'q'|'Q'|$'\x1b')
         _tog_clear
         tput cnorm
         return 0
@@ -380,7 +380,7 @@ _settings_download_tui() {
         IFS= read -rsn1 || true
         return 0
         ;;
-      Back)
+      Back|__back__)
         return 0
         ;;
     esac
@@ -522,7 +522,7 @@ _settings_project() {
       "Open config")
         _settings_open_config
         ;;
-      Back)
+      Back|__back__)
         return 0
         ;;
     esac
@@ -552,7 +552,7 @@ _settings_services() {
   echo ""
   menu_select "Which service?" "${svc_names[@]}"
 
-  [[ "$MENU_RESULT" == "Back" ]] && return 0
+  [[ "$MENU_RESULT" == "Back" || "$MENU_RESULT" == "__back__" ]] && return 0
 
   # Find the service key from the selected name
   local target_svc=""

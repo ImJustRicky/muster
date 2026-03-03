@@ -29,9 +29,9 @@ order_select() {
     echo ""
     printf '  %b%s%b\n' "${BOLD}" "$title" "${RESET}"
     if (( grabbed >= 0 )); then
-      printf '  %b↑/↓ move item  ⏎ drop  q done%b\n' "${DIM}" "${RESET}"
+      printf '  %b↑/↓ move item  ⏎ drop  q/esc done%b\n' "${DIM}" "${RESET}"
     else
-      printf '  %b↑/↓ navigate  ⏎ grab  q done%b\n' "${DIM}" "${RESET}"
+      printf '  %b↑/↓ navigate  ⏎ grab  q/esc done%b\n' "${DIM}" "${RESET}"
     fi
   }
 
@@ -134,7 +134,7 @@ order_select() {
           selected=$((selected + 1))
         fi
         ;;
-      'q'|'Q')
+      'q'|'Q'|$'\x1b')
         _ord_clear
         tput cnorm
         local i=0

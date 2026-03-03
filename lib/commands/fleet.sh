@@ -165,7 +165,7 @@ _fleet_cmd_manager() {
         printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
         IFS= read -rsn1 || true
         ;;
-      "Back")
+      "Back"|__back__)
         return 0
         ;;
     esac

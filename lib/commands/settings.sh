@@ -249,7 +249,7 @@ cmd_settings() {
       "Projects")
         _projects_manage
         ;;
-      Back)
+      Back|__back__)
         return 0
         ;;
     esac
