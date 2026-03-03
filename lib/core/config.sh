@@ -15,7 +15,8 @@ _GLOBAL_DEFAULTS='{
   "default_stack": "bare",
   "default_health_timeout": 10,
   "scanner_exclude": [],
-  "update_check": "on"
+  "update_check": "on",
+  "cloud": {}
 }'
 
 # Ensure global config exists with defaults

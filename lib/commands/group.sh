@@ -172,6 +172,9 @@ _group_cmd_help() {
   echo "  --port, -p    SSH port for remote projects (default: 22)"
   echo "  --key, -k     SSH identity file for remote projects"
   echo "  --path        Project directory on remote machine"
+  echo "  --cloud       Use cloud tunnel transport (instead of SSH)"
+  echo "  --auth        Auth method: key, password, agent"
+  echo "  --auth-mode   Password mode: save, session, always"
   echo "  --dry-run     Preview deploy plan without executing"
   echo "  --json        Output as JSON"
   echo "  -h, --help    Show this help"
@@ -180,6 +183,8 @@ _group_cmd_help() {
   echo "  muster group create production"
   echo "  muster group add production /path/to/api"
   echo "  muster group add production deploy@10.0.1.5 --path /opt/frontend"
+  echo "  muster group add production deploy@10.0.1.5 --auth password --auth-mode session"
+  echo "  muster group add production agent-prod-east --cloud --path /opt/app"
   echo "  muster group deploy production"
   echo "  muster group status production"
 }
@@ -341,15 +346,27 @@ _group_cmd_add() {
   fi
 
   local target="" port="22" key="" remote_path=""
+  local _add_cloud="false" _add_auth="" _add_auth_mode=""
 
   # Parse remaining args
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --port|-p) port="$2"; shift 2 ;;
-      --key|-k)  key="$2"; shift 2 ;;
-      --path)    remote_path="$2"; shift 2 ;;
+      --port|-p)     port="$2"; shift 2 ;;
+      --key|-k)      key="$2"; shift 2 ;;
+      --path)        remote_path="$2"; shift 2 ;;
+      --cloud)       _add_cloud="true"; shift ;;
+      --auth)        _add_auth="$2"; shift 2 ;;
+      --auth-mode)   _add_auth_mode="$2"; shift 2 ;;
       --help|-h)
-        echo "Usage: muster group add <group> [path|user@host] [--port N] [--key file] [--path dir]"
+        echo "Usage: muster group add <group> [path|user@host] [options]"
+        echo ""
+        echo "Options:"
+        echo "  --port, -p N       SSH port (default: 22)"
+        echo "  --key, -k FILE     SSH identity file"
+        echo "  --path DIR         Project directory on remote"
+        echo "  --cloud            Use cloud tunnel transport"
+        echo "  --auth METHOD      Auth method: key, password, agent"
+        echo "  --auth-mode MODE   Password mode: save, session, always"
         return 0
         ;;
       --*) err "Unknown flag: $1"; return 1 ;;
@@ -396,14 +413,42 @@ _group_cmd_add() {
         ;;
       "Add remote project")
         echo ""
-        printf '  user@host: '
-        IFS= read -r target
-        [[ -z "$target" ]] && return 0
-        printf '  Port [22]: '
-        IFS= read -r port
-        [[ -z "$port" ]] && port="22"
-        printf '  SSH key (optional): '
-        IFS= read -r key
+        printf '  Transport (ssh/cloud) [ssh]: '
+        local _transport_input; IFS= read -r _transport_input
+        case "$_transport_input" in
+          cloud) _add_cloud="true" ;;
+          *) _add_cloud="false" ;;
+        esac
+        if [[ "$_add_cloud" == "true" ]]; then
+          printf '  Cloud agent name: '
+          IFS= read -r target
+          [[ -z "$target" ]] && return 0
+        else
+          printf '  user@host: '
+          IFS= read -r target
+          [[ -z "$target" ]] && return 0
+          printf '  Port [22]: '
+          IFS= read -r port
+          [[ -z "$port" ]] && port="22"
+          printf '  Auth method (key/password/agent) [key]: '
+          local _auth_input; IFS= read -r _auth_input
+          case "$_auth_input" in
+            password) _add_auth="password"
+              printf '  Password mode (save/session/always) [session]: '
+              local _mode_input; IFS= read -r _mode_input
+              case "$_mode_input" in
+                save|always) _add_auth_mode="$_mode_input" ;;
+                *) _add_auth_mode="session" ;;
+              esac
+              ;;
+            agent) _add_auth="agent" ;;
+            *)
+              _add_auth="key"
+              printf '  SSH key (optional): '
+              IFS= read -r key
+              ;;
+          esac
+        fi
         printf '  Project dir on remote: '
         IFS= read -r remote_path
         ;;
@@ -427,7 +472,31 @@ _group_cmd_add() {
   fi
 
   # Detect local vs remote
-  if [[ "$target" == *"@"* ]]; then
+  if [[ "$_add_cloud" == "true" && "$target" != *"@"* ]]; then
+    # Cloud target: bare hostname (no user@host)
+    local host="$target"
+    local user="deploy"
+    _group_validate_host "$host" || return 1
+
+    echo ""
+    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" "$_add_cloud" "$_add_auth" "$_add_auth_mode" || return 1
+
+    # Test cloud connectivity
+    local _idx
+    _idx=$(( $(groups_project_count "$group_name") - 1 ))
+
+    source "$MUSTER_ROOT/lib/core/cloud.sh"
+    _groups_cloud_config
+    start_spinner "Testing cloud connectivity..."
+    if _fleet_cloud_check "$host" 2>/dev/null; then
+      stop_spinner
+      ok "Cloud agent reachable"
+    else
+      stop_spinner
+      warn "Cloud agent unreachable (project still added)"
+    fi
+    echo ""
+  elif [[ "$target" == *"@"* ]]; then
     # Remote: parse user@host
     local user host
     user="${target%%@*}"
@@ -439,8 +508,14 @@ _group_cmd_add() {
     _group_validate_port "$port" || return 1
     _group_validate_ssh_key "$key"
 
+    # Check sshpass for password auth
+    if [[ "$_add_auth" == "password" ]] && ! command -v sshpass &>/dev/null; then
+      err "sshpass is required for SSH password auth. Install: brew install esolitos/ipa/sshpass"
+      return 1
+    fi
+
     echo ""
-    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" || return 1
+    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" "$_add_cloud" "$_add_auth" "$_add_auth_mode" || return 1
 
     # Test connectivity
     local _idx
@@ -609,8 +684,10 @@ _group_cmd_edit_cli() {
   local index="${1:-}"
   shift 2>/dev/null || true
 
+  local _edit_usage="Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D] [--cloud] [--no-cloud] [--auth M] [--auth-mode M]"
+
   if [[ -z "$group_name" ]]; then
-    err "Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D]"
+    err "$_edit_usage"
     return 1
   fi
 
@@ -625,7 +702,7 @@ _group_cmd_edit_cli() {
       _group_edit_project "$group_name"
       return $?
     fi
-    err "Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D]"
+    err "$_edit_usage"
     return 1
   fi
 
@@ -648,17 +725,22 @@ _group_cmd_edit_cli() {
 
   # Parse flags
   local new_host="" new_user="" new_port="" new_key="" new_dir=""
+  local new_cloud="" new_auth="" new_auth_mode=""
   local has_changes=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --host)  new_host="$2"; has_changes=true; shift 2 ;;
-      --user)  new_user="$2"; has_changes=true; shift 2 ;;
-      --port|-p) new_port="$2"; has_changes=true; shift 2 ;;
-      --key|-k)  new_key="$2"; has_changes=true; shift 2 ;;
-      --path)  new_dir="$2"; has_changes=true; shift 2 ;;
+      --host)      new_host="$2"; has_changes=true; shift 2 ;;
+      --user)      new_user="$2"; has_changes=true; shift 2 ;;
+      --port|-p)   new_port="$2"; has_changes=true; shift 2 ;;
+      --key|-k)    new_key="$2"; has_changes=true; shift 2 ;;
+      --path)      new_dir="$2"; has_changes=true; shift 2 ;;
+      --cloud)     new_cloud="true"; has_changes=true; shift ;;
+      --no-cloud)  new_cloud="false"; has_changes=true; shift ;;
+      --auth)      new_auth="$2"; has_changes=true; shift 2 ;;
+      --auth-mode) new_auth_mode="$2"; has_changes=true; shift 2 ;;
       --help|-h)
-        echo "Usage: muster group edit <group> <index> [--host H] [--user U] [--port P] [--key K] [--path D]"
+        echo "$_edit_usage"
         return 0
         ;;
       *) err "Unknown flag: $1"; return 1 ;;
@@ -670,7 +752,7 @@ _group_cmd_edit_cli() {
       _group_edit_remote_fields "$group_name" "$index"
       return $?
     fi
-    err "No changes specified. Use --host, --user, --port, --key, or --path."
+    err "No changes specified. Use --host, --user, --port, --key, --path, --cloud, --auth, --auth-mode."
     return 1
   fi
 
@@ -679,6 +761,18 @@ _group_cmd_edit_cli() {
   [[ -n "$new_user" ]] && { _group_validate_user "$new_user" || return 1; }
   [[ -n "$new_port" ]] && { _group_validate_port "$new_port" || return 1; }
   [[ -n "$new_key" ]]  && _group_validate_ssh_key "$new_key"
+  if [[ -n "$new_auth" ]]; then
+    case "$new_auth" in
+      key|password|agent) ;;
+      *) err "Invalid auth method: ${new_auth} (must be key, password, or agent)"; return 1 ;;
+    esac
+  fi
+  if [[ -n "$new_auth_mode" ]]; then
+    case "$new_auth_mode" in
+      save|session|always) ;;
+      *) err "Invalid auth mode: ${new_auth_mode} (must be save, session, or always)"; return 1 ;;
+    esac
+  fi
 
   # Apply only specified fields
   local tmp="${GROUPS_CONFIG_FILE}.tmp"
@@ -686,8 +780,12 @@ _group_cmd_edit_cli() {
   [[ -n "$new_host" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].host = \$host"
   [[ -n "$new_user" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].user = \$user"
   [[ -n "$new_port" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].port = (\$port | tonumber)"
-  [[ -n "$new_key" ]]  && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].identity_file = \$key"
+  [[ -n "$new_key" ]]  && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].auth.identity_file = \$key"
   [[ -n "$new_dir" ]]  && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].project_dir = \$dir"
+  [[ "$new_cloud" == "true" ]]  && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].cloud = true"
+  [[ "$new_cloud" == "false" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].cloud = false"
+  [[ -n "$new_auth" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].auth.method = \$auth"
+  [[ -n "$new_auth_mode" ]] && jq_expr="${jq_expr} | .groups[\$g].projects[\$i].auth.mode = \$authmode"
 
   # Strip leading " | "
   jq_expr="${jq_expr# | }"
@@ -695,6 +793,7 @@ _group_cmd_edit_cli() {
   jq --arg g "$group_name" --argjson i "$index" \
     --arg host "${new_host:-}" --arg user "${new_user:-}" \
     --arg port "${new_port:-0}" --arg key "${new_key:-}" --arg dir "${new_dir:-}" \
+    --arg auth "${new_auth:-}" --arg authmode "${new_auth_mode:-}" \
     "$jq_expr" "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
 
   ok "Updated remote project at index ${index}"
@@ -870,6 +969,92 @@ _group_cmd_deploy() {
         *) printf '\r\033[K' ;;
       esac
     fi
+  fi
+
+  # Pre-authenticate SSH passwords for remote projects (before bar for clean TUI)
+  # First check if sshpass is needed
+  local _needs_sshpass=false
+  _pi=0
+  while (( _pi < total )); do
+    local _pt _am _cl
+    _pt=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    _cl=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$idx].cloud // false' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    _am=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$idx].auth.method // "key"' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    if [[ "$_pt" == "remote" && "$_cl" != "true" && "$_am" == "password" ]]; then
+      _needs_sshpass=true; break
+    fi
+    _pi=$(( _pi + 1 ))
+  done
+  if [[ "$_needs_sshpass" == "true" ]] && ! command -v sshpass &>/dev/null; then
+    err "sshpass is required for SSH password auth. Install: brew install esolitos/ipa/sshpass"
+    return 1
+  fi
+
+  local _prompted_hosts=()
+  _pi=0
+  while (( _pi < total )); do
+    local _pt
+    _pt=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    if [[ "$_pt" == "remote" ]]; then
+      _groups_load_remote "$group_name" "$_pi"
+      if [[ "$_GP_CLOUD" != "true" && "$_GP_AUTH_METHOD" == "password" ]]; then
+        local _host_key="${_GP_USER}@${_GP_HOST}:${_GP_PORT}"
+        local _already=false _hi=0
+        while (( _hi < ${#_prompted_hosts[@]} )); do
+          [[ "${_prompted_hosts[$_hi]}" == "$_host_key" ]] && { _already=true; break; }
+          _hi=$(( _hi + 1 ))
+        done
+        if [[ "$_already" == "false" ]]; then
+          _groups_load_ssh_password
+          _prompted_hosts[${#_prompted_hosts[@]}]="$_host_key"
+          printf '  %b✓%b SSH %s\n' "${GREEN}" "${RESET}" "$_host_key"
+          printf '    %bSave?%b  0) Close  1) Keychain  2) Session  3) Skip ' "${DIM}" "${RESET}"
+          local _ssh_ch=""
+          IFS= read -rsn1 _ssh_ch 2>/dev/null || true
+          case "$_ssh_ch" in
+            1) printf '\r\033[K    %b✓%b Keychain\n' "${GREEN}" "${RESET}"
+               local _cred_key="ssh_${_GP_USER}@${_GP_HOST}:${_GP_PORT}"
+               _cred_keychain_save "groups" "$_cred_key" "$_GP_PASSWORD" 2>/dev/null || true ;;
+            2) printf '\r\033[K    %b✓%b Session\n' "${GREEN}" "${RESET}" ;;
+            3) printf '\r\033[K    %b✓%b Skip\n' "${GREEN}" "${RESET}" ;;
+            *) printf '\r\033[K' ;;
+          esac
+        fi
+      fi
+    fi
+    _pi=$(( _pi + 1 ))
+  done
+
+  # Verify cloud config for cloud projects (before bar)
+  local _has_cloud=false
+  _pi=0
+  while (( _pi < total )); do
+    local _pt _cl
+    _pt=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$idx].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    _cl=$(jq -r --arg n "$group_name" --argjson idx "$_pi" \
+      '.groups[$n].projects[$idx].cloud // false' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    if [[ "$_pt" == "remote" && "$_cl" == "true" ]]; then
+      _has_cloud=true; break
+    fi
+    _pi=$(( _pi + 1 ))
+  done
+  if [[ "$_has_cloud" == "true" ]]; then
+    source "$MUSTER_ROOT/lib/core/cloud.sh"
+    if ! _fleet_cloud_available; then
+      err "Cloud projects require muster-tunnel. Install: curl -sSL https://getmuster.dev/cloud | bash"
+      return 1
+    fi
+    _groups_cloud_config
+    if [[ -z "$FLEET_CLOUD_TOKEN" ]]; then
+      err "Cloud token not configured. Run: muster settings --global cloud.token <token>"
+      return 1
+    fi
+    printf '  %b✓%b Cloud transport ready\n' "${GREEN}" "${RESET}"
   fi
 
   # Progress bar — printed once, updated via full-section redraw
@@ -1301,13 +1486,10 @@ _group_cmd_deploy() {
 _group_deploy_remote() {
   local group_name="$1" index="$2" log_file="$3"
   _groups_load_remote "$group_name" "$index"
-  _groups_build_ssh_opts
 
-  # Pre-flight: check SSH connectivity
-  # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
-  if ! ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
-    printf 'Cannot reach %s@%s — check SSH config and connectivity\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
-    return 1
+  # Re-load password from session cache (pre-auth stored it, but _groups_load_remote resets _GP_PASSWORD)
+  if [[ "$_GP_AUTH_METHOD" == "password" ]]; then
+    _groups_load_ssh_password
   fi
 
   local cmd="muster deploy --quiet"
@@ -1317,8 +1499,43 @@ _group_deploy_remote() {
     cmd="cd ${_escaped_dir} && ${cmd}"
   fi
 
-  # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
-  ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" >> "$log_file" 2>&1
+  if [[ "$_GP_CLOUD" == "true" ]]; then
+    # Cloud transport
+    source "$MUSTER_ROOT/lib/core/cloud.sh"
+    _groups_cloud_config
+    if ! _fleet_cloud_check "$_GP_HOST" 2>/dev/null; then
+      printf 'Cannot reach cloud agent %s — check tunnel and relay\n' "$_GP_HOST" > "$log_file"
+      return 1
+    fi
+    _fleet_cloud_exec "$_GP_HOST" "$cmd" >> "$log_file" 2>&1
+  else
+    # SSH transport
+    _groups_build_ssh_opts
+
+    # Pre-flight: check connectivity
+    if [[ "$_GP_AUTH_METHOD" == "password" ]]; then
+      export SSHPASS="$_GP_PASSWORD"
+      # shellcheck disable=SC2086
+      if ! sshpass -e ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
+        unset SSHPASS
+        printf 'Cannot reach %s@%s — check SSH config and connectivity\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+        return 1
+      fi
+      # shellcheck disable=SC2086
+      sshpass -e ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" >> "$log_file" 2>&1
+      local _rc=$?
+      unset SSHPASS
+      return $_rc
+    else
+      # shellcheck disable=SC2086
+      if ! ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
+        printf 'Cannot reach %s@%s — check SSH config and connectivity\n' "$_GP_USER" "$_GP_HOST" > "$log_file"
+        return 1
+      fi
+      # shellcheck disable=SC2086
+      ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" >> "$log_file" 2>&1
+    fi
+  fi
 }
 
 _group_deploy_dry_run() {
@@ -1470,20 +1687,20 @@ _group_cmd_status() {
         _result=$(cd "$_path" && "$_muster_bin" status --json 2>/dev/null) || true
       fi
     else
-      # Remote: check SSH then muster status
+      # Remote: check connectivity then muster status (via transport dispatch)
       _groups_load_remote "$group_name" "$i"
-      _groups_build_ssh_opts
+      if [[ "$_GP_AUTH_METHOD" == "password" ]]; then
+        _groups_load_ssh_password
+      fi
 
-      # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
-      if ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "echo ok" &>/dev/null; then
+      if groups_remote_check "$group_name" "$i"; then
         local cmd="muster status --json"
         if [[ -n "$_GP_PROJECT_DIR" ]]; then
           local _escaped_dir
           printf -v _escaped_dir '%q' "$_GP_PROJECT_DIR"
           cmd="cd ${_escaped_dir} && ${cmd}"
         fi
-        # shellcheck disable=SC2086 — $_GROUPS_SSH_OPTS intentionally unquoted for word-splitting
-        _result=$(ssh $_GROUPS_SSH_OPTS "${_GP_USER}@${_GP_HOST}" "$cmd" 2>/dev/null) || true
+        _result=$(groups_remote_exec "$group_name" "$i" "$cmd" 2>/dev/null) || true
       else
         _icon="●"; _color="${RED}"; _tag="unreachable"
       fi
@@ -1788,7 +2005,7 @@ _group_edit_project() {
 _group_edit_remote_fields() {
   local group_name="$1" idx="$2"
 
-  local cur_host cur_user cur_port cur_key cur_dir
+  local cur_host cur_user cur_port cur_key cur_dir cur_cloud cur_auth cur_auth_mode
   cur_host=$(jq -r --arg n "$group_name" --argjson i "$idx" \
     '.groups[$n].projects[$i].host // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   cur_user=$(jq -r --arg n "$group_name" --argjson i "$idx" \
@@ -1796,11 +2013,18 @@ _group_edit_remote_fields() {
   cur_port=$(jq -r --arg n "$group_name" --argjson i "$idx" \
     '.groups[$n].projects[$i].port // 22' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   cur_key=$(jq -r --arg n "$group_name" --argjson i "$idx" \
-    '.groups[$n].projects[$i].identity_file // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+    '(.groups[$n].projects[$i].auth.identity_file // .groups[$n].projects[$i].identity_file) // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   cur_dir=$(jq -r --arg n "$group_name" --argjson i "$idx" \
     '.groups[$n].projects[$i].project_dir // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_cloud=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].cloud // false' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_auth=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].auth.method // "key"' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_auth_mode=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].auth.mode // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   [[ "$cur_key" == "null" ]] && cur_key=""
   [[ "$cur_dir" == "null" ]] && cur_dir=""
+  [[ "$cur_auth_mode" == "null" ]] && cur_auth_mode=""
 
   echo ""
   printf '  %bEdit Remote Project%b\n' "${BOLD}" "${RESET}"
@@ -1822,10 +2046,49 @@ _group_edit_remote_fields() {
   [[ -z "$new_port" ]] && new_port="$cur_port"
   _group_validate_port "$new_port" || return 1
 
-  printf '  SSH key [%s]: ' "${cur_key:-(none)}"
-  local new_key; IFS= read -r new_key
-  [[ -z "$new_key" ]] && new_key="$cur_key"
-  _group_validate_ssh_key "$new_key"
+  # Cloud transport
+  local _cloud_display="no"
+  [[ "$cur_cloud" == "true" ]] && _cloud_display="yes"
+  printf '  Cloud tunnel [%s] (yes/no): ' "$_cloud_display"
+  local new_cloud_input; IFS= read -r new_cloud_input
+  local new_cloud="$cur_cloud"
+  case "$new_cloud_input" in
+    yes|y|true)  new_cloud="true" ;;
+    no|n|false)  new_cloud="false" ;;
+    "") ;;  # keep current
+    *) warn "Invalid value, keeping current"; ;;
+  esac
+
+  # Auth method
+  printf '  Auth method [%s] (key/password/agent): ' "$cur_auth"
+  local new_auth_input; IFS= read -r new_auth_input
+  local new_auth="$cur_auth"
+  case "$new_auth_input" in
+    key|password|agent) new_auth="$new_auth_input" ;;
+    "") ;;  # keep current
+    *) warn "Invalid value, keeping current"; ;;
+  esac
+
+  # SSH key (only for key auth)
+  local new_key="$cur_key"
+  if [[ "$new_auth" == "key" ]]; then
+    printf '  SSH key [%s]: ' "${cur_key:-(none)}"
+    local key_input; IFS= read -r key_input
+    [[ -n "$key_input" ]] && new_key="$key_input"
+    _group_validate_ssh_key "$new_key"
+  fi
+
+  # Auth mode (only for password auth)
+  local new_auth_mode="$cur_auth_mode"
+  if [[ "$new_auth" == "password" ]]; then
+    printf '  Password mode [%s] (save/session/always): ' "${cur_auth_mode:-session}"
+    local mode_input; IFS= read -r mode_input
+    case "$mode_input" in
+      save|session|always) new_auth_mode="$mode_input" ;;
+      "") [[ -z "$new_auth_mode" ]] && new_auth_mode="session" ;;
+      *) warn "Invalid value, using session"; new_auth_mode="session" ;;
+    esac
+  fi
 
   printf '  Project dir [%s]: ' "${cur_dir:-(none)}"
   local new_dir; IFS= read -r new_dir
@@ -1836,13 +2099,20 @@ _group_edit_remote_fields() {
   jq --arg g "$group_name" --argjson i "$idx" \
     --arg host "$new_host" --arg user "$new_user" --argjson port "$new_port" \
     --arg key "$new_key" --arg dir "$new_dir" \
+    --argjson cloud "$([ "$new_cloud" == "true" ] && echo true || echo false)" \
+    --arg auth "$new_auth" --arg authmode "$new_auth_mode" \
     '.groups[$g].projects[$i].host = $host |
      .groups[$g].projects[$i].user = $user |
      .groups[$g].projects[$i].port = $port |
-     (if $key != "" then .groups[$g].projects[$i].identity_file = $key
-      else del(.groups[$g].projects[$i].identity_file) end) |
+     .groups[$g].projects[$i].cloud = $cloud |
+     .groups[$g].projects[$i].auth.method = $auth |
+     (if $auth == "key" and $key != "" then .groups[$g].projects[$i].auth.identity_file = $key
+      else del(.groups[$g].projects[$i].auth.identity_file) end) |
+     (if $auth == "password" and $authmode != "" then .groups[$g].projects[$i].auth.mode = $authmode
+      else del(.groups[$g].projects[$i].auth.mode) end) |
      (if $dir != "" then .groups[$g].projects[$i].project_dir = $dir
-      else del(.groups[$g].projects[$i].project_dir) end)' \
+      else del(.groups[$g].projects[$i].project_dir) end) |
+     del(.groups[$g].projects[$i].identity_file)' \
     "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
 
   echo ""

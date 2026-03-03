@@ -25,6 +25,9 @@ FLEET_CLOUD_ORG=""
 FLEET_CLOUD_TOKEN=""
 
 _fleet_cloud_config() {
+  # Skip if already configured (allows callers to pre-populate from other sources)
+  [[ -n "${FLEET_CLOUD_RELAY:-}" && -n "${FLEET_CLOUD_TOKEN:-}" ]] && return 0
+
   FLEET_CLOUD_RELAY=$(fleet_get '.cloud.relay // ""')
   FLEET_CLOUD_ORG=$(fleet_get '.cloud.org_id // ""')
   local token_ref

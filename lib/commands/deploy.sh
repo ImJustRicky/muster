@@ -95,6 +95,7 @@ cmd_deploy() {
         echo "  muster deploy api          Deploy just the api service"
         echo "  muster deploy --dry-run    Preview all services"
         echo "  muster deploy --json       Stream deploy events as NDJSON"
+        echo "  muster deploy fleet test   Deploy a fleet group (shortcut for muster group deploy)"
         return 0
         ;;
       --dry-run) dry_run=true; shift ;;
@@ -107,6 +108,14 @@ cmd_deploy() {
         ;;
     esac
   done
+
+  # Redirect: muster deploy fleet <name> → muster group deploy <name>
+  if [[ "${1:-}" == "fleet" ]]; then
+    shift
+    source "$MUSTER_ROOT/lib/commands/group.sh"
+    _group_cmd_deploy "$@"
+    return $?
+  fi
 
   load_config
   _load_env_file
@@ -210,6 +219,47 @@ cmd_deploy() {
 
   local total=${#services[@]}
   local current=0
+
+  # Pre-authenticate SSH passwords for remote services (before deploy loop)
+  # Check sshpass availability first
+  local _needs_sshpass=false
+  local _si=0
+  while (( _si < total )); do
+    local _psvc="${services[$_si]}"
+    if remote_is_enabled "$_psvc"; then
+      _remote_load_config "$_psvc"
+      if [[ "$_REMOTE_CLOUD" != "true" && "$_REMOTE_AUTH_METHOD" == "password" ]]; then
+        _needs_sshpass=true; break
+      fi
+    fi
+    _si=$(( _si + 1 ))
+  done
+  if [[ "$_needs_sshpass" == "true" ]] && ! command -v sshpass &>/dev/null; then
+    err "sshpass is required for SSH password auth. Install: brew install esolitos/ipa/sshpass"
+    return 1
+  fi
+
+  local _preauth_hosts=()
+  _si=0
+  while (( _si < total )); do
+    local _psvc="${services[$_si]}"
+    if remote_is_enabled "$_psvc"; then
+      _remote_load_config "$_psvc"
+      if [[ "$_REMOTE_CLOUD" != "true" && "$_REMOTE_AUTH_METHOD" == "password" ]]; then
+        local _hk="${_REMOTE_USER}@${_REMOTE_HOST}:${_REMOTE_PORT}"
+        local _found=false _phi=0
+        while (( _phi < ${#_preauth_hosts[@]} )); do
+          [[ "${_preauth_hosts[$_phi]}" == "$_hk" ]] && { _found=true; break; }
+          _phi=$(( _phi + 1 ))
+        done
+        if [[ "$_found" == "false" ]]; then
+          _remote_load_ssh_password "$_psvc"
+          _preauth_hosts[${#_preauth_hosts[@]}]="$_hk"
+        fi
+      fi
+    fi
+    _si=$(( _si + 1 ))
+  done
 
   for svc in "${services[@]}"; do
     (( current++ ))
