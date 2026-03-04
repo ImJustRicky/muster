@@ -466,7 +466,11 @@ _group_cmd_add() {
         printf '  Hook mode (manual/sync) [manual]: '
         local _hm_input; IFS= read -r _hm_input
         case "$_hm_input" in
-          sync) _add_hook_mode="sync" ;;
+          sync)
+            _add_hook_mode="sync"
+            printf '  %b  Sync mode: this machine pushes hooks before each deploy.%b\n' "${DIM}" "${RESET}"
+            printf '  %b  No muster install needed on the target — just SSH access.%b\n' "${DIM}" "${RESET}"
+            ;;
           *) _add_hook_mode="manual" ;;
         esac
         ;;
@@ -2411,8 +2415,8 @@ _group_edit_remote_fields() {
     *) warn "Invalid value, keeping current" ;;
   esac
   if [[ "$new_hook_mode" == "sync" && "$cur_hook_mode" != "sync" ]]; then
-    printf '  %b  Sync mode: hooks are pushed from this machine before deploy.%b\n' "${DIM}" "${RESET}"
-    printf '  %b  Target needs zero muster install — just SSH access.%b\n' "${DIM}" "${RESET}"
+    printf '  %b  Sync mode: this machine pushes hooks before each deploy.%b\n' "${DIM}" "${RESET}"
+    printf '  %b  No muster install needed on the target — just SSH access.%b\n' "${DIM}" "${RESET}"
   fi
 
   # Prompt for password now if switching to password auth with save/session
