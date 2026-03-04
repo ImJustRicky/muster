@@ -356,7 +356,7 @@ _group_cmd_add() {
   fi
 
   local target="" port="22" key="" remote_path=""
-  local _add_cloud="false" _add_auth="" _add_auth_mode=""
+  local _add_cloud="false" _add_auth="" _add_auth_mode="" _add_hook_mode="manual"
 
   # Parse remaining args
   while [[ $# -gt 0 ]]; do
@@ -463,6 +463,12 @@ _group_cmd_add() {
         IFS= read -r remote_path
         # Strip leading colon (common mistake from user@host:/path muscle memory)
         remote_path="${remote_path#:}"
+        printf '  Hook mode (manual/sync) [manual]: '
+        local _hm_input; IFS= read -r _hm_input
+        case "$_hm_input" in
+          sync) _add_hook_mode="sync" ;;
+          *) _add_hook_mode="manual" ;;
+        esac
         ;;
       *)
         # Match selected project from registry
@@ -491,7 +497,7 @@ _group_cmd_add() {
     _group_validate_host "$host" || return 1
 
     echo ""
-    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" "$_add_cloud" "$_add_auth" "$_add_auth_mode" || return 1
+    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" "$_add_cloud" "$_add_auth" "$_add_auth_mode" "$_add_hook_mode" || return 1
 
     # Test cloud connectivity
     local _idx
@@ -526,7 +532,7 @@ _group_cmd_add() {
     fi
 
     echo ""
-    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" "$_add_cloud" "$_add_auth" "$_add_auth_mode" || return 1
+    groups_add_remote "$group_name" "$host" "$user" "$port" "$key" "$remote_path" "$_add_cloud" "$_add_auth" "$_add_auth_mode" "$_add_hook_mode" || return 1
 
     # Prompt for password now if mode is save/session (don't wait until deploy)
     if [[ "$_add_auth" == "password" && "$_add_auth_mode" != "always" ]]; then
@@ -2302,7 +2308,7 @@ _group_edit_project() {
 _group_edit_remote_fields() {
   local group_name="$1" idx="$2"
 
-  local cur_host cur_user cur_port cur_key cur_dir cur_cloud cur_auth cur_auth_mode
+  local cur_host cur_user cur_port cur_key cur_dir cur_cloud cur_auth cur_auth_mode cur_hook_mode
   cur_host=$(jq -r --arg n "$group_name" --argjson i "$idx" \
     '.groups[$n].projects[$i].host // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   cur_user=$(jq -r --arg n "$group_name" --argjson i "$idx" \
@@ -2319,9 +2325,12 @@ _group_edit_remote_fields() {
     '.groups[$n].projects[$i].auth.method // "key"' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   cur_auth_mode=$(jq -r --arg n "$group_name" --argjson i "$idx" \
     '.groups[$n].projects[$i].auth.mode // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+  cur_hook_mode=$(jq -r --arg n "$group_name" --argjson i "$idx" \
+    '.groups[$n].projects[$i].hook_mode // "manual"' "$GROUPS_CONFIG_FILE" 2>/dev/null)
   [[ "$cur_key" == "null" ]] && cur_key=""
   [[ "$cur_dir" == "null" ]] && cur_dir=""
   [[ "$cur_auth_mode" == "null" ]] && cur_auth_mode=""
+  [[ "$cur_hook_mode" == "null" ]] && cur_hook_mode="manual"
 
   echo ""
   printf '  %bEdit Remote Project%b\n' "${BOLD}" "${RESET}"
@@ -2392,6 +2401,20 @@ _group_edit_remote_fields() {
   local new_dir; IFS= read -r new_dir
   [[ -z "$new_dir" ]] && new_dir="$cur_dir"
 
+  # Hook mode
+  printf '  Hook mode [%s] (manual/sync): ' "$cur_hook_mode"
+  local new_hook_mode_input; IFS= read -r new_hook_mode_input
+  local new_hook_mode="$cur_hook_mode"
+  case "$new_hook_mode_input" in
+    manual|sync) new_hook_mode="$new_hook_mode_input" ;;
+    "") ;;  # keep current
+    *) warn "Invalid value, keeping current" ;;
+  esac
+  if [[ "$new_hook_mode" == "sync" && "$cur_hook_mode" != "sync" ]]; then
+    printf '  %b  Sync mode: hooks are pushed from this machine before deploy.%b\n' "${DIM}" "${RESET}"
+    printf '  %b  Target needs zero muster install — just SSH access.%b\n' "${DIM}" "${RESET}"
+  fi
+
   # Prompt for password now if switching to password auth with save/session
   if [[ "$new_auth" == "password" && "$new_auth_mode" != "always" ]]; then
     source "$MUSTER_ROOT/lib/core/credentials.sh"
@@ -2413,10 +2436,12 @@ _group_edit_remote_fields() {
     --arg key "$new_key" --arg dir "$new_dir" \
     --argjson cloud "$([ "$new_cloud" == "true" ] && echo true || echo false)" \
     --arg auth "$new_auth" --arg authmode "$new_auth_mode" \
+    --arg hookmode "$new_hook_mode" \
     '.groups[$g].projects[$i].host = $host |
      .groups[$g].projects[$i].user = $user |
      .groups[$g].projects[$i].port = $port |
      .groups[$g].projects[$i].cloud = $cloud |
+     .groups[$g].projects[$i].hook_mode = $hookmode |
      .groups[$g].projects[$i].auth.method = $auth |
      (if $auth == "key" and $key != "" then .groups[$g].projects[$i].auth.identity_file = $key
       else del(.groups[$g].projects[$i].auth.identity_file) end) |
@@ -2612,6 +2637,7 @@ _group_detail_menu() {
         _desc=$(groups_project_desc "$group_name" "$pi")
 
         local _icon _color
+        local _hook_mode_badge=""
         if [[ "$_type" == "local" ]]; then
           _icon="●"; _color="${GREEN}"
           _desc="${_desc/#$HOME/~}"
@@ -2620,12 +2646,24 @@ _group_detail_menu() {
           [[ ! -d "$_raw_path" ]] && _color="${RED}"
         else
           _icon="◆"; _color="${ACCENT}"
+          local _hm_val
+          _hm_val=$(jq -r --arg n "$group_name" --argjson idx "$pi" \
+            '.groups[$n].projects[$idx].hook_mode // "manual"' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+          [[ "$_hm_val" == "sync" ]] && _hook_mode_badge=" sync"
         fi
 
-        printf '    %b%s%b %b%s%b %b%s%b\n' \
-          "$_color" "$_icon" "${RESET}" \
-          "${WHITE}" "$_pname" "${RESET}" \
-          "${DIM}" "$_desc" "${RESET}"
+        if [[ -n "$_hook_mode_badge" ]]; then
+          printf '    %b%s%b %b%s%b %b%s%b %b%s%b\n' \
+            "$_color" "$_icon" "${RESET}" \
+            "${WHITE}" "$_pname" "${RESET}" \
+            "${DIM}" "$_desc" "${RESET}" \
+            "${YELLOW}" "$_hook_mode_badge" "${RESET}"
+        else
+          printf '    %b%s%b %b%s%b %b%s%b\n' \
+            "$_color" "$_icon" "${RESET}" \
+            "${WHITE}" "$_pname" "${RESET}" \
+            "${DIM}" "$_desc" "${RESET}"
+        fi
 
         # Show services with health status under each project
         if [[ "$_type" == "local" && -d "$_raw_path" ]]; then

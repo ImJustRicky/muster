@@ -288,6 +288,29 @@ _settings_muster_global() {
       *)  _TOG_STATES[8]=0 ;;
     esac
 
+    # Minimal output: off / on
+    local minimal_val
+    minimal_val=$(global_config_get "minimal" 2>/dev/null)
+    _TOG_LABELS[9]="Minimal output"
+    _TOG_OPTIONS[9]="off|on"
+    case "$minimal_val" in
+      true) _TOG_STATES[9]=1 ;;
+      *)    _TOG_STATES[9]=0 ;;
+    esac
+
+    # Machine role: local / control / target / both
+    local machine_role
+    machine_role=$(global_config_get "machine_role" 2>/dev/null)
+    : "${machine_role:=local}"
+    _TOG_LABELS[10]="Machine role"
+    _TOG_OPTIONS[10]="local|control|target|both"
+    case "$machine_role" in
+      control) _TOG_STATES[10]=1 ;;
+      target)  _TOG_STATES[10]=2 ;;
+      both)    _TOG_STATES[10]=3 ;;
+      *)       _TOG_STATES[10]=0 ;;
+    esac
+
     echo ""
     _toggle_select "Muster Settings"
 
@@ -340,6 +363,18 @@ _settings_muster_global() {
       1) new_signing="on" ;;
       *) new_signing="off" ;;
     esac
+    local new_minimal
+    case $(( _TOG_STATES[9] )) in
+      1) new_minimal="true" ;;
+      *) new_minimal="false" ;;
+    esac
+    local new_role
+    case $(( _TOG_STATES[10] )) in
+      1) new_role="control" ;;
+      2) new_role="target" ;;
+      3) new_role="both" ;;
+      *) new_role="local" ;;
+    esac
 
     # Confirm source mode switch
     if [[ "$new_update_mode" == "source" && "$update_mode" != "source" ]]; then
@@ -369,8 +404,154 @@ _settings_muster_global() {
     global_config_set "log_retention_days" "$new_retention"
     global_config_set "default_health_timeout" "$new_timeout"
     global_config_set "signing" "\"$new_signing\""
+    global_config_set "minimal" "$new_minimal"
+    global_config_set "machine_role" "\"$new_role\""
 
     return 0
+  done
+}
+
+# ── Scanner exclude ──
+
+_settings_scanner_exclude() {
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Scanner Exclude${RESET}"
+    echo ""
+
+    local _se_val
+    _se_val=$(global_config_get "scanner_exclude" 2>/dev/null)
+
+    if [[ -z "$_se_val" || "$_se_val" == "[]" || "$_se_val" == "null" ]]; then
+      printf '  %bNo patterns configured%b\n' "${DIM}" "${RESET}"
+    else
+      # Parse JSON array into lines
+      local _se_items
+      _se_items=$(printf '%s' "$_se_val" | jq -r '.[]' 2>/dev/null)
+      if [[ -n "$_se_items" ]]; then
+        while IFS= read -r _se_item; do
+          [[ -z "$_se_item" ]] && continue
+          printf '  %b- %s%b\n' "${DIM}" "$_se_item" "${RESET}"
+        done <<< "$_se_items"
+      else
+        printf '  %bNo patterns configured%b\n' "${DIM}" "${RESET}"
+      fi
+    fi
+    echo ""
+
+    menu_select "Scanner Exclude" "Add pattern" "Remove pattern" "Back"
+
+    case "$MENU_RESULT" in
+      "Add pattern")
+        printf '  Pattern to exclude: '
+        local _se_new=""
+        IFS= read -r _se_new
+        if [[ -n "$_se_new" ]]; then
+          local _se_quoted
+          _se_quoted=$(printf '%s' "$_se_new" | sed 's/\\/\\\\/g;s/"/\\"/g')
+          global_config_set "scanner_exclude" "(.scanner_exclude + [\"${_se_quoted}\"] | unique)"
+          ok "Added: ${_se_new}"
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "Remove pattern")
+        local _se_current
+        _se_current=$(global_config_get "scanner_exclude" 2>/dev/null)
+        if [[ -z "$_se_current" || "$_se_current" == "[]" || "$_se_current" == "null" ]]; then
+          info "No patterns to remove"
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+        else
+          local _se_opts=()
+          while IFS= read -r _se_o; do
+            [[ -z "$_se_o" ]] && continue
+            _se_opts[${#_se_opts[@]}]="$_se_o"
+          done < <(printf '%s' "$_se_current" | jq -r '.[]' 2>/dev/null)
+
+          if [[ ${#_se_opts[@]} -eq 0 ]]; then
+            info "No patterns to remove"
+            printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+            IFS= read -rsn1 || true
+          else
+            _se_opts[${#_se_opts[@]}]="Back"
+            menu_select "Remove" "${_se_opts[@]}"
+            if [[ "$MENU_RESULT" != "Back" && "$MENU_RESULT" != "__back__" ]]; then
+              local _se_rm_quoted
+              _se_rm_quoted=$(printf '%s' "$MENU_RESULT" | sed 's/\\/\\\\/g;s/"/\\"/g')
+              global_config_set "scanner_exclude" "([.scanner_exclude[] | select(. != \"${_se_rm_quoted}\")])"
+              ok "Removed: ${MENU_RESULT}"
+              printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+              IFS= read -rsn1 || true
+            fi
+          fi
+        fi
+        ;;
+      "Back"|"__back__")
+        return 0
+        ;;
+    esac
+  done
+}
+
+# ── Deploy password ──
+
+_settings_deploy_password() {
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Deploy Password${RESET}"
+    echo ""
+
+    local _dp_hash
+    _dp_hash=$(global_config_get "deploy_password_hash" 2>/dev/null)
+
+    if [[ -n "$_dp_hash" && "$_dp_hash" != "null" && "$_dp_hash" != '""' && "$_dp_hash" != "" ]]; then
+      printf '  %bStatus:%b %bset%b\n' "${DIM}" "${RESET}" "${GREEN}" "${RESET}"
+    else
+      printf '  %bStatus:%b %bnot set%b\n' "${DIM}" "${RESET}" "${YELLOW}" "${RESET}"
+    fi
+    echo ""
+
+    menu_select "Deploy Password" "Set password" "Remove password" "Back"
+
+    case "$MENU_RESULT" in
+      "Set password")
+        printf '  New password: '
+        local _dp_new=""
+        IFS= read -rs _dp_new
+        echo ""
+        if [[ -n "$_dp_new" ]]; then
+          printf '  Confirm password: '
+          local _dp_confirm=""
+          IFS= read -rs _dp_confirm
+          echo ""
+          if [[ "$_dp_new" == "$_dp_confirm" ]]; then
+            source "$MUSTER_ROOT/lib/core/auth.sh"
+            local _dp_hashed
+            _dp_hashed="sha256:$(_auth_hash "$_dp_new")"
+            global_config_set "deploy_password_hash" "\"${_dp_hashed}\""
+            ok "Deploy password set"
+          else
+            err "Passwords do not match"
+          fi
+        else
+          info "Cancelled"
+        fi
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Remove password")
+        global_config_set "deploy_password_hash" '""'
+        ok "Deploy password removed"
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Back"|"__back__")
+        return 0
+        ;;
+    esac
   done
 }
 
@@ -456,6 +637,8 @@ _settings_updates() {
 
         # Section headers
         if [[ "$_cl_line" == "## "* ]]; then
+          # Skip [Unreleased] section header
+          case "$_cl_line" in *"[Unreleased]"*) continue ;; esac
           _shown_sections=$(( _shown_sections + 1 ))
           # Show up to 5 release sections
           if (( _shown_sections > 5 )); then

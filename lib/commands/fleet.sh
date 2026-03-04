@@ -154,17 +154,510 @@ _fleet_cmd_help() {
   echo "See also: muster group --help   (orchestrate multiple projects together)"
 }
 
+# ── TUI helpers ──
+
+# Machine picker — sets MENU_RESULT to selected machine name. Returns 1 if Back.
+_fleet_pick_machine() {
+  local title="${1:-Select machine}"
+  local _fpm_machines=()
+  while IFS= read -r _fpm; do
+    [[ -z "$_fpm" ]] && continue
+    _fpm_machines[${#_fpm_machines[@]}]="$_fpm"
+  done < <(fleet_machines)
+
+  if [[ ${#_fpm_machines[@]} -eq 0 ]]; then
+    info "No machines configured"
+    return 1
+  fi
+
+  _fpm_machines[${#_fpm_machines[@]}]="Back"
+  menu_select "$title" "${_fpm_machines[@]}"
+  [[ "$MENU_RESULT" == "Back" || "$MENU_RESULT" == "__back__" ]] && return 1
+  return 0
+}
+
+# ── Add machine TUI ──
+
+_fleet_add_tui() {
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Add Machine${RESET}"
+  echo ""
+
+  local _add_name="" _add_userhost="" _add_mode="push" _add_hook_mode="manual"
+  local _add_transport="ssh" _add_path="" _add_key="" _add_port="22"
+
+  printf '  Name: '
+  IFS= read -r _add_name
+  if [[ -z "$_add_name" ]]; then
+    warn "Cancelled"
+    return 0
+  fi
+
+  printf '  user@host: '
+  IFS= read -r _add_userhost
+  if [[ -z "$_add_userhost" || "$_add_userhost" != *"@"* ]]; then
+    err "Expected user@host format"
+    printf '%b\n' "  ${DIM}Press any key...${RESET}"
+    IFS= read -rsn1 || true
+    return 1
+  fi
+
+  printf '  Mode (push/muster) [push]: '
+  local _add_mode_in=""
+  IFS= read -r _add_mode_in
+  case "$_add_mode_in" in
+    muster) _add_mode="muster" ;;
+    push|"") _add_mode="push" ;;
+    *) err "Invalid mode"; return 1 ;;
+  esac
+
+  printf '  Hook mode (manual/sync) [manual]: '
+  local _add_hm_in=""
+  IFS= read -r _add_hm_in
+  case "$_add_hm_in" in
+    sync) _add_hook_mode="sync" ;;
+    manual|"") _add_hook_mode="manual" ;;
+    *) err "Invalid hook mode"; return 1 ;;
+  esac
+
+  printf '  Transport (ssh/cloud) [ssh]: '
+  local _add_tr_in=""
+  IFS= read -r _add_tr_in
+  case "$_add_tr_in" in
+    cloud) _add_transport="cloud" ;;
+    ssh|"") _add_transport="ssh" ;;
+    *) err "Invalid transport"; return 1 ;;
+  esac
+
+  printf '  Project dir []: '
+  IFS= read -r _add_path
+
+  printf '  SSH key []: '
+  IFS= read -r _add_key
+
+  printf '  Port [22]: '
+  local _add_port_in=""
+  IFS= read -r _add_port_in
+  [[ -n "$_add_port_in" ]] && _add_port="$_add_port_in"
+
+  echo ""
+
+  # Build args and call _fleet_cmd_add
+  local _add_args=()
+  _add_args[${#_add_args[@]}]="$_add_name"
+  _add_args[${#_add_args[@]}]="$_add_userhost"
+  _add_args[${#_add_args[@]}]="--mode"
+  _add_args[${#_add_args[@]}]="$_add_mode"
+  _add_args[${#_add_args[@]}]="--transport"
+  _add_args[${#_add_args[@]}]="$_add_transport"
+  _add_args[${#_add_args[@]}]="--port"
+  _add_args[${#_add_args[@]}]="$_add_port"
+  [[ "$_add_hook_mode" == "sync" ]] && _add_args[${#_add_args[@]}]="--sync"
+  [[ -n "$_add_path" ]] && { _add_args[${#_add_args[@]}]="--path"; _add_args[${#_add_args[@]}]="$_add_path"; }
+  [[ -n "$_add_key" ]] && { _add_args[${#_add_args[@]}]="--key"; _add_args[${#_add_args[@]}]="$_add_key"; }
+
+  _fleet_cmd_add "${_add_args[@]}"
+
+  echo ""
+  printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+  IFS= read -rsn1 || true
+}
+
+# ── Edit machine TUI ──
+
+_fleet_edit_tui() {
+  local machine="$1"
+
+  _fleet_load_machine "$machine"
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Edit ${machine}${RESET}"
+  printf '%b\n' "  ${DIM}Current: ${_FM_USER}@${_FM_HOST}:${_FM_PORT} (${_FM_MODE}, ${_FM_HOOK_MODE})${RESET}"
+  echo ""
+
+  # Hook mode
+  printf '  Hook mode (manual/sync) [%s]: ' "$_FM_HOOK_MODE"
+  local _edit_hm=""
+  IFS= read -r _edit_hm
+  [[ -z "$_edit_hm" ]] && _edit_hm="$_FM_HOOK_MODE"
+
+  # User
+  printf '  User [%s]: ' "$_FM_USER"
+  local _edit_user=""
+  IFS= read -r _edit_user
+  [[ -z "$_edit_user" ]] && _edit_user="$_FM_USER"
+
+  # Host
+  printf '  Host [%s]: ' "$_FM_HOST"
+  local _edit_host=""
+  IFS= read -r _edit_host
+  [[ -z "$_edit_host" ]] && _edit_host="$_FM_HOST"
+
+  # Port
+  printf '  Port [%s]: ' "$_FM_PORT"
+  local _edit_port=""
+  IFS= read -r _edit_port
+  [[ -z "$_edit_port" ]] && _edit_port="$_FM_PORT"
+
+  echo ""
+
+  local _edit_changed=false
+
+  if [[ "$_edit_hm" != "$_FM_HOOK_MODE" ]]; then
+    case "$_edit_hm" in
+      manual|sync)
+        fleet_set ".machines.\"${machine}\".hook_mode" "\"${_edit_hm}\""
+        ok "Hook mode: ${_edit_hm}"
+        _edit_changed=true
+        ;;
+      *) warn "Invalid hook mode '${_edit_hm}', skipped" ;;
+    esac
+  fi
+
+  if [[ "$_edit_user" != "$_FM_USER" ]]; then
+    fleet_set ".machines.\"${machine}\".user" "\"${_edit_user}\""
+    ok "User: ${_edit_user}"
+    _edit_changed=true
+  fi
+
+  if [[ "$_edit_host" != "$_FM_HOST" ]]; then
+    fleet_set ".machines.\"${machine}\".host" "\"${_edit_host}\""
+    ok "Host: ${_edit_host}"
+    _edit_changed=true
+  fi
+
+  if [[ "$_edit_port" != "$_FM_PORT" ]]; then
+    fleet_set ".machines.\"${machine}\".port" "${_edit_port}"
+    ok "Port: ${_edit_port}"
+    _edit_changed=true
+  fi
+
+  if [[ "$_edit_changed" == "false" ]]; then
+    info "No changes"
+  fi
+
+  echo ""
+  printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+  IFS= read -rsn1 || true
+}
+
+# ── Machine detail menu ──
+
+_fleet_machine_detail() {
+  local machine="$1"
+
+  while true; do
+    _fleet_load_machine "$machine"
+
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${WHITE}${machine}${RESET}"
+    echo ""
+
+    local w=$(( TERM_COLS - 4 ))
+    (( w > 50 )) && w=50
+    (( w < 10 )) && w=10
+    local inner=$(( w - 2 ))
+
+    # Info rows
+    printf '  %b%-14s%b %s\n' "${DIM}" "Host:" "${RESET}" "${_FM_USER}@${_FM_HOST}:${_FM_PORT}"
+    printf '  %b%-14s%b %s\n' "${DIM}" "Mode:" "${RESET}" "$_FM_MODE"
+    printf '  %b%-14s%b %s\n' "${DIM}" "Transport:" "${RESET}" "$_FM_TRANSPORT"
+    printf '  %b%-14s%b %s\n' "${DIM}" "Hook mode:" "${RESET}" "$_FM_HOOK_MODE"
+    [[ -n "$_FM_PROJECT_DIR" ]] && printf '  %b%-14s%b %s\n' "${DIM}" "Project dir:" "${RESET}" "$_FM_PROJECT_DIR"
+    echo ""
+
+    local actions=()
+    actions[${#actions[@]}]="Test connection"
+    actions[${#actions[@]}]="Edit"
+
+    # Pair only for muster mode
+    if [[ "$_FM_MODE" == "muster" ]]; then
+      actions[${#actions[@]}]="Pair token"
+    fi
+
+    # Setup user only for SSH
+    if [[ "$_FM_TRANSPORT" == "ssh" ]]; then
+      actions[${#actions[@]}]="Setup deploy user"
+    fi
+
+    # Sync hooks only for sync mode
+    if [[ "$_FM_HOOK_MODE" == "sync" ]]; then
+      actions[${#actions[@]}]="Sync hooks"
+    fi
+
+    actions[${#actions[@]}]="Trust key"
+    actions[${#actions[@]}]="Remove"
+    actions[${#actions[@]}]="Back"
+
+    menu_select "$machine" "${actions[@]}"
+
+    case "$MENU_RESULT" in
+      "Test connection")
+        _fleet_cmd_test "$machine"
+        echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Edit")
+        _fleet_edit_tui "$machine"
+        ;;
+      "Pair token")
+        echo ""
+        printf '  Paste token: '
+        local _pair_tok=""
+        IFS= read -rs _pair_tok
+        echo ""
+        if [[ -n "$_pair_tok" ]]; then
+          fleet_token_set "$machine" "$_pair_tok"
+          start_spinner "Verifying..."
+          if fleet_verify_pair "$machine"; then
+            stop_spinner
+            ok "Token verified — ${machine} is paired"
+          else
+            stop_spinner
+            warn "Token stored but verification failed"
+          fi
+        else
+          info "Cancelled"
+        fi
+        echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Setup deploy user")
+        source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+        _fleet_cmd_setup_user "$machine"
+        echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Sync hooks")
+        source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+        _fleet_sync_one "$machine" "false" ""
+        echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Trust key")
+        _fleet_cmd_trust_key "$machine"
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Remove")
+        printf '  %bRemove %s? [y/N]%b ' "${YELLOW}" "$machine" "${RESET}"
+        local _rm_confirm=""
+        IFS= read -rsn1 _rm_confirm || true
+        echo ""
+        case "$_rm_confirm" in
+          y|Y)
+            fleet_remove_machine "$machine"
+            return 0
+            ;;
+        esac
+        ;;
+      "Back"|"__back__")
+        return 0
+        ;;
+    esac
+  done
+}
+
+# ── Manage machines submenu ──
+
+_fleet_manage_machines() {
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Manage Machines${RESET}"
+    echo ""
+
+    local actions=()
+    while IFS= read -r _mm; do
+      [[ -z "$_mm" ]] && continue
+      actions[${#actions[@]}]="$_mm"
+    done < <(fleet_machines)
+
+    actions[${#actions[@]}]="Add machine"
+    actions[${#actions[@]}]="Back"
+
+    menu_select "Machines" "${actions[@]}"
+
+    case "$MENU_RESULT" in
+      "Add machine")
+        _fleet_add_tui
+        ;;
+      "Back"|"__back__")
+        return 0
+        ;;
+      *)
+        # Check if it's a machine name
+        local _mm_exists
+        _mm_exists=$(fleet_get ".machines.\"${MENU_RESULT}\" // empty" 2>/dev/null)
+        if [[ -n "$_mm_exists" ]]; then
+          _fleet_machine_detail "$MENU_RESULT"
+        fi
+        ;;
+    esac
+  done
+}
+
+# ── Sync hooks submenu ──
+
+_fleet_sync_menu() {
+  source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Sync Hooks${RESET}"
+    echo ""
+
+    local actions=()
+    actions[${#actions[@]}]="Sync all"
+
+    while IFS= read -r _sm; do
+      [[ -z "$_sm" ]] && continue
+      actions[${#actions[@]}]="$_sm"
+    done < <(fleet_machines)
+
+    actions[${#actions[@]}]="Dry run all"
+    actions[${#actions[@]}]="Back"
+
+    menu_select "Sync" "${actions[@]}"
+
+    case "$MENU_RESULT" in
+      "Sync all")
+        _fleet_cmd_sync --all
+        echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Dry run all")
+        _fleet_cmd_sync --all --dry-run
+        echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Back"|"__back__")
+        return 0
+        ;;
+      *)
+        # Single machine sync
+        local _sm_exists
+        _sm_exists=$(fleet_get ".machines.\"${MENU_RESULT}\" // empty" 2>/dev/null)
+        if [[ -n "$_sm_exists" ]]; then
+          _fleet_sync_one "$MENU_RESULT" "false" ""
+          echo ""
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+    esac
+  done
+}
+
+# ── Signing keys submenu ──
+
+_fleet_signing_menu() {
+  source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Signing Keys${RESET}"
+    echo ""
+
+    # Show local key info
+    if [[ -f "$_PAYLOAD_PUBKEY" ]]; then
+      local _sk_fp _sk_algo
+      _sk_fp=$(payload_fingerprint 2>/dev/null || echo "unknown")
+      _sk_algo=$(cat "$_PAYLOAD_KEYTYPE_FILE" 2>/dev/null || echo "unknown")
+      printf '  %bLocal key:%b %s (%s)\n' "${DIM}" "${RESET}" "$_sk_fp" "$_sk_algo"
+    else
+      printf '  %bNo signing key generated%b\n' "${DIM}" "${RESET}"
+    fi
+    echo ""
+
+    local actions=()
+    actions[${#actions[@]}]="Generate keypair"
+    actions[${#actions[@]}]="Trust key on..."
+    actions[${#actions[@]}]="List keys on..."
+    actions[${#actions[@]}]="Revoke key on..."
+    actions[${#actions[@]}]="Back"
+
+    menu_select "Signing" "${actions[@]}"
+
+    case "$MENU_RESULT" in
+      "Generate keypair")
+        _fleet_cmd_keygen
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Trust key on...")
+        if _fleet_pick_machine "Trust key on"; then
+          _fleet_cmd_trust_key "$MENU_RESULT"
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "List keys on...")
+        if _fleet_pick_machine "List keys on"; then
+          _fleet_cmd_list_keys "$MENU_RESULT"
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "Revoke key on...")
+        if _fleet_pick_machine "Revoke key on"; then
+          local _rk_machine="$MENU_RESULT"
+          printf '  Label to revoke: '
+          local _rk_label=""
+          IFS= read -r _rk_label
+          if [[ -n "$_rk_label" ]]; then
+            _fleet_cmd_revoke_key "$_rk_machine" --label "$_rk_label"
+          fi
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+        fi
+        ;;
+      "Back"|"__back__")
+        return 0
+        ;;
+    esac
+  done
+}
+
 # ── Interactive fleet manager (from dashboard or bare `muster fleet`) ──
 
 _fleet_cmd_manager() {
+  # No fleet config — offer init
   if ! fleet_load_config; then
-    info "No remotes.json found. Set up fleet via CLI:"
-    echo ""
-    printf '%b\n' "  ${DIM}muster fleet init${RESET}"
-    printf '%b\n' "  ${DIM}muster fleet add <name> user@host [--mode muster|push]${RESET}"
-    printf '%b\n' "  ${DIM}muster fleet --help${RESET}"
-    echo ""
-    return 0
+    while true; do
+      clear
+      echo ""
+      printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Fleet${RESET}"
+      printf '%b\n' "  ${DIM}No fleet configured${RESET}"
+      echo ""
+
+      menu_select "Fleet" "Initialize fleet" "Back"
+
+      case "$MENU_RESULT" in
+        "Initialize fleet")
+          fleet_init
+          echo ""
+          printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+          IFS= read -rsn1 || true
+          # Reload and continue to main loop if init succeeded
+          if fleet_load_config; then
+            break
+          fi
+          ;;
+        "Back"|"__back__")
+          return 0
+          ;;
+      esac
+    done
   fi
 
   while true; do
@@ -175,17 +668,43 @@ _fleet_cmd_manager() {
     machines=$(fleet_machines)
 
     if [[ -z "$machines" ]]; then
-      printf '%b\n' "  ${DIM}Add machines via CLI: muster fleet add <name> user@host${RESET}"
-      echo ""
-      return 0
+      # No machines yet — offer add
+      local _init_actions=()
+      _init_actions[${#_init_actions[@]}]="Add machine"
+      _init_actions[${#_init_actions[@]}]="Back"
+
+      menu_select "Fleet" "${_init_actions[@]}"
+
+      case "$MENU_RESULT" in
+        "Add machine")
+          _fleet_add_tui
+          ;;
+        "Back"|"__back__")
+          return 0
+          ;;
+      esac
+      continue
     fi
 
-    # Operations menu (no CRUD — that's CLI only)
+    # Check if any machine has sync mode
+    local _has_sync=false
+    while IFS= read -r _hm; do
+      [[ -z "$_hm" ]] && continue
+      _fleet_load_machine "$_hm"
+      [[ "$_FM_HOOK_MODE" == "sync" ]] && _has_sync=true
+    done <<< "$machines"
+
+    # Full operations menu
     local actions=()
     actions[${#actions[@]}]="Deploy"
     actions[${#actions[@]}]="Status"
     actions[${#actions[@]}]="Test connections"
     actions[${#actions[@]}]="Rollback"
+    actions[${#actions[@]}]="Manage machines"
+    if [[ "$_has_sync" == "true" ]]; then
+      actions[${#actions[@]}]="Sync hooks"
+    fi
+    actions[${#actions[@]}]="Signing"
     actions[${#actions[@]}]="Back"
 
     menu_select "Fleet" "${actions[@]}"
@@ -214,6 +733,15 @@ _fleet_cmd_manager() {
         echo ""
         printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
         IFS= read -rsn1 || true
+        ;;
+      "Manage machines")
+        _fleet_manage_machines
+        ;;
+      "Sync hooks")
+        _fleet_sync_menu
+        ;;
+      "Signing")
+        _fleet_signing_menu
         ;;
       "Back"|__back__)
         return 0

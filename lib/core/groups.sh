@@ -208,7 +208,7 @@ groups_add_local() {
 # Args: name host user [port] [identity] [project_dir] [cloud] [auth_method] [auth_mode]
 groups_add_remote() {
   local name="$1" host="$2" user="$3" port="${4:-22}" identity="${5:-}" project_dir="${6:-}"
-  local cloud="${7:-false}" auth_method="${8:-}" auth_mode="${9:-}"
+  local cloud="${7:-false}" auth_method="${8:-}" auth_mode="${9:-}" hook_mode="${10:-manual}"
   _groups_ensure_file
 
   if ! groups_exists "$name"; then
@@ -241,7 +241,8 @@ groups_add_remote() {
     --argjson cloud "$([ "$cloud" == "true" ] && echo true || echo false)" \
     --arg auth_method "$auth_method" \
     --arg auth_mode "$auth_mode" \
-    '{host: $host, user: $user, port: $port, type: "remote", cloud: $cloud} +
+    --arg hook_mode "$hook_mode" \
+    '{host: $host, user: $user, port: $port, type: "remote", cloud: $cloud, hook_mode: $hook_mode} +
      (if $auth_method != "" then
        {auth: ({method: $auth_method} +
          (if $auth_method == "key" and $identity != "" then {identity_file: $identity} else {} end) +

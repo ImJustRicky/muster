@@ -491,9 +491,9 @@ cmd_settings() {
     echo ""
 
     if [[ "$_has_project" == "true" ]]; then
-      menu_select "Settings" "Project Settings" "Muster Settings" "Updates" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
+      menu_select "Settings" "Project Settings" "Muster Settings" "Scanner Exclude" "Deploy Password" "Updates" "Hook Security" "Auth Tokens" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     else
-      menu_select "Settings" "Muster Settings" "Updates" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
+      menu_select "Settings" "Muster Settings" "Scanner Exclude" "Deploy Password" "Updates" "Hook Security" "Auth Tokens" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     fi
 
     case "$MENU_RESULT" in
@@ -503,11 +503,22 @@ cmd_settings() {
       "Muster Settings")
         _settings_muster_global
         ;;
+      "Scanner Exclude")
+        _settings_scanner_exclude
+        ;;
+      "Deploy Password")
+        _settings_deploy_password
+        ;;
       "Updates")
         _settings_updates
         ;;
       "Hook Security")
         _settings_hook_security
+        ;;
+      "Auth Tokens")
+        source "$MUSTER_ROOT/lib/core/auth.sh"
+        source "$MUSTER_ROOT/lib/commands/auth.sh"
+        _auth_cmd_manager
         ;;
       "Fleet Groups")
         _group_cmd_manager
