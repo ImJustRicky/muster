@@ -688,11 +688,57 @@ $(cat "$_hf" 2>/dev/null)"
         elif (( _fleet_ok > 0 )); then
           _doc_warn "Fleet: ${_fleet_ok}/${_fleet_total} reachable"
         fi
+
+        # Fleet agent checks
+        local _agent_ok=0 _agent_stale=0 _agent_stopped=0 _agent_total=0
+        while IFS= read -r _am; do
+          [[ -z "$_am" ]] && continue
+          local _ai
+          _ai=$(jq -r --arg n "$_am" '.machines[$n].agent_installed // false' "$_fleet_cfg" 2>/dev/null)
+          [[ "$_ai" != "true" ]] && continue
+          _agent_total=$(( _agent_total + 1 ))
+
+          # Check PID
+          local _apid
+          _apid=$(fleet_exec "$_am" "cat ~/.muster/agent/agent.pid 2>/dev/null && kill -0 \$(cat ~/.muster/agent/agent.pid 2>/dev/null) 2>/dev/null && echo ok" 2>/dev/null)
+          if [[ "$_apid" != *"ok"* ]]; then
+            _agent_stopped=$(( _agent_stopped + 1 ))
+            _doc_warn "Fleet agent stopped: ${_am}"
+          else
+            _agent_ok=$(( _agent_ok + 1 ))
+          fi
+        done <<< "$_fleet_machines"
+
+        if (( _agent_total > 0 )); then
+          if (( _agent_stopped == 0 )); then
+            _doc_pass "Fleet agents: all ${_agent_ok} running"
+          else
+            _doc_warn "Fleet agents: ${_agent_stopped}/${_agent_total} stopped"
+          fi
+        fi
       fi
     fi
 
     if [[ "$_has_checks" == "false" ]]; then
       _doc_pass "No remote connections configured"
+    fi
+
+    # App file integrity
+    if [[ -f "${MUSTER_ROOT}/.muster.manifest" ]]; then
+      source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+      source "$MUSTER_ROOT/lib/core/app_verify.sh"
+      if _app_verify_full >/dev/null 2>&1; then
+        _doc_pass "App integrity: all files verified"
+      else
+        _doc_warn "App integrity: files modified"
+        _doc_detail "Run 'muster verify' for details"
+        if [[ "$fix" == "true" ]]; then
+          _app_manifest_generate
+          _doc_detail "Manifest regenerated (re-sign with 'make manifest-sign')"
+        fi
+      fi
+    else
+      _doc_pass "App integrity: no manifest (development install)"
     fi
   }
 

@@ -289,6 +289,17 @@ _update_apply_release() {
         printf '%s\n%s\n%s\n%s\n' "$(date +%s)" "current" "$_MUSTER_LATEST_TAG" "" > "$_MUSTER_UPDATE_CACHE"
         MUSTER_UPDATE_AVAILABLE="false"
 
+        # Regenerate integrity manifest (snapshot of trusted code from official source)
+        if [[ -f "${MUSTER_ROOT}/lib/core/app_verify.sh" ]]; then
+          source "$MUSTER_ROOT/lib/core/app_verify.sh"
+          _app_manifest_generate
+          # Re-sign if payload keys exist
+          if [[ -f "$HOME/.muster/fleet/keys/payload.key.pem" ]]; then
+            source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+            _app_manifest_sign 2>/dev/null
+          fi
+        fi
+
         echo ""
         ok "Updated to ${_MUSTER_LATEST_TAG}"
         echo ""
@@ -349,6 +360,15 @@ _update_apply_source() {
         local new_ver
         new_ver=$(grep 'MUSTER_VERSION=' "${MUSTER_ROOT}/bin/muster" 2>/dev/null \
           | head -1 | sed 's/.*MUSTER_VERSION="//;s/".*//')
+
+        # Regenerate integrity manifest (snapshot of trusted code from official source)
+        if [[ -f "${MUSTER_ROOT}/lib/core/app_verify.sh" ]]; then
+          source "$MUSTER_ROOT/lib/core/app_verify.sh"
+          _app_manifest_generate
+          if [[ -f "$_PAYLOAD_PRIVKEY" ]]; then
+            _app_manifest_sign 2>/dev/null
+          fi
+        fi
 
         echo ""
         ok "Updated to v${new_ver:-unknown}"

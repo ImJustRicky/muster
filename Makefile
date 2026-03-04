@@ -1,4 +1,4 @@
-.PHONY: test lint
+.PHONY: test lint manifest manifest-sign manifest-verify release
 
 test:
 	@bash tests/test_runner.sh
@@ -19,3 +19,14 @@ lint:
 	else \
 		echo "shellcheck not installed, skipping (brew install shellcheck)"; \
 	fi
+
+manifest:
+	@bash -c 'export MUSTER_ROOT=. && source lib/core/app_verify.sh && _app_manifest_generate'
+	@echo "Generated .muster.manifest"
+
+manifest-sign: manifest
+	@bash -c 'export MUSTER_ROOT=. && source lib/core/colors.sh && source lib/core/logger.sh && source lib/core/payload_sign.sh && source lib/core/app_verify.sh && _app_manifest_sign'
+	@echo "Signed .muster.manifest.sig"
+
+manifest-verify:
+	@bash -c 'export MUSTER_ROOT=. && source lib/core/colors.sh && source lib/core/logger.sh && source lib/core/payload_sign.sh && source lib/core/app_verify.sh && _app_verify_full && echo "All files verified" || echo "Verification failed"'

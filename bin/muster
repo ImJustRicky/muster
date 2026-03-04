@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/Muster-dev/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.48"
+MUSTER_VERSION="0.5.50"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -15,6 +15,21 @@ while [[ -L "$_muster_self" ]]; do
 done
 MUSTER_ROOT="$(cd "$(dirname "$_muster_self")/.." && pwd)"
 unset _muster_self _muster_dir
+
+# ── App integrity check (pre-library, minimal deps) ──
+if [[ -f "$MUSTER_ROOT/.muster.manifest.sig" ]]; then
+  source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+  source "$MUSTER_ROOT/lib/core/app_verify.sh"
+  if ! _app_verify_quick; then
+    printf '\033[31m  ✗ App integrity check failed\033[0m\n' >&2
+    printf '\033[2m  Run "muster verify" for details\033[0m\n' >&2
+    # Strict mode check (inline grep — config.sh not loaded yet)
+    if [[ -f "$HOME/.muster/settings.json" ]]; then
+      _strict=$(grep -o '"integrity_strict"[[:space:]]*:[[:space:]]*true' "$HOME/.muster/settings.json" 2>/dev/null || true)
+      [[ -n "$_strict" ]] && exit 1
+    fi
+  fi
+fi
 
 # ── Global flags ──
 MUSTER_QUIET="${MUSTER_QUIET:-false}"
@@ -172,6 +187,13 @@ case "${1:-}" in
     source "$MUSTER_ROOT/lib/commands/trust.sh"
     cmd_trust "$@"
     ;;
+  verify)
+    shift
+    source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+    source "$MUSTER_ROOT/lib/core/app_verify.sh"
+    source "$MUSTER_ROOT/lib/commands/verify.sh"
+    cmd_verify "$@"
+    ;;
   update|--update)
     source "$MUSTER_ROOT/lib/core/updater.sh"
     update_apply
@@ -207,6 +229,7 @@ case "${1:-}" in
     echo "  skill       Manage addon skills (add, create, remove, list, run)"
     echo "  projects    List registered projects (--prune to clean stale)"
     echo "  auth        Manage API tokens (create, list, revoke, verify)"
+    echo "  verify      Verify app file integrity (--quick for signature only)"
     echo "  update      Update muster (release channel by default, see settings)"
     echo ""
     echo "Options:"

@@ -85,6 +85,21 @@ cmd_fleet() {
       shift
       _fleet_cmd_edit "$@"
       ;;
+    install-agent)
+      shift
+      source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+      _fleet_cmd_install_agent "$@"
+      ;;
+    agent-status)
+      shift
+      source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+      _fleet_cmd_agent_status "$@"
+      ;;
+    remove-agent)
+      shift
+      source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+      _fleet_cmd_remove_agent "$@"
+      ;;
     --help|-h)
       _fleet_cmd_help
       ;;
@@ -136,6 +151,11 @@ _fleet_cmd_help() {
   echo "  trust-key <name>              Distribute public key to target"
   echo "  list-keys [name]              Show trusted signing keys on target"
   echo "  revoke-key <name> --label X   Remove a signing key from target"
+  echo ""
+  echo "Agent:"
+  echo "  install-agent <name>          Install monitoring agent on target"
+  echo "  agent-status [name]           Show agent health data"
+  echo "  remove-agent <name>           Remove agent from target"
   echo ""
   echo "Transport:"
   echo "  SSH (default)     Direct SSH connection to each machine"
@@ -386,6 +406,16 @@ _fleet_machine_detail() {
       actions[${#actions[@]}]="Sync hooks"
     fi
 
+    # Agent
+    local _md_agent_installed
+    _md_agent_installed=$(fleet_get ".machines.\"${machine}\".agent_installed // false" 2>/dev/null)
+    if [[ "$_md_agent_installed" == "true" ]]; then
+      actions[${#actions[@]}]="Agent status"
+      actions[${#actions[@]}]="Remove agent"
+    else
+      actions[${#actions[@]}]="Install agent"
+    fi
+
     actions[${#actions[@]}]="Trust key"
     actions[${#actions[@]}]="Remove"
     actions[${#actions[@]}]="Back"
@@ -436,6 +466,24 @@ _fleet_machine_detail() {
         source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
         _fleet_sync_one "$machine" "false" ""
         echo ""
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Agent status")
+        source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+        _fleet_cmd_agent_status "$machine"
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Install agent")
+        source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+        _fleet_cmd_install_agent "$machine"
+        printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Remove agent")
+        source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+        _fleet_cmd_remove_agent "$machine"
         printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
         IFS= read -rsn1 || true
         ;;
@@ -705,6 +753,7 @@ _fleet_cmd_manager() {
       actions[${#actions[@]}]="Sync hooks"
     fi
     actions[${#actions[@]}]="Signing"
+    actions[${#actions[@]}]="Agent"
     actions[${#actions[@]}]="Back"
 
     menu_select "Fleet" "${actions[@]}"
@@ -742,6 +791,10 @@ _fleet_cmd_manager() {
         ;;
       "Signing")
         _fleet_signing_menu
+        ;;
+      "Agent")
+        source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+        _fleet_agent_menu
         ;;
       "Back"|__back__)
         return 0
@@ -891,6 +944,21 @@ _fleet_cmd_add() {
         y|Y)
           source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
           _fleet_sync_one "$name" "false" ""
+          ;;
+      esac
+    fi
+
+    # Offer agent install
+    if [[ -t 0 ]]; then
+      echo ""
+      printf '  Install monitoring agent? [y/N] '
+      local _agent_reply
+      IFS= read -rsn1 _agent_reply || true
+      echo ""
+      case "$_agent_reply" in
+        y|Y)
+          source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
+          _fleet_cmd_install_agent "$name"
           ;;
       esac
     fi

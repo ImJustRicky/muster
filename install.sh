@@ -136,6 +136,18 @@ chmod +x "${INSTALL_DIR}/repo/bin/muster" "${INSTALL_DIR}/repo/bin/muster-mcp"
 ln -sf "${INSTALL_DIR}/repo/bin/muster" "${BIN_DIR}/muster"
 ln -sf "${INSTALL_DIR}/repo/bin/muster-mcp" "${BIN_DIR}/muster-mcp"
 
+# Generate file integrity manifest (snapshot of trusted code from official source)
+if [[ -f "${INSTALL_DIR}/repo/lib/core/app_verify.sh" ]]; then
+  if (cd "${INSTALL_DIR}/repo" && bash -c 'export MUSTER_ROOT=. && source lib/core/app_verify.sh && _app_manifest_generate') 2>/dev/null; then
+    printf '  %b✓%b File integrity manifest generated\n' "$_G" "$_R"
+    # Sign if payload keys exist
+    if [[ -f "$HOME/.muster/fleet/keys/payload.key.pem" ]]; then
+      (cd "${INSTALL_DIR}/repo" && bash -c 'export MUSTER_ROOT=. && source lib/core/colors.sh && source lib/core/logger.sh && source lib/core/payload_sign.sh && source lib/core/app_verify.sh && _app_manifest_sign') 2>/dev/null \
+        && printf '  %b✓%b Manifest signed\n' "$_G" "$_R"
+    fi
+  fi
+fi
+
 # Smoke test
 _ver=""
 if "${BIN_DIR}/muster" --version >/dev/null 2>&1; then

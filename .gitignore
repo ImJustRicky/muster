@@ -2,5 +2,7 @@
 *.log
 .muster/logs/
 .muster/vault
+.muster.manifest
+.muster.manifest.sig
 
 
