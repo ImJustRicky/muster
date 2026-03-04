@@ -60,12 +60,12 @@ _settings_global_cli() {
 
   # Validate key
   case "$key" in
-    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|minimal|machine_role|deploy_password) ;;
+    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|update_mode|minimal|machine_role|deploy_password) ;;
     *)
       err "Unknown global setting: ${key}"
       echo "  Valid keys: tui_mode, color_mode, log_color_mode, log_retention_days, default_stack,"
-      echo "              default_health_timeout, scanner_exclude, update_check, minimal, machine_role,"
-      echo "              deploy_password"
+      echo "              default_health_timeout, scanner_exclude, update_check, update_mode, minimal,"
+      echo "              machine_role, deploy_password"
       return 1
       ;;
   esac
@@ -171,6 +171,13 @@ _settings_global_cli() {
       case "$value" in
         on|off) ;;
         *) err "update_check must be on or off"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
+      ;;
+    update_mode)
+      case "$value" in
+        release|source) ;;
+        *) err "update_mode must be release or source"; return 1 ;;
       esac
       global_config_set "$key" "\"$value\""
       ;;

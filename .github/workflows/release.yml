@@ -1,0 +1,60 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ver=${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches MUSTER_VERSION
+        run: |
+          SCRIPT_VER=$(grep 'MUSTER_VERSION=' bin/muster | head -1 \
+            | sed 's/.*MUSTER_VERSION="//;s/".*//')
+          TAG_VER="${{ steps.version.outputs.ver }}"
+          if [[ "$SCRIPT_VER" != "$TAG_VER" ]]; then
+            echo "::error::Tag v${TAG_VER} does not match MUSTER_VERSION=${SCRIPT_VER} in bin/muster"
+            exit 1
+          fi
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VER="${{ steps.version.outputs.ver }}"
+          {
+            echo 'notes<<CHANGELOG_EOF'
+            awk "/^## \[${VER}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "muster ${{ steps.version.outputs.tag }}"
+          body: ${{ steps.changelog.outputs.notes }}
+          draft: false
+          prerelease: false

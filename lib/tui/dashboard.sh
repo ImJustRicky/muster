@@ -303,7 +303,9 @@ _dashboard_home() {
     # Collect background update check result
     update_check_collect
     if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
-      printf '  %b!%b %bA new version of muster is available%b\n' "${YELLOW}" "${RESET}" "${DIM}" "${RESET}"
+      local _banner_ver=""
+      [[ -n "$_MUSTER_LATEST_TAG" ]] && _banner_ver=" (${_MUSTER_LATEST_TAG})"
+      printf '  %b!%b %bUpdate available%s — run muster update%b\n' "${YELLOW}" "${RESET}" "${DIM}" "$_banner_ver" "${RESET}"
       echo ""
     fi
 
@@ -604,7 +606,9 @@ cmd_dashboard() {
     # Collect background update check result
     update_check_collect
     if [[ "$MUSTER_UPDATE_AVAILABLE" == "true" ]]; then
-      printf '  %b!%b %bA new version of muster is available%b\n' "${YELLOW}" "${RESET}" "${DIM}" "${RESET}"
+      local _banner_ver=""
+      [[ -n "$_MUSTER_LATEST_TAG" ]] && _banner_ver=" (${_MUSTER_LATEST_TAG})"
+      printf '  %b!%b %bUpdate available%s — run muster update%b\n' "${YELLOW}" "${RESET}" "${DIM}" "$_banner_ver" "${RESET}"
       echo ""
     fi
 

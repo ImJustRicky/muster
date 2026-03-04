@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/Muster-dev/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.43"
+MUSTER_VERSION="0.5.44"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -207,7 +207,7 @@ case "${1:-}" in
     echo "  skill       Manage addon skills (add, create, remove, list, run)"
     echo "  projects    List registered projects (--prune to clean stale)"
     echo "  auth        Manage API tokens (create, list, revoke, verify)"
-    echo "  update      Update muster to latest version"
+    echo "  update      Update muster (release channel by default, see settings)"
     echo ""
     echo "Options:"
     echo "  -v, --version   Show version"

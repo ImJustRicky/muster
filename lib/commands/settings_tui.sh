@@ -174,7 +174,7 @@ _toggle_select() {
 
 _settings_muster_global() {
   while true; do
-    local color_mode log_color_mode log_retention default_stack health_timeout update_check scanner_ex
+    local color_mode log_color_mode log_retention default_stack health_timeout update_check update_mode scanner_ex
 
     color_mode=$(global_config_get "color_mode" 2>/dev/null)
     : "${color_mode:=auto}"
@@ -188,6 +188,8 @@ _settings_muster_global() {
     : "${health_timeout:=10}"
     update_check=$(global_config_get "update_check" 2>/dev/null)
     : "${update_check:=on}"
+    update_mode=$(global_config_get "update_mode" 2>/dev/null)
+    : "${update_mode:=release}"
     scanner_ex=$(global_config_get "scanner_exclude" 2>/dev/null)
     if [[ "$scanner_ex" == "[]" || -z "$scanner_ex" ]]; then
       scanner_ex="(none)"
@@ -236,43 +238,51 @@ _settings_muster_global() {
       *)   _TOG_STATES[3]=0 ;;
     esac
 
+    # Update mode: release / source
+    _TOG_LABELS[4]="Update channel"
+    _TOG_OPTIONS[4]="release|source"
+    case "$update_mode" in
+      source) _TOG_STATES[4]=1 ;;
+      *)      _TOG_STATES[4]=0 ;;
+    esac
+
     # Default stack: bare / docker / compose / k8s
-    _TOG_LABELS[4]="Default stack"
-    _TOG_OPTIONS[4]="bare|docker|compose|k8s"
+    _TOG_LABELS[5]="Default stack"
+    _TOG_OPTIONS[5]="bare|docker|compose|k8s"
     case "$default_stack" in
-      docker)  _TOG_STATES[4]=1 ;;
-      compose) _TOG_STATES[4]=2 ;;
-      k8s)     _TOG_STATES[4]=3 ;;
-      *)       _TOG_STATES[4]=0 ;;
+      docker)  _TOG_STATES[5]=1 ;;
+      compose) _TOG_STATES[5]=2 ;;
+      k8s)     _TOG_STATES[5]=3 ;;
+      *)       _TOG_STATES[5]=0 ;;
     esac
 
     # Log retention days: 3 / 7 / 14 / 30 / 90
-    _TOG_LABELS[5]="Log retention (days)"
-    _TOG_OPTIONS[5]="3|7|14|30|90"
+    _TOG_LABELS[6]="Log retention (days)"
+    _TOG_OPTIONS[6]="3|7|14|30|90"
     case "$log_retention" in
-      3)  _TOG_STATES[5]=0 ;;
-      14) _TOG_STATES[5]=2 ;;
-      30) _TOG_STATES[5]=3 ;;
-      90) _TOG_STATES[5]=4 ;;
-      *)  _TOG_STATES[5]=1 ;;
+      3)  _TOG_STATES[6]=0 ;;
+      14) _TOG_STATES[6]=2 ;;
+      30) _TOG_STATES[6]=3 ;;
+      90) _TOG_STATES[6]=4 ;;
+      *)  _TOG_STATES[6]=1 ;;
     esac
 
     # Health timeout: 5 / 10 / 15 / 30 / 60
-    _TOG_LABELS[6]="Health timeout (s)"
-    _TOG_OPTIONS[6]="5|10|15|30|60"
+    _TOG_LABELS[7]="Health timeout (s)"
+    _TOG_OPTIONS[7]="5|10|15|30|60"
     case "$health_timeout" in
-      5)  _TOG_STATES[6]=0 ;;
-      15) _TOG_STATES[6]=2 ;;
-      30) _TOG_STATES[6]=3 ;;
-      60) _TOG_STATES[6]=4 ;;
-      *)  _TOG_STATES[6]=1 ;;
+      5)  _TOG_STATES[7]=0 ;;
+      15) _TOG_STATES[7]=2 ;;
+      30) _TOG_STATES[7]=3 ;;
+      60) _TOG_STATES[7]=4 ;;
+      *)  _TOG_STATES[7]=1 ;;
     esac
 
     echo ""
     _toggle_select "Muster Settings"
 
     # Read back chosen values
-    local new_tui new_color new_log_color new_update new_stack new_retention new_timeout
+    local new_tui new_color new_log_color new_update new_update_mode new_stack new_retention new_timeout
     case $(( _TOG_STATES[0] )) in
       1) new_tui="bash" ;;
       *) new_tui="go" ;;
@@ -292,19 +302,23 @@ _settings_muster_global() {
       *) new_update="on" ;;
     esac
     case $(( _TOG_STATES[4] )) in
+      1) new_update_mode="source" ;;
+      *) new_update_mode="release" ;;
+    esac
+    case $(( _TOG_STATES[5] )) in
       1) new_stack="docker" ;;
       2) new_stack="compose" ;;
       3) new_stack="k8s" ;;
       *) new_stack="bare" ;;
     esac
-    case $(( _TOG_STATES[5] )) in
+    case $(( _TOG_STATES[6] )) in
       0) new_retention=3 ;;
       2) new_retention=14 ;;
       3) new_retention=30 ;;
       4) new_retention=90 ;;
       *) new_retention=7 ;;
     esac
-    case $(( _TOG_STATES[6] )) in
+    case $(( _TOG_STATES[7] )) in
       0) new_timeout=5 ;;
       2) new_timeout=15 ;;
       3) new_timeout=30 ;;
@@ -317,6 +331,7 @@ _settings_muster_global() {
     global_config_set "color_mode" "\"$new_color\""
     global_config_set "log_color_mode" "\"$new_log_color\""
     global_config_set "update_check" "\"$new_update\""
+    global_config_set "update_mode" "\"$new_update_mode\""
     global_config_set "default_stack" "\"$new_stack\""
     global_config_set "log_retention_days" "$new_retention"
     global_config_set "default_health_timeout" "$new_timeout"
