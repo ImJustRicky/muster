@@ -131,7 +131,8 @@ cmd_rollback() {
   local _rb_timeout="${MUSTER_DEPLOY_TIMEOUT:-120}"
 
   while true; do
-    local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
+    local log_file
+    log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
     start_spinner "Rolling back ${name}..."
     if remote_is_enabled "$target"; then

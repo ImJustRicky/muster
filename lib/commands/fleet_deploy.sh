@@ -1,10 +1,12 @@
 #\!/usr/bin/env bash
 # muster/lib/commands/fleet_deploy.sh — Fleet deploy orchestration
 # Extracted from fleet.sh: deploy, dry-run, sequential, parallel, summary.
+# shellcheck disable=SC2034
 
 # ── deploy ──
 
 _fleet_cmd_deploy() {
+  # shellcheck disable=SC2034
   local target="" parallel=false dry_run=false json_mode=false
 
   while [[ $# -gt 0 ]]; do
@@ -219,7 +221,8 @@ _fleet_deploy_sequential() {
     progress_bar "$current" "$total" "Fleet: ${machine}..."
     echo ""
 
-    local log_file="${log_dir}/fleet-${machine}-$(date +%Y%m%d-%H%M%S).log"
+    local log_file
+    log_file="${log_dir}/fleet-${machine}-$(date +%Y%m%d-%H%M%S).log"
     local rc=0
 
     while true; do
@@ -413,7 +416,8 @@ _fleet_deploy_parallel() {
     local i=$batch_start
     while (( i < batch_end )); do
       local machine="${machines[$i]}"
-      local log_file="${log_dir}/fleet-${machine}-$(date +%Y%m%d-%H%M%S).log"
+      local log_file
+      log_file="${log_dir}/fleet-${machine}-$(date +%Y%m%d-%H%M%S).log"
       local status_file="${tmp_dir}/${machine}.status"
 
       (

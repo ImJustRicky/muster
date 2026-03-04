@@ -118,6 +118,7 @@ _setup_screen() {
     _SETUP_SESSION_PHRASE=$(_setup_pick_phrase)
   fi
   _SETUP_CUR_PHRASE="$_SETUP_SESSION_PHRASE"
+  # shellcheck disable=SC2034
   MUSTER_REDRAW_FN="_setup_redraw"
   _setup_screen_inner
 }
@@ -1648,6 +1649,7 @@ _setup_manual_flow() {
     _SETUP_CUR_SUMMARY=("")
     _setup_screen 3 "Your stack"
     menu_select "What runs it?" "Docker" "Node.js" "Go" "Python" "Rust" "Other"
+    # shellcheck disable=SC2034
     api_type="$MENU_RESULT"
   fi
 

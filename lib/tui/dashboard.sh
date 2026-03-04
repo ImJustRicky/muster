@@ -242,7 +242,7 @@ _dashboard_header() {
           [[ -n "$_id" ]] && _sopts="${_sopts} -i ${_id/#\~/$HOME}"
           [[ "$_p" != "22" ]] && _sopts="${_sopts} -p ${_p}"
 
-          if ssh $_sopts "${_u}@${_h}" "echo ok" &>/dev/null; then
+          if ssh -n $_sopts "${_u}@${_h}" "echo ok" &>/dev/null; then
             printf 'online' > "${_fleet_cache_dir}/${_fm}"
           else
             printf 'offline' > "${_fleet_cache_dir}/${_fm}"
@@ -384,7 +384,8 @@ _dashboard_home() {
         local _gpcount
         _gpcount=$(jq -r --arg g "$_gkey" '.groups[$g].projects | length' "$GROUPS_CONFIG_FILE")
 
-        local _right_text="${_gpcount} project$([ "$_gpcount" != "1" ] && echo "s")"
+        local _right_text
+        _right_text="${_gpcount} project$([ "$_gpcount" != "1" ] && echo "s")"
         local _left_len=$(( ${#_gdisplay} + 4 ))
         local _right_len=${#_right_text}
         local _pad_len=$(( w - _left_len - _right_len - 2 ))
@@ -491,6 +492,7 @@ _dashboard_home() {
       "Setup new project")
         source "$MUSTER_ROOT/lib/commands/setup.sh"
         cmd_setup || true
+        # shellcheck disable=SC2034
         MUSTER_REDRAW_FN=""
         # After setup, check if we now have a config and switch to dashboard
         if find_config &>/dev/null; then
@@ -529,7 +531,7 @@ _dashboard_home() {
           if [[ "$MENU_RESULT" == "${_ungrouped_names[$_si]}" ]]; then
             local _target="${_ungrouped_paths[$_si]}"
             if [[ -d "$_target" ]]; then
-              cd "$_target"
+              cd "$_target" || return
               cmd_dashboard
               return 0
             else
@@ -1042,6 +1044,7 @@ cmd_dashboard() {
 
         if [[ -n "$_run_name" ]]; then
           source "$MUSTER_ROOT/lib/skills/manager.sh"
+          # shellcheck disable=SC2034
           SKILLS_DIR="$_found_skills_dir"
           # Build submenu
           local _skill_opts=()

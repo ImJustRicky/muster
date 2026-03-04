@@ -100,7 +100,7 @@ _build_context_in_dockerignore() {
     fi
     # Wildcard prefix match: "**/dashboard" or "dashboard/**"
     case "$check_dir" in
-      $_pattern) return 0 ;;
+      "$_pattern") return 0 ;;
     esac
   done < "$ignore_file"
 

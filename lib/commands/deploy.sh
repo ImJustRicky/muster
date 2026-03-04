@@ -344,7 +344,8 @@ cmd_deploy() {
       export MUSTER_DEPLOY_STATUS=""
       export MUSTER_SERVICE_NAME="$name"
 
-      local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
+      local log_file
+      log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
 
       printf '{"event":"start","service":"%s","name":"%s","index":%d,"total":%d,"log_file":"%s"}\n' \
         "$svc" "$name" "$current" "$total" "$log_file"
@@ -367,7 +368,7 @@ cmd_deploy() {
           _remote_load_config "$svc"
           _remote_build_opts
           local _gp_cmd="cd ${_REMOTE_PROJECT_DIR:-.} && git pull ${_gp_remote} ${_gp_branch}"
-          # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
+          # shellcheck disable=SC2086
           ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "$_gp_cmd" >/dev/null 2>&1 || _gp_rc=$?
         else
           git pull "$_gp_remote" "$_gp_branch" >/dev/null 2>&1 || _gp_rc=$?
@@ -632,7 +633,8 @@ ${_k8s_env_lines}"
       _SIB_REDRAW_FN="_deploy_redraw_preamble"
 
       while true; do
-        local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
+        local log_file
+        log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
 
         # Auto git pull before deploy hook
         if [[ "$_gp_enabled" == "true" ]]; then
@@ -642,7 +644,7 @@ ${_k8s_env_lines}"
             _remote_load_config "$svc"
             _remote_build_opts
             local _gp_cmd="cd ${_REMOTE_PROJECT_DIR:-.} && git pull ${_gp_remote} ${_gp_branch}"
-            # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
+            # shellcheck disable=SC2086
             _gp_output=$(ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "$_gp_cmd" 2>&1) || _gp_rc=$?
           else
             start_spinner "Pulling ${_gp_remote}/${_gp_branch}"
@@ -735,8 +737,10 @@ ${_k8s_env_lines}"
               echo ""
               _git_deploy_diff "$_git_prev_sha" "$_git_sha"
               # Export diff context for skills (notifications)
-              export MUSTER_GIT_COMMIT_COUNT="$(git rev-list --count "${_git_prev_sha}..${_git_sha}" 2>/dev/null || echo 0)"
-              export MUSTER_GIT_DIFF_SUMMARY="$(git diff --shortstat "${_git_prev_sha}..${_git_sha}" 2>/dev/null || echo '')"
+              MUSTER_GIT_COMMIT_COUNT="$(git rev-list --count "${_git_prev_sha}..${_git_sha}" 2>/dev/null || echo 0)"
+              export MUSTER_GIT_COMMIT_COUNT
+              MUSTER_GIT_DIFF_SUMMARY="$(git diff --shortstat "${_git_prev_sha}..${_git_sha}" 2>/dev/null || echo '')"
+              export MUSTER_GIT_DIFF_SUMMARY
             else
               export MUSTER_GIT_COMMIT_COUNT=""
               export MUSTER_GIT_DIFF_SUMMARY=""

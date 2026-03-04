@@ -142,6 +142,7 @@ menu_select() {
         _menu_clear
         printf '  %b✓%b %s\n' "${GREEN}" "${RESET}" "${options[$selected]}"
         tput cnorm
+        # shellcheck disable=SC2034
         MENU_RESULT="${options[$selected]}"
         return 0
         ;;

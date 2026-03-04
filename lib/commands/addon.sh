@@ -329,6 +329,7 @@ addon_list() {
   printf '  %b%bAddons%b\n' "$BOLD" "$MUSTARD" "$RESET"
   echo ""
 
+  # shellcheck disable=SC2034
   local entry name desc installed ver
   for entry in "${_ADDON_REGISTRY[@]}"; do
     name="$(_addon_field "$entry" 1)"

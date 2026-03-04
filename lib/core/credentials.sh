@@ -114,7 +114,8 @@ _cred_keychain_save() {
   local _store_dir="${HOME}/.muster/.credentials"
   mkdir -p "$_store_dir" 2>/dev/null
   chmod 700 "$_store_dir" 2>/dev/null
-  local _store_file="${_store_dir}/${svc}_$(printf '%s' "$key" | tr '/:@' '___')"
+  local _store_file
+  _store_file="${_store_dir}/${svc}_$(printf '%s' "$key" | tr '/:@' '___')"
   printf '%s' "$val" > "$_store_file" 2>/dev/null
   chmod 600 "$_store_file" 2>/dev/null
   return $?
@@ -135,7 +136,8 @@ _cred_keychain_get() {
   fi
   # Fallback: file store
   local _store_dir="${HOME}/.muster/.credentials"
-  local _store_file="${_store_dir}/${svc}_$(printf '%s' "$key" | tr '/:@' '___')"
+  local _store_file
+  _store_file="${_store_dir}/${svc}_$(printf '%s' "$key" | tr '/:@' '___')"
   if [[ -f "$_store_file" ]]; then
     cat "$_store_file" 2>/dev/null
     return $?

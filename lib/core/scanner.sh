@@ -634,12 +634,14 @@ for item in data.get('items', []):
       has_readiness=$(echo "$container_json" | jq -r '.readinessProbe // empty' 2>/dev/null)
       if [[ -n "$has_readiness" ]]; then
         probe_json=$(echo "$container_json" | jq -r '.readinessProbe' 2>/dev/null)
+        # shellcheck disable=SC2034
         probe_source="readiness"
       else
         local has_liveness=""
         has_liveness=$(echo "$container_json" | jq -r '.livenessProbe // empty' 2>/dev/null)
         if [[ -n "$has_liveness" ]]; then
           probe_json=$(echo "$container_json" | jq -r '.livenessProbe' 2>/dev/null)
+          # shellcheck disable=SC2034
           probe_source="liveness"
         fi
       fi

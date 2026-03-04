@@ -128,7 +128,7 @@ _relay_guard_sanitize_arg() {
 
   # Reject path traversal
   case "$arg" in
-    *../*|*/../*)
+    *../*)
       _relay_guard_log_rejection "path traversal in argument" "" ""
       printf '%b  %bx%b relay guard: argument contains path traversal\n' "" "$RED" "$RESET" >&2
       return 1

@@ -149,7 +149,7 @@ skill_add() {
     # Validate
     if [[ ! -f "${SKILLS_DIR}/${skill_name}/skill.json" ]]; then
       err "Invalid skill: missing skill.json"
-      rm -rf "${SKILLS_DIR}/${skill_name}"
+      rm -rf "${SKILLS_DIR:?}/${skill_name}"
       exit 1
     fi
 
@@ -181,7 +181,7 @@ skill_add() {
       _tmp_preserve=$(mktemp -d) || { err "Failed to create temp dir"; return 1; }
       [[ -f "${SKILLS_DIR}/${skill_name}/config.env" ]] && cp "${SKILLS_DIR}/${skill_name}/config.env" "$_tmp_preserve/"
       [[ -f "${SKILLS_DIR}/${skill_name}/.enabled" ]] && touch "$_tmp_preserve/.enabled"
-      if ! rm -rf "${SKILLS_DIR}/${skill_name}" || ! cp -r "$source" "${SKILLS_DIR}/${skill_name}"; then
+      if ! rm -rf "${SKILLS_DIR:?}/${skill_name}" || ! cp -r "$source" "${SKILLS_DIR:?}/${skill_name}"; then
         err "Failed to update skill '${skill_name}'"
         [[ -n "$_tmp_preserve" && -d "$_tmp_preserve" ]] && rm -rf "$_tmp_preserve"
         return 1
@@ -273,7 +273,7 @@ skill_remove() {
   esac
 
   if [[ -d "${SKILLS_DIR}/${name}" ]]; then
-    rm -rf "${SKILLS_DIR}/${name}"
+    rm -rf "${SKILLS_DIR:?}/${name}"
     ok "Skill '${name}' removed"
   else
     err "Skill '${name}' not found"
@@ -457,7 +457,8 @@ skill_configure() {
 
     if [[ -n "$current_val" ]]; then
       if [[ "$is_secret" == "true" ]]; then
-        local masked="${current_val:0:4}$(printf '%*s' $(( ${#current_val} - 4 )) '' | tr ' ' '*')"
+        local masked
+        masked="${current_val:0:4}$(printf '%*s' $(( ${#current_val} - 4 )) '' | tr ' ' '*')"
         if (( ${#current_val} <= 4 )); then
           masked="****"
         fi
@@ -552,7 +553,8 @@ skill_run() {
 
   # Export context env vars
   if [[ -n "${CONFIG_FILE:-}" ]]; then
-    export MUSTER_PROJECT_DIR="$(dirname "$CONFIG_FILE")"
+    MUSTER_PROJECT_DIR="$(dirname "$CONFIG_FILE")"
+    export MUSTER_PROJECT_DIR
     export MUSTER_CONFIG_FILE="$CONFIG_FILE"
   fi
 
@@ -648,7 +650,8 @@ print('yes' if sys.argv[2] in d.get('hooks',[]) else 'no')
 
         # Export context
         if [[ -n "${CONFIG_FILE:-}" ]]; then
-          export MUSTER_PROJECT_DIR="$(dirname "$CONFIG_FILE")"
+          MUSTER_PROJECT_DIR="$(dirname "$CONFIG_FILE")"
+          export MUSTER_PROJECT_DIR
           export MUSTER_CONFIG_FILE="$CONFIG_FILE"
         fi
         export MUSTER_SERVICE="$svc_name"

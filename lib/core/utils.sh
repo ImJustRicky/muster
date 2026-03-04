@@ -3,10 +3,12 @@
 
 # Terminal size (updated on SIGWINCH)
 TERM_COLS=80
+# shellcheck disable=SC2034
 TERM_ROWS=24
 
 update_term_size() {
   TERM_COLS=$(tput cols 2>/dev/null || echo 80)
+  # shellcheck disable=SC2034
   TERM_ROWS=$(tput lines 2>/dev/null || echo 24)
 }
 update_term_size
@@ -583,7 +585,8 @@ _git_deploy_diff() {
     del=$(echo "$shortstat" | grep -o '[0-9]* deletion' | grep -o '[0-9]*')
     local files=""
     files=$(echo "$shortstat" | grep -o '[0-9]* file' | grep -o '[0-9]*')
-    local stat_line="${files} file$( (( files != 1 )) && echo "s") changed"
+    local stat_line
+    stat_line="${files} file$( (( files != 1 )) && echo "s") changed"
     [[ -n "$ins" ]] && stat_line="${stat_line}, ${GREEN}+${ins}${RESET}"
     [[ -n "$del" ]] && stat_line="${stat_line}, ${RED}-${del}${RESET}"
     printf '%b\n' "    ${DIM}${stat_line}${RESET}"

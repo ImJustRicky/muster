@@ -8,7 +8,7 @@ _diag_run_kubectl() {
   if remote_is_enabled "$svc"; then
     _remote_load_config "$svc"
     _remote_build_opts
-    # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
+    # shellcheck disable=SC2086
     printf '%s\n' "$cmd" | ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "bash -s" 2>/dev/null
   else
     bash -c "$cmd" 2>/dev/null

@@ -645,7 +645,7 @@ $(cat "$_hf" 2>/dev/null)"
       [[ -n "$_ri" ]] && _sopts="${_sopts} -i ${_ri/#\~/$HOME}"
       [[ "$_rp" != "22" ]] && _sopts="${_sopts} -p ${_rp}"
 
-      if ssh $_sopts "${_ru}@${_rh}" "echo ok" &>/dev/null; then
+      if ssh -n $_sopts "${_ru}@${_rh}" "echo ok" &>/dev/null; then
         _doc_pass "SSH reachable: ${_svc} (${_ru}@${_rh})"
       else
         _doc_fail "SSH unreachable: ${_svc} (${_ru}@${_rh})"
@@ -660,6 +660,7 @@ $(cat "$_hf" 2>/dev/null)"
       if [[ -n "$_fleet_machines" ]]; then
         _has_checks=true
         source "$MUSTER_ROOT/lib/core/fleet.sh"
+        # shellcheck disable=SC2034
         FLEET_CONFIG_FILE="$_fleet_cfg"
 
         local _fleet_ok=0 _fleet_fail=0 _fleet_total=0

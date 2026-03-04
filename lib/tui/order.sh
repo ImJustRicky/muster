@@ -138,6 +138,7 @@ order_select() {
           printf '  %b✓%b %b%s.%b %s\n' "${GREEN}" "${RESET}" "${DIM}" "$((i + 1))" "${RESET}" "${items[$i]}"
           i=$((i + 1))
         done
+        # shellcheck disable=SC2034
         ORDER_RESULT=("${items[@]}")
         return 0
         ;;

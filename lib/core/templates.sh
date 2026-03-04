@@ -168,6 +168,7 @@ _setup_copy_hooks() {
 # ── Copy justfile template for a service, replacing placeholders ──
 # Args: svc_key svc_name hook_dir port
 _setup_copy_justfile() {
+  # shellcheck disable=SC2034
   local svc_key="$1" svc_name="$2" hook_dir="$3" port="${4:-8080}"
   local template="${MUSTER_ROOT}/templates/hooks/just/justfile"
 

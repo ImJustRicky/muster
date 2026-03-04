@@ -424,7 +424,8 @@ tool_deploy() {
       continue
     fi
 
-    local log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
+    local log_file
+    log_file="${log_dir}/${svc}-deploy-$(date +%Y%m%d-%H%M%S).log"
     _export_creds_for_service "$svc"
     if "$hook" >> "$log_file" 2>&1; then
       output="${output}${svc} (${name}): DEPLOYED"
@@ -462,7 +463,8 @@ tool_rollback() {
   name=$(config_get ".services.${target}.name")
   local log_dir="${dir}/.muster/logs"
   mkdir -p "$log_dir"
-  local log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
+  local log_file
+  log_file="${log_dir}/${target}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
   _export_creds_for_service "$target"
   if "$hook" >> "$log_file" 2>&1; then

@@ -414,7 +414,7 @@ fleet_exec() {
   case "$_FM_TRANSPORT" in
     ssh)
       _fleet_build_opts
-      # shellcheck disable=SC2086 — $_FLEET_SSH_OPTS intentionally unquoted for word-splitting
+      # shellcheck disable=SC2086
       ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "$cmd"
       ;;
     cloud)
@@ -435,6 +435,7 @@ fleet_push_hook() {
   case "$_FM_TRANSPORT" in
     ssh)
       _fleet_build_opts
+      # shellcheck disable=SC2086
       {
         # Export env vars
         if [[ -n "$env_lines" ]]; then
@@ -451,7 +452,6 @@ fleet_push_hook() {
 
         # Pipe the hook script
         cat "$hook_file"
-      # shellcheck disable=SC2086 — $_FLEET_SSH_OPTS intentionally unquoted for word-splitting
       } | ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "bash -s"
       ;;
     cloud)
@@ -472,7 +472,7 @@ fleet_check() {
   case "$_FM_TRANSPORT" in
     ssh)
       _fleet_build_opts
-      # shellcheck disable=SC2086 — $_FLEET_SSH_OPTS intentionally unquoted for word-splitting
+      # shellcheck disable=SC2086
       ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "echo ok" &>/dev/null
       ;;
     cloud)

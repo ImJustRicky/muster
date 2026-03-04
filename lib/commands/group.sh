@@ -1170,6 +1170,7 @@ _group_cmd_deploy() {
 
   local i=0
   while (( i < total )); do
+    # shellcheck disable=SC2034
     local current=$(( i + 1 ))
 
     local _type _pname _pdesc
@@ -1179,7 +1180,8 @@ _group_cmd_deploy() {
     _pdesc=$(groups_project_desc "$group_name" "$i")
     [[ "${_pdesc:0:1}" == "/" ]] && _pdesc="${_pdesc/#$HOME/~}"
 
-    local log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
+    local log_file
+    log_file="${log_dir}/group-${group_name}-${_pname}-$(date +%Y%m%d-%H%M%S).log"
     local rc=0
     local _svc_total=0
     local _svc_idx=0
@@ -1309,7 +1311,8 @@ _group_cmd_deploy() {
                 continue
               fi
 
-              local _svc_log="${log_dir}/group-${group_name}-${_pname}-${_svc}-$(date +%Y%m%d-%H%M%S).log"
+              local _svc_log
+              _svc_log="${log_dir}/group-${group_name}-${_pname}-${_svc}-$(date +%Y%m%d-%H%M%S).log"
               : > "$_svc_log"
 
               # Run hook in background

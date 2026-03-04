@@ -321,6 +321,7 @@ _update_apply_source() {
 
       if (cd "$MUSTER_ROOT" && git pull --quiet origin main 2>&1); then
         printf '%s\n%s\n\n\n' "$(date +%s)" "current" > "$_MUSTER_UPDATE_CACHE"
+        # shellcheck disable=SC2034
         MUSTER_UPDATE_AVAILABLE="false"
 
         local new_ver

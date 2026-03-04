@@ -5,6 +5,7 @@ cmd_diff() {
   load_config
 
   local project_dir
+  # shellcheck disable=SC2034
   project_dir="$(dirname "$CONFIG_FILE")"
 
   if ! _git_is_repo; then

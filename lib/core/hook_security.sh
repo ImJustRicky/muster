@@ -510,7 +510,8 @@ _config_integrity_check() {
   fi
   [[ -z "$config_file" ]] && return 2
 
-  local cfg_key="_config/$(basename "$config_file")"
+  local cfg_key
+  cfg_key="_config/$(basename "$config_file")"
   local expected_sha
   expected_sha=$(jq -r --arg k "$cfg_key" '.[$k].sha256 // empty' "$manifest_file" 2>/dev/null)
   [[ -z "$expected_sha" ]] && return 2

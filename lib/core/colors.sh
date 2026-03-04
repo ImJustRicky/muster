@@ -56,6 +56,7 @@ _muster_apply_color_mode() {
       ;;
   esac
 
+  # shellcheck disable=SC2034
   if [[ "$want_color" == "false" ]]; then
     BOLD=""
     DIM=""

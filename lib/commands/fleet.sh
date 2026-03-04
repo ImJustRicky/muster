@@ -906,6 +906,7 @@ _fleet_status_json() {
 # ── rollback ──
 
 _fleet_cmd_rollback() {
+  # shellcheck disable=SC2034
   local target="" parallel=false
 
   while [[ $# -gt 0 ]]; do
@@ -971,7 +972,8 @@ _fleet_cmd_rollback() {
     local project_dir
     project_dir="$(dirname "$CONFIG_FILE")"
     local log_dir="${project_dir}/.muster/logs"
-    local log_file="${log_dir}/fleet-${machine}-rollback-$(date +%Y%m%d-%H%M%S).log"
+    local log_file
+    log_file="${log_dir}/fleet-${machine}-rollback-$(date +%Y%m%d-%H%M%S).log"
 
     local rc=0
 

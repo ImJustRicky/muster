@@ -66,7 +66,7 @@ _just_resolve() {
 # Usage: _just_remote_available
 # Returns 0 if just is on the remote PATH.
 _just_remote_available() {
-  # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
+  # shellcheck disable=SC2086
   ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "command -v just" &>/dev/null
 }
 
@@ -77,6 +77,7 @@ _just_remote_available() {
 _just_remote_run() {
   local svc="$1" recipe="$2" env_lines="${3:-}"
 
+  # shellcheck disable=SC2086
   {
     # Export env vars on the remote side
     if [[ -n "$env_lines" ]]; then
@@ -95,7 +96,6 @@ _just_remote_run() {
 
     # Run the just recipe from the service's justfile
     printf 'just --justfile .muster/hooks/%s/justfile %s\n' "$svc" "$recipe"
-  # shellcheck disable=SC2086 — $_SSH_OPTS intentionally unquoted for word-splitting
   } | ssh $_SSH_OPTS "${_REMOTE_USER}@${_REMOTE_HOST}" "bash -s"
 }
 
