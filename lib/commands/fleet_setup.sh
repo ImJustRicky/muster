@@ -7,7 +7,8 @@
 # ══════════════════════════════════════════════════════════════
 
 _FLEET_SETUP_STEP=1
-_FLEET_SETUP_TOTAL=10
+_FLEET_SETUP_TOTAL=8
+
 
 _fleet_setup_bar() {
   local left="$1" right="${2:-}"
@@ -63,36 +64,16 @@ cmd_fleet_setup() {
     fleet_init 2>/dev/null || true
   fi
 
-  # ── Step 1: Welcome + What You Have ──
-  _fleet_setup_screen 1 "Fleet deployment setup"
-
-  printf '%b\n' "  ${DIM}Let's set up deployment to multiple machines.${RESET}"
-  echo ""
-
-  menu_select_desc "What are you setting up?" \
-    "One project -> multiple machines" \
-    "Deploy the same project to multiple servers. Example: 3 API servers behind a load balancer, or staging + production." \
-    "Multiple projects -> coordinated" \
-    "Deploy several different apps together in the right order. Example: API + frontend + worker that depend on each other."
-
+  _FLEET_SETUP_TOTAL=8
   local _fleet_mode="single"
-  case "$MENU_RESULT" in
-    *"Multiple"*) _fleet_mode="multi" ;;
-  esac
 
-  if [[ "$_fleet_mode" == "multi" ]]; then
-    _FLEET_SETUP_TOTAL=10
-  else
-    _FLEET_SETUP_TOTAL=8
-  fi
-
-  # ── Step 2: Add Machines ──
+  # ── Step 1: Add Machines ──
   local _machines=()
   local _machine_count=0
 
   while true; do
     _machine_count=$(( ${#_machines[@]} + 1 ))
-    _fleet_setup_screen 2 "Add machines"
+    _fleet_setup_screen 1 "Add machines"
 
     if (( ${#_machines[@]} > 0 )); then
       printf '%b\n' "  ${DIM}Added so far:${RESET}"
@@ -191,11 +172,11 @@ cmd_fleet_setup() {
     return 1
   fi
 
-  # ── Step 3: Hook Management (per machine) ──
+  # ── Step 2: Hook Management (per machine) ──
   local _mi=0
   while (( _mi < ${#_machines[@]} )); do
     local _mname="${_machines[$_mi]}"
-    _fleet_setup_screen 3 "Configure ${_mname}"
+    _fleet_setup_screen 2 "Configure ${_mname}"
 
     printf '%b\n' "  ${DIM}How should deploys work on ${BOLD}${_mname}${RESET}${DIM}?${RESET}"
     echo ""
@@ -294,8 +275,8 @@ cmd_fleet_setup() {
     _mi=$((_mi + 1))
   done
 
-  # ── Step 4: Groups ──
-  _fleet_setup_screen 4 "Create groups"
+  # ── Step 3: Groups ──
+  _fleet_setup_screen 3 "Create groups"
 
   printf '%b\n' "  ${DIM}Group machines for coordinated deploys.${RESET}"
   echo ""
@@ -327,11 +308,23 @@ cmd_fleet_setup() {
     [[ "$MENU_RESULT" == "Done" || "$MENU_RESULT" == "__back__" ]] && break
   done
 
-  # ── Step 5: Multi-Project Setup (multi mode only) ──
+  # ── Step 4: Multiple projects? ──
   local _projects=()
-  local _step_offset=0
+  local _next_step=4
 
-  if [[ "$_fleet_mode" == "multi" ]]; then
+  _fleet_setup_screen 4 "Projects"
+
+  printf '%b\n' "  ${DIM}Deploying multiple projects together? (e.g., api + frontend + worker)${RESET}"
+  echo ""
+
+  menu_select "Multiple projects?" "No" "Yes"
+
+  if [[ "$MENU_RESULT" == "Yes" ]]; then
+    _fleet_mode="multi"
+    _FLEET_SETUP_TOTAL=10
+
+
+    # ── Step 5: Add Projects ──
     _fleet_setup_screen 5 "Add projects"
 
     printf '%b\n' "  ${DIM}Add projects to deploy together.${RESET}"
@@ -358,13 +351,11 @@ cmd_fleet_setup() {
 
     # ── Step 6: Dependencies + Parallel Analysis ──
     if (( ${#_projects[@]} > 1 )); then
-      local _dep_step=6
-      _fleet_setup_screen $_dep_step "Dependencies"
+      _fleet_setup_screen 6 "Dependencies"
 
       printf '%b\n' "  ${DIM}Do any projects depend on each other?${RESET}"
       echo ""
 
-      # Show dependency picker per project
       local _proj_names=()
       local _pi=0
       while (( _pi < ${#_projects[@]} )); do
@@ -373,11 +364,10 @@ cmd_fleet_setup() {
         _pi=$((_pi + 1))
       done
 
-      local _proj_deps=()  # "project|dep1,dep2" entries
+      local _proj_deps=()
       _pi=0
       while (( _pi < ${#_proj_names[@]} )); do
         local _pn="${_proj_names[$_pi]}"
-        # Build list of other projects
         local _other=()
         local _oi=0
         while (( _oi < ${#_proj_names[@]} )); do
@@ -398,10 +388,6 @@ cmd_fleet_setup() {
         _pi=$((_pi + 1))
       done
 
-      # Compute phases (simple topological sort)
-      # Phase 1: projects with no dependencies
-      # Phase 2: projects depending only on phase 1
-      # etc.
       local _phase1=() _phase2=()
       _pi=0
       while (( _pi < ${#_proj_deps[@]} )); do
@@ -439,16 +425,16 @@ cmd_fleet_setup() {
       echo ""
 
       menu_select "Deploy plan" "Accept" "Change"
-      # For now, accept only — reorder not implemented
       sleep 1
     fi
+
+    _next_step=7
   else
-    _step_offset=2  # Skip steps 5-6 in single mode
+    _next_step=5
   fi
 
-  # ── Step 7 (or 5 in single mode): Deploy Strategy ──
-  local _strategy_step=$(( 7 - _step_offset ))
-  _fleet_setup_screen $_strategy_step "Deploy strategy"
+  # ── Deploy Strategy ──
+  _fleet_setup_screen $_next_step "Deploy strategy"
 
   printf '%b\n' "  ${DIM}How should fleet deploys run across machines?${RESET}"
   echo ""
@@ -469,9 +455,9 @@ cmd_fleet_setup() {
 
   fleet_set ".deploy_strategy" "\"${_strategy}\"" 2>/dev/null || true
 
-  # ── Step 8 (or 6): Sync Check ──
-  local _sync_step=$(( 8 - _step_offset ))
-  _fleet_setup_screen $_sync_step "Sync check"
+  # ── Sync Check ──
+  _next_step=$(( _next_step + 1 ))
+  _fleet_setup_screen $_next_step "Sync check"
 
   printf '%b\n' "  ${DIM}Checking project files are in sync...${RESET}"
   echo ""
@@ -495,9 +481,9 @@ cmd_fleet_setup() {
   echo ""
   sleep 1
 
-  # ── Step 9 (or 7): Review ──
-  local _review_step=$(( 9 - _step_offset ))
-  _fleet_setup_screen $_review_step "Review"
+  # ── Review ──
+  _next_step=$(( _next_step + 1 ))
+  _fleet_setup_screen $_next_step "Review"
 
   # Show review summary
   if (( ${#_groups_created[@]} > 0 )); then
@@ -542,9 +528,9 @@ cmd_fleet_setup() {
     return 0
   fi
 
-  # ── Step 10 (or 8): Post-Setup ──
-  local _post_step=$(( 10 - _step_offset ))
-  _fleet_setup_screen $_post_step "Fleet setup complete"
+  # ── Post-Setup ──
+  _next_step=$(( _next_step + 1 ))
+  _fleet_setup_screen $_next_step "Fleet setup complete"
 
   printf '%b\n' "  ${GREEN}*${RESET} Fleet configured with ${#_machines[@]} machines"
   echo ""
