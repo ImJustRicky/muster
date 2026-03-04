@@ -11,6 +11,10 @@ _SCAN_K8S_NAMES=()   # "stripped_name|original_deploy_name" entries
 _SCAN_K8S_NS=""      # resolved namespace
 _SCAN_K8S_PREFIX=""   # common deployment name prefix
 _SCAN_DEV_CMDS=()    # "service|start_cmd|default_port" entries for dev stack
+_SCAN_PORTS=()       # "service|port" entries from Dockerfile EXPOSE / compose ports
+_SCAN_SECRETS=()     # secret variable names from .env files (names only, never values)
+_SCAN_GIT_REMOTE=""  # git remote URL (origin)
+_SCAN_GIT_BRANCH=""  # current git branch
 
 # Subdirectories to check in addition to project root
 _SCAN_SUBDIRS="docker deploy infra .github"
@@ -108,6 +112,10 @@ scan_project() {
   _SCAN_K8S_NS=""
   _SCAN_K8S_PREFIX=""
   _SCAN_DEV_CMDS=()
+  _SCAN_PORTS=()
+  _SCAN_SECRETS=()
+  _SCAN_GIT_REMOTE=""
+  _SCAN_GIT_BRANCH=""
 
   local has_k8s=false has_compose=false has_docker=false has_systemd=false
 
@@ -325,6 +333,14 @@ scan_project() {
     _scan_hint "$hint_files" "elasticsearch|opensearch" "elasticsearch"
   fi
 
+  # ── Enhanced detection ──
+  _scan_dockerfile_ports "$dir"
+  _scan_compose_ports "$dir" "$compose_file"
+  _scan_folder_structure "$dir"
+  _scan_framework_health "$dir"
+  _scan_env_files "$dir"
+  _scan_git_info "$dir"
+
   # ── Determine stack ──
   if [[ "$has_k8s" == "true" ]]; then
     _SCAN_STACK="k8s"
@@ -444,6 +460,357 @@ scan_print_results() {
   fi
 
   return 0
+}
+
+# ══════════════════════════════════════════════════════════════
+# Enhanced detection: ports, health, .env, git, folder structure
+# ══════════════════════════════════════════════════════════════
+
+# Parse EXPOSE directives from Dockerfiles
+# Populates _SCAN_PORTS[] with "service|port"
+_scan_dockerfile_ports() {
+  local dir="$1"
+  local i=0
+  while (( i < ${#_SCAN_FILES[@]} )); do
+    local entry="${_SCAN_FILES[$i]}"
+    local file="${entry%%|*}"
+    local desc="${entry#*|}"
+    i=$((i + 1))
+
+    # Only process Dockerfile entries
+    case "$desc" in
+      Docker\ build*) ;;
+      *) continue ;;
+    esac
+
+    local full_path="${dir}/${file}"
+    [[ ! -f "$full_path" ]] && continue
+
+    # Determine which service this Dockerfile belongs to
+    local svc=""
+    case "$file" in
+      Dockerfile.*) svc="${file#Dockerfile.}" ;;
+      */Dockerfile.*) svc="${file##*/Dockerfile.}" ;;
+      *) # Plain Dockerfile — use first service or skip
+        if (( ${#_SCAN_SERVICES[@]} > 0 )); then
+          svc="${_SCAN_SERVICES[0]}"
+        else
+          continue
+        fi
+        ;;
+    esac
+
+    # Parse EXPOSE lines
+    local _line
+    while IFS= read -r _line; do
+      # Match: EXPOSE 3000, EXPOSE 3000/tcp, EXPOSE 8080 8443
+      local _ports
+      _ports=$(printf '%s' "$_line" | sed 's/^EXPOSE[[:space:]]*//' | sed 's|/[a-z]*||g')
+      local _p
+      for _p in $_ports; do
+        case "$_p" in
+          [0-9]*) _SCAN_PORTS[${#_SCAN_PORTS[@]}]="${svc}|${_p}" ;;
+        esac
+      done
+    done < <(grep -i '^[[:space:]]*EXPOSE' "$full_path" 2>/dev/null || true)
+  done
+}
+
+# Parse ports and healthcheck from docker-compose files
+# Populates _SCAN_PORTS[] and _SCAN_HEALTH[]
+_scan_compose_ports() {
+  local dir="$1" compose_file="$2"
+  [[ -z "$compose_file" || ! -f "$compose_file" ]] && return 0
+
+  local current_svc="" in_services=false in_ports=false in_healthcheck=false
+  local indent_level=0
+
+  while IFS= read -r line; do
+    # Track services: section
+    if [[ "$line" =~ ^services: ]]; then
+      in_services=true
+      continue
+    fi
+
+    # Exit services on new top-level key
+    if [[ "$in_services" == "true" && "$line" =~ ^[a-zA-Z] && ! "$line" =~ ^services ]]; then
+      in_services=false
+      in_ports=false
+      in_healthcheck=false
+      continue
+    fi
+
+    [[ "$in_services" != "true" ]] && continue
+
+    # Service name (2-space indent, no further indent)
+    if [[ "$line" =~ ^[[:space:]][[:space:]][a-zA-Z_-]+: && ! "$line" =~ ^[[:space:]][[:space:]][[:space:]] ]]; then
+      current_svc=$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | sed 's/:.*//')
+      in_ports=false
+      in_healthcheck=false
+      continue
+    fi
+
+    [[ -z "$current_svc" ]] && continue
+
+    # Detect ports: key (4-space indent typically)
+    if printf '%s' "$line" | grep -qE '^[[:space:]]+ports:'; then
+      in_ports=true
+      in_healthcheck=false
+      continue
+    fi
+
+    # Detect healthcheck: key
+    if printf '%s' "$line" | grep -qE '^[[:space:]]+healthcheck:'; then
+      in_healthcheck=true
+      in_ports=false
+      continue
+    fi
+
+    # Other keys at same level end ports/healthcheck
+    if printf '%s' "$line" | grep -qE '^[[:space:]]{4}[a-zA-Z_-]+:' && \
+       ! printf '%s' "$line" | grep -qE '^[[:space:]]{6}'; then
+      in_ports=false
+      in_healthcheck=false
+    fi
+
+    # Parse port mappings: - "3000:3000" or - 3000:3000
+    if [[ "$in_ports" == "true" ]]; then
+      local port_match=""
+      port_match=$(printf '%s' "$line" | sed -n 's/.*- *["\x27]*\([0-9]*\):\([0-9]*\).*/\2/p')
+      if [[ -n "$port_match" ]]; then
+        _SCAN_PORTS[${#_SCAN_PORTS[@]}]="${current_svc}|${port_match}"
+      else
+        # Simple port: - "3000" or - 3000
+        port_match=$(printf '%s' "$line" | sed -n 's/.*- *["\x27]*\([0-9][0-9]*\)["\x27]*/\1/p')
+        if [[ -n "$port_match" ]]; then
+          _SCAN_PORTS[${#_SCAN_PORTS[@]}]="${current_svc}|${port_match}"
+        fi
+      fi
+    fi
+
+    # Parse healthcheck test for HTTP endpoint
+    if [[ "$in_healthcheck" == "true" ]]; then
+      # test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      # test: curl -f http://localhost:3000/health
+      local health_url=""
+      health_url=$(printf '%s' "$line" | grep -oE 'http://localhost:[0-9]+[^ "]*' | head -1 || true)
+      if [[ -n "$health_url" ]]; then
+        local h_port="" h_path=""
+        h_port=$(printf '%s' "$health_url" | sed -n 's|http://localhost:\([0-9]*\).*|\1|p')
+        h_path=$(printf '%s' "$health_url" | sed -n 's|http://localhost:[0-9]*\(/[^ "]*\)|\1|p')
+        [[ -z "$h_path" ]] && h_path="/"
+        # Only add if we don't already have health for this service
+        local _already=""
+        _already=$(scan_get_health "$current_svc")
+        if [[ -z "$_already" ]]; then
+          _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${current_svc}|http|${h_path}|${h_port}"
+        fi
+      fi
+    fi
+  done < "$compose_file"
+}
+
+# Detect monorepo service directories
+# Checks services/, apps/, packages/ and root-level dirs for project markers
+_scan_folder_structure() {
+  local dir="$1"
+
+  # Common monorepo patterns
+  local _mono_dirs="services apps packages"
+  local _md
+  for _md in $_mono_dirs; do
+    [[ ! -d "${dir}/${_md}" ]] && continue
+    _scan_is_excluded "$dir" "$_md" && continue
+
+    local _sub
+    for _sub in "${dir}/${_md}"/*/; do
+      [[ ! -d "$_sub" ]] && continue
+      local sub_name
+      sub_name=$(basename "$_sub")
+      _scan_is_excluded "$dir" "${_md}/${sub_name}" && continue
+
+      # Check for project markers
+      local has_marker=false
+      for marker in Dockerfile package.json go.mod requirements.txt pyproject.toml Cargo.toml Gemfile pom.xml; do
+        if [[ -f "${_sub}${marker}" ]]; then
+          has_marker=true
+          break
+        fi
+      done
+
+      if [[ "$has_marker" == "true" ]]; then
+        _scan_add_service "$sub_name"
+        # Also detect Dockerfile path for this service
+        if [[ -f "${_sub}Dockerfile" ]]; then
+          _SCAN_PATHS[${#_SCAN_PATHS[@]}]="${sub_name}|dockerfile|${_md}/${sub_name}/Dockerfile"
+          _SCAN_FILES[${#_SCAN_FILES[@]}]="${_md}/${sub_name}/Dockerfile|Docker build (${sub_name})"
+        fi
+      fi
+    done
+  done
+}
+
+# Detect health endpoints from framework files
+# Only sets health if _SCAN_HEALTH doesn't already have an entry
+_scan_framework_health() {
+  local dir="$1"
+
+  # Node.js — check package.json for framework
+  if [[ -f "${dir}/package.json" ]]; then
+    local svc_name=""
+    # Find which service this maps to
+    if (( ${#_SCAN_SERVICES[@]} > 0 )); then
+      svc_name="${_SCAN_SERVICES[0]}"
+    else
+      svc_name=$(basename "$dir")
+    fi
+
+    # Skip if already have health for this service
+    local existing=""
+    existing=$(scan_get_health "$svc_name")
+    if [[ -z "$existing" ]]; then
+      local port=""
+      port=$(scan_get_port "$svc_name")
+      [[ -z "$port" ]] && port="3000"
+
+      if grep -q '"next"' "${dir}/package.json" 2>/dev/null; then
+        _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|http|/api/health|${port}"
+      elif grep -q '"express"\|"fastify"' "${dir}/package.json" 2>/dev/null; then
+        _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|http|/health|${port}"
+      fi
+    fi
+  fi
+
+  # Python — Django / FastAPI
+  if [[ -f "${dir}/requirements.txt" || -f "${dir}/pyproject.toml" ]]; then
+    local svc_name=""
+    if (( ${#_SCAN_SERVICES[@]} > 0 )); then
+      svc_name="${_SCAN_SERVICES[0]}"
+    else
+      svc_name=$(basename "$dir")
+    fi
+
+    local existing=""
+    existing=$(scan_get_health "$svc_name")
+    if [[ -z "$existing" ]]; then
+      if [[ -f "${dir}/manage.py" ]]; then
+        _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|http|/health/|8000"
+      elif grep -q 'fastapi\|uvicorn' "${dir}/requirements.txt" "${dir}/pyproject.toml" 2>/dev/null; then
+        _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|http|/health|8000"
+      fi
+    fi
+  fi
+
+  # Go
+  if [[ -f "${dir}/go.mod" ]]; then
+    local svc_name=""
+    if (( ${#_SCAN_SERVICES[@]} > 0 )); then
+      svc_name="${_SCAN_SERVICES[0]}"
+    else
+      svc_name=$(basename "$dir")
+    fi
+
+    local existing=""
+    existing=$(scan_get_health "$svc_name")
+    if [[ -z "$existing" ]]; then
+      _SCAN_HEALTH[${#_SCAN_HEALTH[@]}]="${svc_name}|http|/healthz|8080"
+    fi
+  fi
+}
+
+# Scan .env files for secret variable names
+# ONLY reads .env files in the project directory — NEVER system env vars
+# ONLY reads variable NAMES (left of =) — NEVER values
+_scan_env_files() {
+  local dir="$1"
+  _SCAN_SECRETS=()
+
+  local _env_file
+  for _env_file in "${dir}/.env" "${dir}/.env.local" "${dir}/.env.production" "${dir}/.env.example"; do
+    [[ ! -f "$_env_file" ]] && continue
+
+    local _line
+    while IFS= read -r _line; do
+      # Skip comments and empty lines
+      case "$_line" in
+        "#"*|"") continue ;;
+      esac
+
+      # Extract variable name (left of =)
+      local var_name=""
+      var_name="${_line%%=*}"
+      # Trim whitespace
+      var_name=$(printf '%s' "$var_name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [[ -z "$var_name" ]] && continue
+      # Skip if no = sign (not a var assignment)
+      [[ "$_line" != *"="* ]] && continue
+
+      # Check if name suggests a secret
+      case "$var_name" in
+        *SECRET*|*KEY*|*TOKEN*|*PASSWORD*|*API_KEY*|*PRIVATE*|*CREDENTIAL*)
+          # Don't duplicate
+          local _dup=false
+          local _si=0
+          while (( _si < ${#_SCAN_SECRETS[@]} )); do
+            [[ "${_SCAN_SECRETS[$_si]}" == "$var_name" ]] && _dup=true
+            _si=$((_si + 1))
+          done
+          [[ "$_dup" == "false" ]] && _SCAN_SECRETS[${#_SCAN_SECRETS[@]}]="$var_name"
+          ;;
+      esac
+    done < "$_env_file"
+  done
+}
+
+# Detect git remote URL and current branch
+_scan_git_info() {
+  local dir="$1"
+  _SCAN_GIT_REMOTE=""
+  _SCAN_GIT_BRANCH=""
+
+  # Must be in a git repo
+  if ! git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
+    return 0
+  fi
+
+  _SCAN_GIT_REMOTE=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
+  _SCAN_GIT_BRANCH=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+}
+
+# Look up port for a service from _SCAN_PORTS
+# Returns first matching port or empty string
+scan_get_port() {
+  local svc="$1"
+  local i=0
+  while (( i < ${#_SCAN_PORTS[@]} )); do
+    local entry="${_SCAN_PORTS[$i]}"
+    local p_svc="${entry%%|*}"
+    if [[ "$p_svc" == "$svc" ]]; then
+      echo "${entry#*|}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  echo ""
+}
+
+# Return all detected secret variable names (newline-separated)
+scan_get_secrets() {
+  local i=0
+  while (( i < ${#_SCAN_SECRETS[@]} )); do
+    echo "${_SCAN_SECRETS[$i]}"
+    i=$((i + 1))
+  done
+}
+
+# Return git remote URL
+scan_get_git_remote() {
+  echo "$_SCAN_GIT_REMOTE"
+}
+
+# Return git branch
+scan_get_git_branch() {
+  echo "$_SCAN_GIT_BRANCH"
 }
 
 # ══════════════════════════════════════════════════════════════

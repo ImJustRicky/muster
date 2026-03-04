@@ -142,7 +142,7 @@ groups_create() {
   fi
 
   local group_json
-  group_json=$(jq -n --arg n "$display" '{"name": $n, "projects": [], "deploy_order": []}')
+  group_json=$(jq -n --arg n "$display" '{"name": $n, "projects": [], "deploy_order": [], "deploy_phases": []}')
 
   local tmp="${GROUPS_CONFIG_FILE}.tmp"
   jq --arg g "$name" --argjson v "$group_json" \

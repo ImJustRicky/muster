@@ -251,6 +251,50 @@ cmd_deploy() {
     services[0]="$target"
   fi
 
+  # ── Check for deploy_phases (phased parallel deploy) ──
+  # Reorders services to match phase order if deploy_phases exists
+  local _has_phases=false
+  local _phases_json=""
+  _phases_json=$(config_get '.deploy_phases' 2>/dev/null || echo "")
+  if [[ -n "$_phases_json" && "$_phases_json" != "null" && "$target" == "all" ]]; then
+    local _phase_count=0
+    _phase_count=$(config_get '.deploy_phases | length' 2>/dev/null || echo "0")
+    if (( _phase_count > 0 )); then
+      _has_phases=true
+      # Reorder services based on phases
+      local _phased_services=()
+      local _pi=0
+      while (( _pi < _phase_count )); do
+        local _phase_svcs=""
+        _phase_svcs=$(config_get ".deploy_phases[$_pi].services[]" 2>/dev/null || true)
+        local _ps
+        while IFS= read -r _ps; do
+          [[ -z "$_ps" ]] && continue
+          # Only include if in selected services
+          local _found=false _fi=0
+          while (( _fi < ${#services[@]} )); do
+            [[ "${services[$_fi]}" == "$_ps" ]] && { _found=true; break; }
+            _fi=$((_fi + 1))
+          done
+          [[ "$_found" == "true" ]] && _phased_services[${#_phased_services[@]}]="$_ps"
+        done <<< "$_phase_svcs"
+        _pi=$((_pi + 1))
+      done
+      # Add any services not in phases at the end
+      local _si=0
+      while (( _si < ${#services[@]} )); do
+        local _in_phase=false _pi=0
+        while (( _pi < ${#_phased_services[@]} )); do
+          [[ "${_phased_services[$_pi]}" == "${services[$_si]}" ]] && { _in_phase=true; break; }
+          _pi=$((_pi + 1))
+        done
+        [[ "$_in_phase" == "false" ]] && _phased_services[${#_phased_services[@]}]="${services[$_si]}"
+        _si=$((_si + 1))
+      done
+      services=("${_phased_services[@]}")
+    fi
+  fi
+
   local total=${#services[@]}
   local current=0
 

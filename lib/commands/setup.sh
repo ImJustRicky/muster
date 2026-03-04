@@ -1152,7 +1152,13 @@ cmd_setup() {
   # Route based on role
   case "$_setup_role" in
     control)
-      _setup_control_host
+      # Launch fleet setup wizard
+      if [[ -f "$MUSTER_ROOT/lib/commands/fleet_setup.sh" ]]; then
+        source "$MUSTER_ROOT/lib/commands/fleet_setup.sh"
+        cmd_fleet_setup
+      else
+        _setup_control_host
+      fi
       return $?
       ;;
     target)
@@ -1163,6 +1169,62 @@ cmd_setup() {
       # Falls through to project setup below, then offers fleet config at the end
       ;;
   esac
+
+  # ── Question 2: Environment ──
+  local _setup_env="production"
+  local _setup_health_timeout=10
+  local _setup_cred_default="off"
+
+  clear
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}What environment is this?${RESET}"
+  echo ""
+
+  menu_select "Environment" \
+    "Production        — Health checks, monitoring, longer timeouts" \
+    "Staging           — Pre-production, mirrors prod" \
+    "Development       — Local dev, lighter defaults"
+
+  case "$MENU_RESULT" in
+    *Production*)
+      _setup_env="production"
+      _setup_health_timeout=30
+      _setup_cred_default="session"
+      ;;
+    *Staging*)
+      _setup_env="staging"
+      _setup_health_timeout=15
+      _setup_cred_default="session"
+      ;;
+    *Development*)
+      _setup_env="development"
+      _setup_health_timeout=5
+      _setup_cred_default="off"
+      ;;
+  esac
+
+  # ── Question 3: What you're running ──
+  clear
+  echo ""
+  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}What does this project run?  (select all that apply)${RESET}"
+  echo ""
+
+  checklist_select --none "Components" \
+    "Web app / API" \
+    "Background workers / queues" \
+    "Database (managed here)" \
+    "Cache (Redis, Memcached)" \
+    "Reverse proxy (Nginx, Caddy)" \
+    "Other"
+
+  local _setup_components=()
+  while IFS= read -r _comp; do
+    [[ -n "$_comp" ]] && _setup_components[${#_setup_components[@]}]="$_comp"
+  done <<< "$CHECKLIST_RESULT"
 
   # ── Step 1: Choose project location ──
   local _cwd_display
@@ -1221,40 +1283,141 @@ cmd_setup() {
     fi
   fi
 
-  # ── Step 2: Scan project ──
+  # ── Step 4: Scan + Smart Preview ──
   _SETUP_CUR_SUMMARY=("")
-  _setup_screen 2 "Scanning project"
+  _setup_screen 4 "Scanning project"
   echo ""
   start_spinner "Scanning ${project_path}..."
   scan_project "$project_path"
+
+  # For dev environment, force dev stack
+  if [[ "$_setup_env" == "development" && -z "$_SCAN_STACK" ]]; then
+    _SCAN_STACK="dev"
+  fi
+
   stop_spinner
 
-  if (( ${#_SCAN_FILES[@]} > 0 )); then
-    # ────── Scan-first flow ──────
-    scan_print_results
-    echo ""
-    sleep 1
-
-    # ── Step 3: Confirm stack + select services ──
+  if (( ${#_SCAN_FILES[@]} > 0 || ${#_SCAN_SERVICES[@]} > 0 )); then
+    # ────── Smart scan preview ──────
     local stack="$_SCAN_STACK"
 
-    if [[ -n "$stack" ]]; then
-      local stack_label=""
-      case "$stack" in
-        k8s)     stack_label="Kubernetes" ;;
-        compose) stack_label="Docker Compose" ;;
-        docker)  stack_label="Docker" ;;
-        bare)    stack_label="Bare metal / Systemd" ;;
-        dev)     stack_label="Local dev" ;;
+    # Build preview display
+    local stack_label=""
+    case "$stack" in
+      k8s)     stack_label="Kubernetes" ;;
+      compose) stack_label="Docker Compose" ;;
+      docker)  stack_label="Docker" ;;
+      bare)    stack_label="Bare metal / Systemd" ;;
+      dev)     stack_label="Local dev" ;;
+      *)       stack_label="(not detected)" ;;
+    esac
+
+    # Build services display with ports
+    local _svc_display=""
+    local _si=0
+    while (( _si < ${#_SCAN_SERVICES[@]} )); do
+      local _sn="${_SCAN_SERVICES[$_si]}"
+      local _sp
+      _sp=$(scan_get_port "$_sn")
+      if [[ -n "$_sp" ]]; then
+        _svc_display="${_svc_display}${_sn} (port ${_sp})"
+      else
+        _svc_display="${_svc_display}${_sn}"
+      fi
+      _si=$((_si + 1))
+      (( _si < ${#_SCAN_SERVICES[@]} )) && _svc_display="${_svc_display}, "
+    done
+    [[ -z "$_svc_display" ]] && _svc_display="(none detected)"
+
+    # Build health display
+    local _health_lines=""
+    _si=0
+    while (( _si < ${#_SCAN_HEALTH[@]} )); do
+      local _he="${_SCAN_HEALTH[$_si]}"
+      local _h_svc="${_he%%|*}"
+      local _h_rest="${_he#*|}"
+      local _h_type="${_h_rest%%|*}"
+      _h_rest="${_h_rest#*|}"
+      local _h_ep="${_h_rest%%|*}"
+      local _h_port="${_h_rest#*|}"
+      case "$_h_type" in
+        http)    _health_lines="${_health_lines}\n              ${_h_svc} -> HTTP ${_h_ep}:${_h_port}" ;;
+        tcp)     _health_lines="${_health_lines}\n              ${_h_svc} -> TCP :${_h_port}" ;;
+        command) _health_lines="${_health_lines}\n              ${_h_svc} -> command" ;;
       esac
+      _si=$((_si + 1))
+    done
 
-      _SETUP_CUR_SUMMARY=("")
-      _setup_screen 3 "Confirm stack"
-      menu_select "Detected ${stack_label}. Correct?" "Yes" "No, let me pick"
+    # Build secrets display
+    local _secrets_display=""
+    if (( ${#_SCAN_SECRETS[@]} > 0 )); then
+      _si=0
+      while (( _si < ${#_SCAN_SECRETS[@]} )); do
+        _secrets_display="${_secrets_display}${_SCAN_SECRETS[$_si]}"
+        _si=$((_si + 1))
+        (( _si < ${#_SCAN_SECRETS[@]} )) && _secrets_display="${_secrets_display}, "
+      done
+      _secrets_display="${_secrets_display} (from .env)"
+    fi
 
-      if [[ "$MENU_RESULT" == "No, let me pick" ]]; then
+    # Build git display
+    local _git_display=""
+    if [[ -n "$_SCAN_GIT_REMOTE" || -n "$_SCAN_GIT_BRANCH" ]]; then
+      local _git_short=""
+      if [[ -n "$_SCAN_GIT_REMOTE" ]]; then
+        _git_short="${_SCAN_GIT_REMOTE##*/}"
+        _git_short="${_git_short%.git}"
+      fi
+      _git_display="${_git_short:+${_git_short}/}${_SCAN_GIT_BRANCH:-main}"
+    fi
+
+    # Show scan preview
+    local _preview_summary=(
+      ""
+      "  ${BOLD}Stack:${RESET}      ${stack_label}"
+      "  ${BOLD}Services:${RESET}   ${_svc_display}"
+    )
+    if [[ -n "$_health_lines" ]]; then
+      _preview_summary[${#_preview_summary[@]}]="  ${BOLD}Health:${RESET}     $(printf '%b' "$_health_lines" | head -1 | sed 's/^ *//')"
+      # Additional health lines
+      local _hl_idx=0
+      while IFS= read -r _hl; do
+        _hl_idx=$((_hl_idx + 1))
+        (( _hl_idx <= 1 )) && continue
+        [[ -n "$_hl" ]] && _preview_summary[${#_preview_summary[@]}]="  ${_hl}"
+      done <<< "$(printf '%b' "$_health_lines")"
+    fi
+    if [[ -n "$_git_display" ]]; then
+      _preview_summary[${#_preview_summary[@]}]="  ${BOLD}Git:${RESET}        ${_git_display}"
+    fi
+    if [[ -n "$_secrets_display" ]]; then
+      _preview_summary[${#_preview_summary[@]}]="  ${BOLD}Secrets:${RESET}    ${_secrets_display}"
+    fi
+    _preview_summary[${#_preview_summary[@]}]=""
+
+    _SETUP_CUR_SUMMARY=("${_preview_summary[@]}")
+    _setup_screen 4 "Scan results"
+
+    menu_select "This look right?" "Yes" "Let me adjust"
+
+    local _auto_mode="true"
+    if [[ "$MENU_RESULT" == "Let me adjust" ]]; then
+      _auto_mode="false"
+    fi
+
+    # ── Stack override (if user wants to adjust or nothing detected) ──
+    if [[ "$_auto_mode" == "false" || -z "$stack" ]]; then
+      if [[ -n "$stack" && "$_auto_mode" == "false" ]]; then
         _SETUP_CUR_SUMMARY=("")
-        _setup_screen 3 "Select stack"
+        _setup_screen 4 "Confirm stack"
+        menu_select "Detected ${stack_label}. Correct?" "Yes" "No, let me pick"
+        if [[ "$MENU_RESULT" == "No, let me pick" ]]; then
+          stack=""
+        fi
+      fi
+      if [[ -z "$stack" ]]; then
+        _SETUP_CUR_SUMMARY=("")
+        _setup_screen 4 "Select stack"
         menu_select "What deploys your services?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd" "Local dev"
         case "$MENU_RESULT" in
           Kubernetes)              stack="k8s" ;;
@@ -1264,27 +1427,21 @@ cmd_setup() {
           "Local dev")             stack="dev" ;;
         esac
       fi
-    else
-      # Stack not detected, ask
-      _SETUP_CUR_SUMMARY=("")
-      _setup_screen 3 "Select stack"
-      menu_select "How do you deploy?" "Kubernetes" "Docker Compose" "Docker (standalone)" "Bare metal / Systemd" "Local dev"
-      case "$MENU_RESULT" in
-        Kubernetes)              stack="k8s" ;;
-        "Docker Compose")        stack="compose" ;;
-        "Docker (standalone)")   stack="docker" ;;
-        "Bare metal / Systemd")  stack="bare" ;;
-        "Local dev")             stack="dev" ;;
-      esac
     fi
 
-    # Select services from scan results
-    if (( ${#_SCAN_SERVICES[@]} > 0 )); then
+    # ── Service selection ──
+    local selected_services=()
+    if [[ "$_auto_mode" == "true" && ${#_SCAN_SERVICES[@]} -gt 0 ]]; then
+      # Auto-mode: use all detected services
+      local _si=0
+      while (( _si < ${#_SCAN_SERVICES[@]} )); do
+        selected_services[${#selected_services[@]}]="${_SCAN_SERVICES[$_si]}"
+        _si=$((_si + 1))
+      done
+    elif (( ${#_SCAN_SERVICES[@]} > 0 )); then
       _SETUP_CUR_SUMMARY=("")
-      _setup_screen 3 "Select services"
+      _setup_screen 4 "Select services"
       checklist_select "Manage these services?" "${_SCAN_SERVICES[@]}"
-
-      local selected_services=()
       while IFS= read -r line; do
         [[ -n "$line" ]] && selected_services[${#selected_services[@]}]="$line"
       done <<< "$CHECKLIST_RESULT"
@@ -1298,11 +1455,9 @@ cmd_setup() {
         "  ${ACCENT}>${RESET} "
       )
       _SETUP_CUR_PROMPT="true"
-      _setup_screen 3 "Name your services"
+      _setup_screen 4 "Name your services"
       read -r svc_input
       _SETUP_CUR_PROMPT="false"
-
-      local selected_services=()
       for s in $svc_input; do
         selected_services[${#selected_services[@]}]="$s"
       done
@@ -1313,119 +1468,269 @@ cmd_setup() {
       return 1
     fi
 
-    # ── Step 4: Deploy order ──
+    # ── Step 5: Deploy order (auto-sort: infra first, then workers, then API/web) ──
     _SETUP_CUR_SUMMARY=("")
-    _setup_screen 4 "Deploy order"
+    _setup_screen 5 "Deploy order"
 
     if (( ${#selected_services[@]} > 1 )); then
-      order_select "What order should services deploy?" "${selected_services[@]}"
+      # Auto-sort: infra services first
+      local _sorted_infra=()
+      local _sorted_other=()
+      local _si=0
+      while (( _si < ${#selected_services[@]} )); do
+        local _sn="${selected_services[$_si]}"
+        if _is_infra_service "$_sn" 2>/dev/null; then
+          _sorted_infra[${#_sorted_infra[@]}]="$_sn"
+        else
+          _sorted_other[${#_sorted_other[@]}]="$_sn"
+        fi
+        _si=$((_si + 1))
+      done
+      selected_services=("${_sorted_infra[@]}" "${_sorted_other[@]}")
+
+      printf '\n  %b%s%b\n' "${DIM}" "Services that others depend on deploy first." "${RESET}"
+      echo ""
+      order_select "Deploy order" "${selected_services[@]}"
       selected_services=("${ORDER_RESULT[@]}")
     else
       printf '\n  %b1.%b %s\n' "${GREEN}" "${RESET}" "${selected_services[0]}"
     fi
 
-    # ── Step 5: Per-service config (health + credentials) ──
+    # ── Auto-config or manual per-service config ──
     local services_json="{"
     local deploy_order_json="["
     local first=true
     local svc_index=0
     local _svc_ports=()
 
-    for svc in "${selected_services[@]}"; do
-      svc_index=$((svc_index + 1))
-      local key
-      key=$(_svc_to_key "$svc")
+    if [[ "$_auto_mode" == "true" ]]; then
+      # ── Auto-config from scan results ──
+      for svc in "${selected_services[@]}"; do
+        svc_index=$((svc_index + 1))
+        local key
+        key=$(_svc_to_key "$svc")
 
-      # Health check
-      _SETUP_CUR_SUMMARY=("")
-      _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
-      menu_select "Health check for ${svc}?" "HTTP" "TCP" "Command" "None"
-      local health_choice="$MENU_RESULT"
+        # Auto-detect health
+        local health_json="{\"enabled\":false}"
+        local port_num=""
+        local _h_info
+        _h_info=$(scan_get_health "$svc")
+        if [[ -n "$_h_info" ]]; then
+          local _h_type="${_h_info%%|*}"
+          local _h_rest="${_h_info#*|}"
+          local _h_ep="${_h_rest%%|*}"
+          local _h_port="${_h_rest#*|}"
+          port_num="${_h_port}"
+          case "$_h_type" in
+            http)    health_json="{\"type\":\"http\",\"endpoint\":\"${_h_ep}\",\"port\":${_h_port:-8080},\"timeout\":${_setup_health_timeout},\"enabled\":true}" ;;
+            tcp)     health_json="{\"type\":\"tcp\",\"port\":${_h_port:-0},\"timeout\":${_setup_health_timeout},\"enabled\":true}" ;;
+            command) health_json="{\"type\":\"command\",\"command\":\"${_h_ep}\",\"timeout\":${_setup_health_timeout},\"enabled\":true}" ;;
+          esac
+        else
+          # Try port-based detection
+          port_num=$(scan_get_port "$svc")
+          if [[ -n "$port_num" ]]; then
+            if _is_infra_service "$svc" 2>/dev/null; then
+              health_json="{\"type\":\"tcp\",\"port\":${port_num},\"timeout\":${_setup_health_timeout},\"enabled\":true}"
+            else
+              health_json="{\"type\":\"http\",\"endpoint\":\"/health\",\"port\":${port_num},\"timeout\":${_setup_health_timeout},\"enabled\":true}"
+            fi
+          fi
+        fi
+        _svc_ports[${#_svc_ports[@]}]="${port_num:-8080}"
 
-      local health_json="{}"
-      local port_num=""
-      case "$health_choice" in
-        HTTP)
-          printf "\n  ${ACCENT}>${RESET} Health endpoint [/health]: "
-          read -r endpoint
-          printf "  ${ACCENT}>${RESET} Port [8080]: "
-          read -r port_num
-          health_json="{\"type\":\"http\",\"endpoint\":\"${endpoint:-/health}\",\"port\":${port_num:-8080},\"timeout\":10,\"enabled\":true}"
-          ;;
-        TCP)
-          printf "\n  ${ACCENT}>${RESET} Port: "
-          read -r port_num
-          health_json="{\"type\":\"tcp\",\"port\":${port_num:-0},\"timeout\":5,\"enabled\":true}"
-          ;;
-        Command)
-          printf "\n  ${ACCENT}>${RESET} Health command: "
-          read -r health_cmd
-          health_json="{\"type\":\"command\",\"command\":\"${health_cmd}\",\"timeout\":10,\"enabled\":true}"
-          ;;
-        None)
-          health_json="{\"enabled\":false}"
-          ;;
-      esac
-      _svc_ports[${#_svc_ports[@]}]="${port_num:-8080}"
+        # Auto-credentials from environment + secrets
+        local cred_mode="$_setup_cred_default"
+        if [[ "$cred_mode" == "session" && ${#_SCAN_SECRETS[@]} -eq 0 ]]; then
+          cred_mode="off"
+        fi
+        # Infra services don't need credentials
+        if _is_infra_service "$svc" 2>/dev/null; then
+          cred_mode="off"
+        fi
 
-      # Credentials
-      _SETUP_CUR_SUMMARY=(
-        ""
-        "  ${GREEN}*${RESET} Health: ${health_choice}"
-      )
-      _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
-      menu_select "Credentials for ${svc}?" "None" "Save always (keychain)" "Once per session" "Every time"
-      local cred_choice="$MENU_RESULT"
+        # Auto git pull
+        local git_pull_json=""
+        if [[ -n "$_SCAN_GIT_REMOTE" && -n "$_SCAN_GIT_BRANCH" ]]; then
+          # Only enable for non-infra services
+          if ! _is_infra_service "$svc" 2>/dev/null; then
+            git_pull_json=",\"git_pull\":{\"enabled\":true,\"remote\":\"origin\",\"branch\":\"${_SCAN_GIT_BRANCH}\"}"
+          fi
+        fi
 
-      local cred_mode="off"
-      case "$cred_choice" in
-        "Save always (keychain)") cred_mode="save" ;;
-        "Once per session")       cred_mode="session" ;;
-        "Every time")             cred_mode="always" ;;
-      esac
+        [[ "$first" == "true" ]] && first=false || services_json+=","
+        services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${git_pull_json}}"
+        deploy_order_json+="\"${key}\","
+      done
+    else
+      # ── Manual per-service config (existing flow) ──
+      for svc in "${selected_services[@]}"; do
+        svc_index=$((svc_index + 1))
+        local key
+        key=$(_svc_to_key "$svc")
 
-      # Git pull
-      _SETUP_CUR_SUMMARY=(
-        ""
-        "  ${GREEN}*${RESET} Health: ${health_choice}"
-        "  ${GREEN}*${RESET} Credentials: ${cred_choice}"
-      )
-      _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
-      menu_select "Auto git pull before deploy for ${svc}?" "No" "Yes"
-      local gp_choice="$MENU_RESULT"
-      local git_pull_json=""
-      if [[ "$gp_choice" == "Yes" ]]; then
-        printf '\n  %b>%b Git remote [origin]: ' "${ACCENT}" "${RESET}"
-        local _gp_remote_in=""
-        IFS= read -r _gp_remote_in
-        printf '  %b>%b Git branch [main]: ' "${ACCENT}" "${RESET}"
-        local _gp_branch_in=""
-        IFS= read -r _gp_branch_in
-        [[ -z "$_gp_remote_in" ]] && _gp_remote_in="origin"
-        [[ -z "$_gp_branch_in" ]] && _gp_branch_in="main"
-        git_pull_json=",\"git_pull\":{\"enabled\":true,\"remote\":\"${_gp_remote_in}\",\"branch\":\"${_gp_branch_in}\"}"
-      fi
+        # Pre-fill from scan
+        local _prefill_health="" _prefill_port=""
+        _prefill_health=$(scan_get_health "$svc")
+        _prefill_port=$(scan_get_port "$svc")
 
-      [[ "$first" == "true" ]] && first=false || services_json+=","
-      services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${git_pull_json}}"
-      deploy_order_json+="\"${key}\","
-    done
+        # Health check
+        _SETUP_CUR_SUMMARY=("")
+        _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
+        menu_select "Health check for ${svc}?" "HTTP" "TCP" "Command" "None"
+        local health_choice="$MENU_RESULT"
+
+        local health_json="{}"
+        local port_num=""
+        case "$health_choice" in
+          HTTP)
+            local _def_ep="/health" _def_port="${_prefill_port:-8080}"
+            if [[ -n "$_prefill_health" ]]; then
+              local _pht="${_prefill_health%%|*}"
+              local _phr="${_prefill_health#*|}"
+              if [[ "$_pht" == "http" ]]; then
+                _def_ep="${_phr%%|*}"
+                _def_port="${_phr#*|}"
+              fi
+            fi
+            printf "\n  ${ACCENT}>${RESET} Health endpoint [${_def_ep}]: "
+            read -r endpoint
+            printf "  ${ACCENT}>${RESET} Port [${_def_port}]: "
+            read -r port_num
+            health_json="{\"type\":\"http\",\"endpoint\":\"${endpoint:-$_def_ep}\",\"port\":${port_num:-$_def_port},\"timeout\":${_setup_health_timeout},\"enabled\":true}"
+            ;;
+          TCP)
+            printf "\n  ${ACCENT}>${RESET} Port [${_prefill_port:-0}]: "
+            read -r port_num
+            health_json="{\"type\":\"tcp\",\"port\":${port_num:-${_prefill_port:-0}},\"timeout\":${_setup_health_timeout},\"enabled\":true}"
+            ;;
+          Command)
+            printf "\n  ${ACCENT}>${RESET} Health command: "
+            read -r health_cmd
+            health_json="{\"type\":\"command\",\"command\":\"${health_cmd}\",\"timeout\":${_setup_health_timeout},\"enabled\":true}"
+            ;;
+          None)
+            health_json="{\"enabled\":false}"
+            ;;
+        esac
+        _svc_ports[${#_svc_ports[@]}]="${port_num:-${_prefill_port:-8080}}"
+
+        # Credentials
+        _SETUP_CUR_SUMMARY=(
+          ""
+          "  ${GREEN}*${RESET} Health: ${health_choice}"
+        )
+        _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
+        menu_select "Credentials for ${svc}?" "None" "Save always (keychain)" "Once per session" "Every time"
+        local cred_choice="$MENU_RESULT"
+
+        local cred_mode="off"
+        case "$cred_choice" in
+          "Save always (keychain)") cred_mode="save" ;;
+          "Once per session")       cred_mode="session" ;;
+          "Every time")             cred_mode="always" ;;
+        esac
+
+        # Git pull
+        local _def_remote="origin"
+        local _def_branch="${_SCAN_GIT_BRANCH:-main}"
+        _SETUP_CUR_SUMMARY=(
+          ""
+          "  ${GREEN}*${RESET} Health: ${health_choice}"
+          "  ${GREEN}*${RESET} Credentials: ${cred_choice}"
+        )
+        _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
+        menu_select "Auto git pull before deploy for ${svc}?" "No" "Yes"
+        local gp_choice="$MENU_RESULT"
+        local git_pull_json=""
+        if [[ "$gp_choice" == "Yes" ]]; then
+          printf '\n  %b>%b Git remote [%s]: ' "${ACCENT}" "${RESET}" "$_def_remote"
+          local _gp_remote_in=""
+          IFS= read -r _gp_remote_in
+          printf '  %b>%b Git branch [%s]: ' "${ACCENT}" "${RESET}" "$_def_branch"
+          local _gp_branch_in=""
+          IFS= read -r _gp_branch_in
+          [[ -z "$_gp_remote_in" ]] && _gp_remote_in="$_def_remote"
+          [[ -z "$_gp_branch_in" ]] && _gp_branch_in="$_def_branch"
+          git_pull_json=",\"git_pull\":{\"enabled\":true,\"remote\":\"${_gp_remote_in}\",\"branch\":\"${_gp_branch_in}\"}"
+        fi
+
+        [[ "$first" == "true" ]] && first=false || services_json+=","
+        services_json+="\"${key}\":{\"name\":\"${svc}\",\"health\":${health_json},\"credentials\":{\"mode\":\"${cred_mode}\"}${git_pull_json}}"
+        deploy_order_json+="\"${key}\","
+      done
+    fi
 
     services_json+="}"
     deploy_order_json="${deploy_order_json%,}]"
 
-    # ── Step 6: Project name ──
+    # ── Step 6: Review screen ──
     local project_name
     project_name=$(basename "$project_path")
-    _SETUP_CUR_SUMMARY=(
+
+    local stack_display=""
+    case "$stack" in
+      k8s)     stack_display="Kubernetes" ;;
+      compose) stack_display="Docker Compose" ;;
+      docker)  stack_display="Docker" ;;
+      bare)    stack_display="Bare metal" ;;
+      dev)     stack_display="Local dev" ;;
+    esac
+
+    local _review_summary=(
       ""
-      "  ${ACCENT}>${RESET} Project name [${project_name}]: "
+      "  ${BOLD}Project:${RESET}    ${project_name} (${_setup_env})"
+      "  ${BOLD}Stack:${RESET}      ${stack_display}"
+      ""
     )
-    _SETUP_CUR_PROMPT="true"
-    _setup_screen 6 "Project name"
-    read -r custom_name
-    _SETUP_CUR_PROMPT="false"
-    project_name="${custom_name:-$project_name}"
+
+    # Show per-service config in review
+    local _ri=0
+    for svc in "${selected_services[@]}"; do
+      _ri=$((_ri + 1))
+      local _rh=""
+      _rh=$(scan_get_health "$svc")
+      local _rh_display="none"
+      if [[ -n "$_rh" ]]; then
+        local _rht="${_rh%%|*}"
+        local _rhr="${_rh#*|}"
+        case "$_rht" in
+          http) _rh_display="HTTP ${_rhr%%|*}:${_rhr#*|}" ;;
+          tcp)  _rh_display="TCP :${_rhr#*|}" ;;
+          command) _rh_display="command" ;;
+        esac
+      else
+        local _rp
+        _rp=$(scan_get_port "$svc")
+        if [[ -n "$_rp" ]]; then
+          if _is_infra_service "$svc" 2>/dev/null; then
+            _rh_display="TCP :${_rp}"
+          else
+            _rh_display="HTTP /health:${_rp}"
+          fi
+        fi
+      fi
+      local _infra_tag=""
+      _is_infra_service "$svc" 2>/dev/null && _infra_tag=" ${DIM}(infra)${RESET}"
+      _review_summary[${#_review_summary[@]}]="  ${_ri}. ${BOLD}${svc}${RESET}    ${_rh_display}${_infra_tag}"
+    done
+
+    if [[ -n "$_SCAN_GIT_BRANCH" ]]; then
+      _review_summary[${#_review_summary[@]}]=""
+      _review_summary[${#_review_summary[@]}]="  ${BOLD}Git pull:${RESET}   origin/${_SCAN_GIT_BRANCH}"
+    fi
+
+    _review_summary[${#_review_summary[@]}]=""
+
+    _SETUP_CUR_SUMMARY=("${_review_summary[@]}")
+    _setup_screen 6 "Review"
+
+    menu_select "Ready?" "Generate" "Go back"
+
+    if [[ "$MENU_RESULT" == "Go back" || "$MENU_RESULT" == "__back__" ]]; then
+      info "Setup cancelled."
+      return 0
+    fi
 
     # ── Hook format (offer justfile if just is installed) ──
     local _hook_format="bash"
@@ -1505,26 +1810,17 @@ print(json.dumps(data, indent=2))
       printf '%s\n%s\n' '.muster/logs/' '.muster/pids/' > "$gitignore"
     fi
 
-    # Stack label for display
-    local stack_display=""
-    case "$stack" in
-      k8s)     stack_display="Kubernetes" ;;
-      compose) stack_display="Docker Compose" ;;
-      docker)  stack_display="Docker" ;;
-      bare)    stack_display="Bare metal" ;;
-      dev)     stack_display="Local dev" ;;
-    esac
+    # Register project in global registry
+    _registry_touch "$project_path"
 
-    # ── Done screen ──
-    _SETUP_CUR_SUMMARY=(
+    # ── Context-aware post-setup ──
+    local _post_summary=(
       ""
-      "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET}"
-      "  ${GREEN}*${RESET} Root:    ${project_path}"
+      "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET} (${_setup_env})"
       "  ${GREEN}*${RESET} Stack:   ${stack_display}"
-      "  ${GREEN}*${RESET} Config:  ${config_path}"
+      "  ${GREEN}*${RESET} Config:  muster.json"
       ""
       "  ${BOLD}Generated:${RESET}"
-      "    muster.json"
     )
 
     for h in "${generated_hooks[@]}"; do
@@ -1533,19 +1829,58 @@ print(json.dumps(data, indent=2))
       for hf in "${hook_path}"*.sh; do
         [[ -f "$hf" ]] && hook_files="${hook_files} $(basename "$hf")"
       done
-      _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${h}  ${DIM}${hook_files}${RESET}"
+      _post_summary[${#_post_summary[@]}]="    ${h}  ${DIM}${hook_files}${RESET}"
     done
 
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${ACCENT}Next steps:${RESET}"
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}1. Review hooks in .muster/hooks/ (look for TODO comments)${RESET}"
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press enter to exit${RESET}"
-    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+    _post_summary[${#_post_summary[@]}]=""
+    _post_summary[${#_post_summary[@]}]="  ${ACCENT}Next:${RESET}"
+    _post_summary[${#_post_summary[@]}]="    ${BOLD}muster${RESET}              Open the dashboard"
+    _post_summary[${#_post_summary[@]}]="    ${BOLD}muster deploy${RESET}       Deploy all services"
+    _post_summary[${#_post_summary[@]}]="    ${BOLD}muster doctor${RESET}       Check everything is ready"
 
-    # Register project in global registry
-    _registry_touch "$project_path"
+    # Notifications tip
+    _post_summary[${#_post_summary[@]}]=""
+    _post_summary[${#_post_summary[@]}]="  ${DIM}Deploy notifications (Discord, Slack, etc.):${RESET}"
+    _post_summary[${#_post_summary[@]}]="    ${BOLD}muster skill add discord${RESET}"
+
+    # Fleet tip
+    _post_summary[${#_post_summary[@]}]=""
+    _post_summary[${#_post_summary[@]}]="  ${DIM}Deploying to multiple machines?${RESET}"
+    _post_summary[${#_post_summary[@]}]="    ${BOLD}muster fleet setup${RESET}  Set up fleet deployment"
+
+    _post_summary[${#_post_summary[@]}]=""
+
+    # Production-specific tips
+    if [[ "$_setup_env" == "production" || "$_setup_env" == "staging" ]]; then
+      _post_summary[${#_post_summary[@]}]="  ${ACCENT}Tips:${RESET}"
+      # Check for .dockerignore
+      if [[ ! -f "${project_path}/.dockerignore" ]] && [[ "$stack" == "compose" || "$stack" == "docker" ]]; then
+        _post_summary[${#_post_summary[@]}]="    ${BOLD}!${RESET} No .dockerignore found — recommended for faster builds"
+      fi
+      _post_summary[${#_post_summary[@]}]="    ${DIM}* Health timeout set to ${_setup_health_timeout}s for ${_setup_env}${RESET}"
+      _post_summary[${#_post_summary[@]}]="    ${DIM}* Run 'muster doctor' to verify${RESET}"
+      _post_summary[${#_post_summary[@]}]=""
+    fi
+
+    _SETUP_CUR_SUMMARY=("${_post_summary[@]}")
+    _setup_screen 7 "Setup complete"
+
+    # Production: offer dry-run
+    if [[ "$_setup_env" == "production" ]]; then
+      menu_select "Preview your first deploy?" "Yes (dry-run)" "Later"
+      if [[ "$MENU_RESULT" == *"dry-run"* ]]; then
+        source "$MUSTER_ROOT/lib/commands/deploy.sh"
+        cmd_deploy --dry-run
+      fi
+    elif [[ "$_setup_env" == "development" ]]; then
+      printf '%b\n' "  ${DIM}Run '${BOLD}muster dev${RESET}${DIM}' to start everything.${RESET}"
+      echo ""
+      printf '%b\n' "  ${DIM}Press enter to exit${RESET}"
+      read -rs
+    else
+      printf '%b\n' "  ${DIM}Press enter to exit${RESET}"
+      read -rs
+    fi
 
     # ── Offer to add project to a fleet group ──
     if has_cmd jq && [[ -f "$HOME/.muster/groups.json" ]]; then
@@ -1569,7 +1904,6 @@ print(json.dumps(data, indent=2))
         _grp_options[${#_grp_options[@]}]="Skip"
         menu_select "Add to fleet" "${_grp_options[@]}"
         if [[ "$MENU_RESULT" != "Skip" && "$MENU_RESULT" != "__back__" ]]; then
-          # Find matching group key
           local _gmi=0
           while (( _gmi < ${#_grp_keys[@]} )); do
             local _gmd
@@ -1589,17 +1923,18 @@ print(json.dumps(data, indent=2))
     # ── "Both" role: offer fleet control setup after project is complete ──
     if [[ "$_setup_role" == "both" ]]; then
       echo ""
-      printf '%b\n' "  ${DIM}Project setup done. Now let's configure fleet control.${RESET}"
+      printf '%b\n' "  ${DIM}Project setup done. Now let's configure fleet deployment.${RESET}"
       echo ""
       printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
       IFS= read -rsn1 || true
-      _setup_control_host
+      if [[ -f "$MUSTER_ROOT/lib/commands/fleet_setup.sh" ]]; then
+        source "$MUSTER_ROOT/lib/commands/fleet_setup.sh"
+        cmd_fleet_setup
+      else
+        _setup_control_host
+      fi
       return $?
     fi
-
-    _SETUP_CUR_PROMPT="false"
-    _setup_screen 7 "Setup complete"
-    read -rs
 
   else
     # ────── Fallback: manual question flow ──────

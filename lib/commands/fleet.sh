@@ -100,6 +100,11 @@ cmd_fleet() {
       source "$MUSTER_ROOT/lib/commands/fleet_agent.sh"
       _fleet_cmd_remove_agent "$@"
       ;;
+    setup)
+      shift
+      source "$MUSTER_ROOT/lib/commands/fleet_setup.sh"
+      cmd_fleet_setup "$@"
+      ;;
     --help|-h)
       _fleet_cmd_help
       ;;

@@ -10,25 +10,30 @@ _FLEET_DEPLOY_FORCE_SYNC="false"
 
 _fleet_cmd_deploy() {
   # shellcheck disable=SC2034
-  local target="" parallel=false dry_run=false json_mode=false force_sync=false
+  local target="" parallel=false dry_run=false json_mode=false force_sync=false rolling=false
+  local _strategy_override=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --parallel) parallel=true; shift ;;
+      --parallel) parallel=true; _strategy_override="parallel"; shift ;;
+      --sequential) parallel=false; _strategy_override="sequential"; shift ;;
+      --rolling) rolling=true; _strategy_override="rolling"; shift ;;
       --dry-run) dry_run=true; shift ;;
       --json) json_mode=true; shift ;;
       --sync) force_sync=true; shift ;;
       --help|-h)
-        echo "Usage: muster fleet deploy [target] [--parallel] [--dry-run] [--sync] [--json]"
+        echo "Usage: muster fleet deploy [target] [--parallel] [--sequential] [--rolling] [--dry-run] [--sync] [--json]"
         echo ""
         echo "Deploy to fleet machines. Target can be a machine name, group name,"
         echo "or omitted to deploy to all machines following deploy_order."
         echo ""
         echo "Options:"
-        echo "  --parallel    Deploy to all target machines in parallel"
-        echo "  --dry-run     Preview deploy plan without executing"
-        echo "  --sync        Force sync hooks before deploy (regardless of hook_mode)"
-        echo "  --json        Output as NDJSON events"
+        echo "  --parallel      Deploy to all target machines in parallel"
+        echo "  --sequential    Deploy one machine at a time (default)"
+        echo "  --rolling       Deploy to one, verify health, then continue"
+        echo "  --dry-run       Preview deploy plan without executing"
+        echo "  --sync          Force sync hooks before deploy (regardless of hook_mode)"
+        echo "  --json          Output as NDJSON events"
         return 0
         ;;
       --*)
@@ -121,11 +126,23 @@ _fleet_cmd_deploy() {
 
   _load_env_file
 
+  # Read deploy_strategy from config if no CLI override
+  if [[ -z "$_strategy_override" ]]; then
+    local _cfg_strategy=""
+    _cfg_strategy=$(fleet_get '.deploy_strategy // "sequential"' 2>/dev/null || echo "sequential")
+    case "$_cfg_strategy" in
+      parallel) parallel=true ;;
+      rolling)  rolling=true ;;
+    esac
+  fi
+
   echo ""
   printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Fleet Deploy${RESET} — ${total} machine(s)"
   echo ""
 
-  if [[ "$parallel" == "true" ]]; then
+  if [[ "$rolling" == "true" ]]; then
+    _fleet_deploy_rolling "${machines[@]}"
+  elif [[ "$parallel" == "true" ]]; then
     _fleet_deploy_parallel "${machines[@]}"
   else
     _fleet_deploy_sequential "${machines[@]}"
@@ -421,6 +438,108 @@ ${_k8s_env}"
   done
 
   return $svc_rc
+}
+
+# ── Deploy: rolling ──
+# Deploy to one machine, verify health, then continue to next
+
+_fleet_deploy_rolling() {
+  local total=$#
+  local current=0
+  local failed=0
+
+  for machine in "$@"; do
+    current=$((current + 1))
+    _fleet_load_machine "$machine"
+
+    printf '%b\n' "  ${BOLD}[${current}/${total}]${RESET} ${machine} (${_FM_USER}@${_FM_HOST})"
+
+    # Sync hooks if needed
+    if [[ "${_FM_HOOK_MODE}" == "sync" || "$_FLEET_DEPLOY_FORCE_SYNC" == "true" ]]; then
+      _fleet_sync_hooks_before_deploy "$machine"
+    fi
+
+    # Deploy
+    local svc_rc=0
+    _fleet_deploy_one "$machine" || svc_rc=$?
+
+    if [[ $svc_rc -ne 0 ]]; then
+      printf '%b\n' "  ${RED}x${RESET} Deploy failed on ${machine}"
+      failed=$((failed + 1))
+
+      # Rolling: stop on first failure
+      echo ""
+      menu_select "Deploy failed on ${machine}. What to do?" \
+        "Retry" "Skip and continue" "Abort"
+      case "$MENU_RESULT" in
+        "Retry")
+          current=$((current - 1))
+          continue
+          ;;
+        "Skip and continue")
+          continue
+          ;;
+        *)
+          warn "Fleet deploy aborted at ${machine}"
+          return 1
+          ;;
+      esac
+    fi
+
+    # Rolling: verify health after successful deploy
+    if (( current < total )); then
+      printf '%b' "  ${DIM}Verifying health on ${machine}...${RESET} "
+
+      local _health_ok=false
+      # Simple health check: run muster status on remote or check connectivity
+      if [[ "${_FM_MODE}" == "muster" ]]; then
+        local _token=""
+        _token=$(fleet_token_get "$machine" 2>/dev/null || true)
+        local _h_cmd="muster status --minimal 2>/dev/null; echo \$?"
+        if [[ -n "$_token" ]]; then
+          _h_cmd="MUSTER_TOKEN=${_token} ${_h_cmd}"
+        fi
+        local _h_result=""
+        _h_result=$(fleet_exec "$machine" "$_h_cmd" 2>/dev/null | tail -1 || echo "1")
+        [[ "$_h_result" == "0" ]] && _health_ok=true
+      else
+        # Push mode: just verify SSH is still reachable
+        fleet_check "$machine" &>/dev/null && _health_ok=true
+      fi
+
+      if [[ "$_health_ok" == "true" ]]; then
+        printf '%b\n' "${GREEN}healthy${RESET}"
+      else
+        printf '%b\n' "${RED}unhealthy${RESET}"
+        echo ""
+        menu_select "Health check failed on ${machine}. Continue rolling?" \
+          "Continue anyway" "Rollback ${machine}" "Abort"
+        case "$MENU_RESULT" in
+          "Continue anyway") ;;
+          *"Rollback"*)
+            fleet_exec "$machine" "muster rollback 2>/dev/null || true" 2>/dev/null || true
+            printf '%b\n' "  ${DIM}Rolled back ${machine}${RESET}"
+            ;;
+          *)
+            warn "Fleet deploy aborted after ${machine}"
+            return 1
+            ;;
+        esac
+      fi
+    else
+      printf '%b\n' "  ${GREEN}*${RESET} Deploy complete on ${machine}"
+    fi
+
+    echo ""
+  done
+
+  if (( failed > 0 )); then
+    warn "${failed}/${total} machines had deploy failures"
+    return 1
+  fi
+
+  ok "Rolling deploy complete — ${total} machines"
+  return 0
 }
 
 # ── Deploy: parallel ──
