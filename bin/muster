@@ -38,6 +38,19 @@ export MUSTER_QUIET MUSTER_VERBOSE MUSTER_MINIMAL MUSTER_NO_VERIFY
 
 # ── App integrity check (inline — no sourced deps for trust bootstrap) ──
 if [[ -f "$MUSTER_ROOT/.muster.manifest" && "${MUSTER_NO_VERIFY}" != "true" ]]; then
+  # Loading messages — pick one at random
+  _m_msgs=(
+    "Squeezing the mustard..."
+    "Warming up the condiments..."
+    "Checking the jar for tampering..."
+    "Inspecting the secret sauce..."
+    "Shaking the bottle..."
+    "Making sure nobody spiked the mustard..."
+    "Verifying the recipe..."
+    "Tasting for freshness..."
+  )
+  _m_msg_idx=$(( RANDOM % ${#_m_msgs[@]} ))
+  printf '\033[2m  %s\033[0m' "${_m_msgs[$_m_msg_idx]}"
   _integrity_fail=false
 
   # Step 1: Verify manifest signature (inline openssl — no sourced code)
@@ -96,7 +109,8 @@ if [[ -f "$MUSTER_ROOT/.muster.manifest" && "${MUSTER_NO_VERIFY}" != "true" ]]; 
 
   # Step 4: Handle failure — warn + show tampered files + offer repair
   if [[ "$_integrity_fail" == "true" ]]; then
-    printf '\n\033[31m  ✗ App integrity check failed — files may have been tampered with\033[0m\n' >&2
+    printf '\r\033[K'
+    printf '\033[31m  ✗ App integrity check failed — files may have been tampered with\033[0m\n' >&2
     # Show tampered files
     if [[ -n "$_m_tampered_files" ]]; then
       IFS='|'
@@ -133,7 +147,9 @@ if [[ -f "$MUSTER_ROOT/.muster.manifest" && "${MUSTER_NO_VERIFY}" != "true" ]]; 
       esac
     fi
   fi
-  unset _integrity_fail _m_sig_file _m_pubkey _m_tmp_sig _m_manifest _m_lib _m_file _m_expected _m_actual _repair
+  # Clear loading message
+  printf '\r\033[K'
+  unset _integrity_fail _m_sig_file _m_pubkey _m_tmp_sig _m_manifest _m_lib _m_file _m_expected _m_actual _repair _m_msgs _m_msg_idx
 fi
 
 # ── Fast path: no lib loading needed ──
