@@ -172,6 +172,16 @@ cmd_deploy() {
     _json_auth_gate "deploy" || return 1
   fi
 
+  # Deploy password gate (skip for fleet deploys which use --force)
+  if [[ "$_force" != "true" && -t 0 ]]; then
+    source "$MUSTER_ROOT/lib/core/auth.sh"
+    if ! _deploy_password_gate; then
+      [[ "$dry_run" == "false" ]] && _deploy_lock_release "$project_dir"
+      _unload_env_file
+      return 1
+    fi
+  fi
+
   if [[ "$_json_mode" == "false" ]]; then
     echo ""
     printf '  %b%bDeploying%b %b%s%b\n' "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" "${WHITE}" "$project" "${RESET}"

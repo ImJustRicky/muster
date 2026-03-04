@@ -60,11 +60,12 @@ _settings_global_cli() {
 
   # Validate key
   case "$key" in
-    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|minimal|machine_role) ;;
+    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|minimal|machine_role|deploy_password) ;;
     *)
       err "Unknown global setting: ${key}"
       echo "  Valid keys: tui_mode, color_mode, log_color_mode, log_retention_days, default_stack,"
-      echo "              default_health_timeout, scanner_exclude, update_check, minimal, machine_role"
+      echo "              default_health_timeout, scanner_exclude, update_check, minimal, machine_role,"
+      echo "              deploy_password"
       return 1
       ;;
   esac
@@ -186,6 +187,19 @@ _settings_global_cli() {
         *) err "machine_role must be local, control, target, or both"; return 1 ;;
       esac
       global_config_set "$key" "\"$value\""
+      ;;
+    deploy_password)
+      if [[ "$value" == "off" || "$value" == "false" || "$value" == "" ]]; then
+        global_config_set "deploy_password_hash" '""'
+        ok "Deploy password removed"
+        return 0
+      fi
+      source "$MUSTER_ROOT/lib/core/auth.sh"
+      local _dp_hash
+      _dp_hash="sha256:$(_auth_hash "$value")"
+      global_config_set "deploy_password_hash" "\"${_dp_hash}\""
+      ok "Deploy password set"
+      return 0
       ;;
   esac
 

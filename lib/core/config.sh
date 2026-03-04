@@ -18,7 +18,8 @@ _GLOBAL_DEFAULTS='{
   "update_check": "on",
   "cloud": {},
   "machine_role": "",
-  "minimal": false
+  "minimal": false,
+  "deploy_password_hash": ""
 }'
 
 # Ensure global config exists with defaults

@@ -294,3 +294,26 @@ auth_revoke_token() {
 
   ok "Token '${name}' revoked"
 }
+
+# ── Deploy password gate ──
+
+# Check deploy password before allowing deploy.
+# Returns 0 if no password set or password correct, 1 on failure.
+_deploy_password_gate() {
+  local stored_hash
+  stored_hash=$(global_config_get "deploy_password_hash" 2>/dev/null || true)
+  [[ -z "$stored_hash" || "$stored_hash" == "null" ]] && return 0
+
+  source "$MUSTER_ROOT/lib/core/credentials.sh"
+
+  local raw
+  raw=$(_cred_prompt_password "Deploy password")
+  local input_hash
+  input_hash="sha256:$(_auth_hash "$raw")"
+
+  if [[ "$input_hash" != "$stored_hash" ]]; then
+    err "Incorrect deploy password"
+    return 1
+  fi
+  return 0
+}

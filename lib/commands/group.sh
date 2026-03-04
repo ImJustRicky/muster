@@ -1334,7 +1334,6 @@ _group_cmd_deploy() {
               # Animation loop
               local _sp_i=0
               while kill -0 "$_hook_pid" 2>/dev/null; do
-                [[ "$_group_interrupted" == "true" ]] && { kill "$_hook_pid" 2>/dev/null; break; }
                 printf '\033[%dA' "$_section_h"
                 progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
                 printf '\n'
@@ -1359,6 +1358,7 @@ _group_cmd_deploy() {
                   (( ${#_tp} > _pw )) && _tp="${_tp:0:$((_pw - 3))}..."
                   printf '    %b%s%b\033[K\n' "${DIM}" "$_tp" "${RESET}"
                 done
+                [[ "$_group_interrupted" == "true" ]] && { kill "$_hook_pid" 2>/dev/null; break; }
                 sleep 0.2
               done
 
@@ -1521,7 +1521,6 @@ _group_cmd_deploy() {
         while (( _pi_init < _preview_n )); do printf '\033[K\n'; _pi_init=$((_pi_init+1)); done
 
         while kill -0 "$_remote_pid" 2>/dev/null; do
-          [[ "$_group_interrupted" == "true" ]] && { kill "$_remote_pid" 2>/dev/null; break; }
           printf '\033[%dA' "$_section_h"
           progress_bar "$_steps_done" "$_total_steps" "${_pname}  ${_pdesc}"
           printf '\n'
@@ -1550,6 +1549,7 @@ _group_cmd_deploy() {
             printf '    %b%s%b\033[K\n' "${DIM}" "$_tp" "${RESET}"
             _tp_i=$(( _tp_i + 1 ))
           done
+          [[ "$_group_interrupted" == "true" ]] && { kill "$_remote_pid" 2>/dev/null; break; }
 
           sleep 0.2
         done
