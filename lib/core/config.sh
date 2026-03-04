@@ -313,14 +313,10 @@ for k in data.get('services', {}):
   local _key
   while IFS= read -r _key; do
     [[ -z "$_key" ]] && continue
-    # Block path traversal and special characters
+    # Block path traversal
     case "$_key" in
       *..*|/*|*$'\0'*) continue ;;
     esac
-    # Only allow alphanumeric, hyphens, underscores (portable — no regex)
-    local _stripped
-    _stripped=$(printf '%s' "$_key" | LC_ALL=C tr -d 'a-zA-Z0-9_\-')
-    [[ -n "$_stripped" ]] && continue
     printf '%s\n' "$_key"
   done <<< "$_raw_keys"
 }

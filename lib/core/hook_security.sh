@@ -141,22 +141,12 @@ _hook_validate_path() {
 # Returns: 0=safe, 1=dangerous
 _hook_validate_service_key() {
   local key="$1"
-
-  # Block: empty, contains .., starts with /, contains null bytes
-  if [[ -z "$key" ]]; then
-    return 1
-  fi
+  [[ -z "$key" ]] && return 1
   case "$key" in
     *..*)    return 1 ;;  # Path traversal
     /*)      return 1 ;;  # Absolute path
     *$'\0'*) return 1 ;;  # Null byte injection
   esac
-  # Only allow alphanumeric, hyphens, underscores (portable — no regex)
-  local _stripped
-  _stripped=$(printf '%s' "$key" | LC_ALL=C tr -d 'a-zA-Z0-9_\-')
-  if [[ -n "$_stripped" ]]; then
-    return 1
-  fi
   return 0
 }
 
