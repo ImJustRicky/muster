@@ -1761,6 +1761,8 @@ REMOTECMD
   cmd="${cmd}; mkdir -p .muster .muster/logs"
   cmd="${cmd}; _evt_before=\$(wc -l < .muster/logs/deploy-events.log 2>/dev/null || echo 0)"
   cmd="${cmd}; printf '%s\n%s\n' '${_source_label}' \"\$_evt_before\" > .muster/.fleet_deploying"
+  # Signal the remote dashboard to refresh (if running) so "Cancel" appears immediately
+  cmd="${cmd}; [ -f .muster/.dashboard_pid ] && kill -USR1 \$(cat .muster/.dashboard_pid) 2>/dev/null"
   # Run deploy in background with a cancel watcher.
   # The watcher checks .fleet_deploying every second — when the remote
   # dashboard removes it (cancel), the watcher kills all session processes
@@ -1782,7 +1784,10 @@ REMOTECMD
   # If .fleet_deploying was removed (cancel from dashboard), exit 130
   # even if the deploy was killed externally (rc=137)
   cmd="${cmd}; if [ ! -f .muster/.fleet_deploying ]; then rm -f .muster/deploy.lock; exit 130; fi"
-  cmd="${cmd}; rm -f .muster/.fleet_deploying; exit \$_rc"
+  # Clean up and signal dashboard to refresh back to normal
+  cmd="${cmd}; rm -f .muster/.fleet_deploying"
+  cmd="${cmd}; [ -f .muster/.dashboard_pid ] && kill -USR1 \$(cat .muster/.dashboard_pid) 2>/dev/null"
+  cmd="${cmd}; exit \$_rc"
 
   if [[ "$_GP_CLOUD" == "true" ]]; then
     # Cloud transport — pass cwd natively (agent handles directory change)

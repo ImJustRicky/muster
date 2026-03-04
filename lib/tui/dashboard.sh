@@ -589,6 +589,13 @@ cmd_dashboard() {
     done <<< "$_gkeys"
   fi
 
+  # Save dashboard PID so fleet deploys can signal us to refresh
+  printf '%s\n' "$$" > "${project_dir}/.muster/.dashboard_pid"
+  # Clean up PID file on exit
+  trap 'rm -f "'"${project_dir}"'/.muster/.dashboard_pid"; cleanup_term' EXIT
+  # Trap USR1 — interrupts read -t on Linux, triggering immediate refresh
+  trap 'true' USR1
+
   while true; do
     _dashboard_header
 
