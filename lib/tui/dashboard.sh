@@ -881,21 +881,31 @@ cmd_dashboard() {
               _deploy_pid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$_lock_file" 2>/dev/null)
             fi
             if [[ -n "$_deploy_pid" ]] && kill -0 "$_deploy_pid" 2>/dev/null; then
-              # Get process group ID — killing the group terminates ALL
-              # related processes including the SSH session's bash, which
-              # closes the SSH connection and stops the host immediately
+              # Kill by SESSION ID — this reaches ALL processes spawned by
+              # the SSH session, even those in different process groups
+              # (GNU timeout creates new groups via setpgid, so PGID kill
+              # alone misses deploy hooks and docker build)
+              local _sid=""
+              _sid=$(ps -o sid= -p "$_deploy_pid" 2>/dev/null | tr -d ' ')
+              local _my_sid=""
+              _my_sid=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')
+
+              # Kill all processes in the deploy's session (not our own)
+              if [[ -n "$_sid" && "$_sid" != "0" && "$_sid" != "1" && "$_sid" != "$_my_sid" ]]; then
+                pkill -KILL -s "$_sid" 2>/dev/null
+              fi
+
+              # Also kill process group as fallback
               local _pgid=""
               _pgid=$(ps -o pgid= -p "$_deploy_pid" 2>/dev/null | tr -d ' ')
-
-              # SIGKILL the process group (immediate, bypasses all traps)
               if [[ -n "$_pgid" && "$_pgid" != "0" && "$_pgid" != "1" ]]; then
                 kill -KILL -"$_pgid" 2>/dev/null
               fi
 
-              # Also SIGKILL the deploy PID directly
+              # Direct kill
               kill -KILL "$_deploy_pid" 2>/dev/null
 
-              # Fallback: kill any remaining muster deploy processes
+              # Catch any remaining muster deploy processes
               pkill -KILL -f "muster deploy" 2>/dev/null
             fi
           fi
