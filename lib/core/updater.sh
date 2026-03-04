@@ -90,6 +90,8 @@ _update_check_release() {
     local result="current"
     if [[ -n "$_cur_ver" ]] && _semver_lt "$_cur_ver" "$_latest_tag"; then
       result="behind"
+    elif [[ -n "$_cur_ver" ]] && _semver_lt "$_latest_tag" "$_cur_ver"; then
+      result="ahead"
     fi
 
     local _notes_url="https://api.github.com/repos/Muster-dev/muster/releases/tags/${_latest_tag}"
@@ -211,13 +213,26 @@ _update_apply_release() {
     return 1
   fi
 
-  # Check if already up to date
+  # Check if already up to date or ahead
   local _cur_ver=""
   _cur_ver=$(grep 'MUSTER_VERSION=' "${MUSTER_ROOT}/bin/muster" 2>/dev/null \
     | head -1 | sed 's/.*MUSTER_VERSION="//;s/".*//')
 
   if ! _semver_lt "$_cur_ver" "$_MUSTER_LATEST_TAG"; then
-    ok "Already up to date (v${_cur_ver})"
+    # Current >= latest release — check if we're AHEAD (source was newer)
+    if _semver_lt "$_MUSTER_LATEST_TAG" "$_cur_ver"; then
+      warn "Your version (v${_cur_ver}) is ahead of the latest release (${_MUSTER_LATEST_TAG})"
+      echo ""
+      printf '  %bYou were on source updates which track development builds.%b\n' "${DIM}" "${RESET}"
+      printf '  %bSwitching to release would downgrade to an older version.%b\n' "${DIM}" "${RESET}"
+      echo ""
+      printf '  %bOptions:%b\n' "${WHITE}" "${RESET}"
+      printf '  %b1)%b Stay on release and wait for releases to catch up\n' "${ACCENT_BRIGHT}" "${RESET}"
+      printf '  %b2)%b Switch back to source: %bmuster settings --global update_mode source%b\n' "${ACCENT_BRIGHT}" "${RESET}" "${DIM}" "${RESET}"
+      echo ""
+    else
+      ok "Already up to date (v${_cur_ver})"
+    fi
     echo ""
     return 0
   fi
@@ -300,10 +315,17 @@ _update_apply_release() {
 
 _update_apply_source() {
   echo ""
-  warn "Source mode — tracking HEAD of main"
-  printf '  %bThis may include unstable or unreleased changes.%b\n' "${DIM}" "${RESET}"
+  warn "Source mode — tracking development branch (main)"
   echo ""
-  printf '  %bContinue? [y/N]%b ' "${YELLOW}" "${RESET}"
+  printf '  %bThis is not a stable release channel:%b\n' "${WHITE}" "${RESET}"
+  printf '  %b  - Updates are frequent and may include untested changes%b\n' "${DIM}" "${RESET}"
+  printf '  %b  - Not recommended for production environments%b\n' "${DIM}" "${RESET}"
+  printf '  %b  - Can cause breaking changes without notice%b\n' "${DIM}" "${RESET}"
+  printf '  %b  - Switching back to release may require waiting for releases to catch up%b\n' "${DIM}" "${RESET}"
+  echo ""
+  printf '  %bSwitch to release: muster settings --global update_mode release%b\n' "${DIM}" "${RESET}"
+  echo ""
+  printf '  %bContinue with source update? [y/N]%b ' "${YELLOW}" "${RESET}"
   local _confirm=""
   IFS= read -rsn1 _confirm || true
   echo ""

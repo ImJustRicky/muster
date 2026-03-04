@@ -341,6 +341,24 @@ _settings_muster_global() {
       *) new_signing="off" ;;
     esac
 
+    # Confirm source mode switch
+    if [[ "$new_update_mode" == "source" && "$update_mode" != "source" ]]; then
+      echo ""
+      printf '  %b! Source mode tracks the development branch (main)%b\n' "${YELLOW}" "${RESET}"
+      printf '  %b  - Frequent updates with untested changes%b\n' "${DIM}" "${RESET}"
+      printf '  %b  - Not recommended for production%b\n' "${DIM}" "${RESET}"
+      printf '  %b  - Can cause breaking changes without notice%b\n' "${DIM}" "${RESET}"
+      echo ""
+      printf '  %bSwitch to source? [y/N]%b ' "${YELLOW}" "${RESET}"
+      local _src_confirm=""
+      IFS= read -rsn1 _src_confirm || true
+      echo ""
+      case "$_src_confirm" in
+        y|Y) ;;
+        *) new_update_mode="release" ;;
+      esac
+    fi
+
     # Save all settings
     global_config_set "tui_mode" "\"$new_tui\""
     global_config_set "color_mode" "\"$new_color\""
@@ -353,6 +371,144 @@ _settings_muster_global() {
     global_config_set "signing" "\"$new_signing\""
 
     return 0
+  done
+}
+
+# ── Updates panel ──
+
+_settings_updates() {
+  source "$MUSTER_ROOT/lib/core/updater.sh"
+
+  while true; do
+    clear
+    echo ""
+    printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}Updates${RESET}"
+    echo ""
+
+    # Current version + mode
+    local _cur_ver _update_mode
+    _cur_ver=$(grep 'MUSTER_VERSION=' "${MUSTER_ROOT}/bin/muster" 2>/dev/null \
+      | head -1 | sed 's/.*MUSTER_VERSION="//;s/".*//')
+    _update_mode=$(global_config_get "update_mode" 2>/dev/null)
+    : "${_update_mode:=release}"
+
+    local _w=$(( TERM_COLS - 4 ))
+    (( _w > 50 )) && _w=50
+    (( _w < 10 )) && _w=10
+    local _inner=$(( _w - 2 ))
+
+    # ── Info box ──
+    local _label="Current"
+    local _label_pad_len=$(( _w - ${#_label} - 3 ))
+    (( _label_pad_len < 1 )) && _label_pad_len=1
+    local _label_pad
+    printf -v _label_pad '%*s' "$_label_pad_len" ""
+    _label_pad="${_label_pad// /─}"
+    printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$_label" "${RESET}${ACCENT}" "$_label_pad" "${RESET}"
+
+    # Version line
+    local _vline="Version: v${_cur_ver}"
+    local _vpad_len=$(( _inner - ${#_vline} - 2 ))
+    (( _vpad_len < 0 )) && _vpad_len=0
+    local _vpad
+    printf -v _vpad '%*s' "$_vpad_len" ""
+    printf '  %b│%b  %b%s%b%s%b│%b\n' "${ACCENT}" "${RESET}" "${WHITE}" "$_vline" "${RESET}" "$_vpad" "${ACCENT}" "${RESET}"
+
+    # Channel line
+    local _cline="Channel: ${_update_mode}"
+    local _ctag=""
+    if [[ "$_update_mode" == "source" ]]; then
+      _ctag=" (dev)"
+    fi
+    local _cfull="${_cline}${_ctag}"
+    local _cpad_len=$(( _inner - ${#_cfull} - 2 ))
+    (( _cpad_len < 0 )) && _cpad_len=0
+    local _cpad
+    printf -v _cpad '%*s' "$_cpad_len" ""
+    if [[ "$_update_mode" == "source" ]]; then
+      printf '  %b│%b  %s%b%s%b%s%b│%b\n' "${ACCENT}" "${RESET}" "$_cline" "${YELLOW}" "$_ctag" "${RESET}" "$_cpad" "${ACCENT}" "${RESET}"
+    else
+      printf '  %b│%b  %s%s%b│%b\n' "${ACCENT}" "${RESET}" "$_cfull" "$_cpad" "${ACCENT}" "${RESET}"
+    fi
+
+    # Bottom of box
+    local _bottom
+    printf -v _bottom '%*s' "$_w" ""
+    _bottom="${_bottom// /─}"
+    printf '  %b└%s┘%b\n' "${ACCENT}" "$_bottom" "${RESET}"
+
+    # ── Changelog ──
+    local _changelog="${MUSTER_ROOT}/CHANGELOG.md"
+    if [[ -f "$_changelog" ]]; then
+      echo ""
+      printf '  %b%bChangelog%b\n' "${BOLD}" "${WHITE}" "${RESET}"
+      echo ""
+
+      local _cl_lines=0 _in_section=false _shown_sections=0
+      while IFS= read -r _cl_line; do
+        # Skip the title line
+        if [[ "$_cl_line" == "# "* ]]; then
+          continue
+        fi
+        if [[ "$_cl_line" == "All notable"* || "$_cl_line" == "Format follows"* ]]; then
+          continue
+        fi
+
+        # Section headers
+        if [[ "$_cl_line" == "## "* ]]; then
+          _shown_sections=$(( _shown_sections + 1 ))
+          # Show up to 5 release sections
+          if (( _shown_sections > 5 )); then
+            printf '  %b  ... see CHANGELOG.md for full history%b\n' "${DIM}" "${RESET}"
+            break
+          fi
+          _in_section=true
+          # Format: ## [0.5.45] - 2026-03-04
+          local _sec_ver="${_cl_line#\#\# }"
+          printf '  %b  %b%s%b\n' "${ACCENT_BRIGHT}" "${BOLD}" "$_sec_ver" "${RESET}"
+          continue
+        fi
+
+        if [[ "$_in_section" == "true" ]]; then
+          if [[ -z "$_cl_line" ]]; then
+            echo ""
+            continue
+          fi
+          _cl_lines=$(( _cl_lines + 1 ))
+          if (( _cl_lines > 40 )); then
+            printf '  %b  ... truncated%b\n' "${DIM}" "${RESET}"
+            break
+          fi
+          printf '  %b  %s%b\n' "${DIM}" "$_cl_line" "${RESET}"
+        fi
+      done < "$_changelog"
+    fi
+
+    echo ""
+
+    # ── Action menu ──
+    if [[ "$_update_mode" == "source" ]]; then
+      menu_select "Action" "Check for updates" "Switch to release channel" "Back"
+    else
+      menu_select "Action" "Check for updates" "Back"
+    fi
+
+    case "$MENU_RESULT" in
+      "Check for updates")
+        update_apply
+        printf '  %bPress any key to continue...%b\n' "${DIM}" "${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      "Switch to release channel")
+        global_config_set "update_mode" "\"release\""
+        ok "Switched to release channel"
+        printf '  %bPress any key to continue...%b\n' "${DIM}" "${RESET}"
+        IFS= read -rsn1 || true
+        ;;
+      Back|__back__)
+        return 0
+        ;;
+    esac
   done
 }
 

@@ -94,6 +94,13 @@ chmod 700 "$INSTALL_DIR"
 # ═══════════════════════════════════════════════
 _step "1/4" "Installing muster core"
 
+# Fetch latest release tag
+_latest_tag=""
+if command -v curl >/dev/null 2>&1; then
+  _latest_tag="$(curl -fsSL --max-time 10 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+    | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/".*//')"
+fi
+
 _fresh_install=true
 if [[ -d "${INSTALL_DIR}/repo" ]]; then
   _fresh_install=false
@@ -103,11 +110,22 @@ if [[ -d "${INSTALL_DIR}/repo" ]]; then
   if [[ "$_cur_remote" == *"ImJustRicky/muster"* ]]; then
     (cd "${INSTALL_DIR}/repo" && git remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null) || true
   fi
-  (cd "${INSTALL_DIR}/repo" && git pull --quiet)
+  if [[ -n "$_latest_tag" ]]; then
+    printf '  %bInstalling release %s...%b\n' "$_D" "$_latest_tag" "$_R"
+    (cd "${INSTALL_DIR}/repo" && git fetch --quiet --tags origin 2>/dev/null && git checkout --quiet "$_latest_tag" 2>/dev/null)
+  else
+    printf '  %b!%b Could not determine latest release, pulling latest source.\n' "$_Y" "$_R"
+    (cd "${INSTALL_DIR}/repo" && git pull --quiet)
+  fi
 else
   printf '  %bCloning muster...%b\n' "$_D" "$_R"
   if ! git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo" 2>/dev/null; then
     git clone --quiet "https://github.com/${REPO_OLD}.git" "${INSTALL_DIR}/repo"
+  fi
+  # Checkout release tag instead of staying on HEAD
+  if [[ -n "$_latest_tag" ]]; then
+    printf '  %bChecking out release %s...%b\n' "$_D" "$_latest_tag" "$_R"
+    (cd "${INSTALL_DIR}/repo" && git fetch --quiet --tags origin 2>/dev/null && git checkout --quiet "$_latest_tag" 2>/dev/null)
   fi
 fi
 
@@ -147,6 +165,17 @@ _write_manifest() {
 }
 
 _write_manifest "muster" "${_ver:-unknown}" "${BIN_DIR}/muster"
+
+# Set update_mode to release so future updates use the release channel
+_settings_file="${INSTALL_DIR}/settings.json"
+if command -v jq >/dev/null 2>&1; then
+  if [[ -f "$_settings_file" ]]; then
+    _tmp="${_settings_file}.tmp"
+    jq '.update_mode = "release"' "$_settings_file" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_settings_file"
+  else
+    printf '{"update_mode":"release","update_check":"on","color_mode":"auto"}\n' > "$_settings_file"
+  fi
+fi
 
 # ═══════════════════════════════════════════════
 # Step 2: PATH

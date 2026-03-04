@@ -179,6 +179,27 @@ _settings_global_cli() {
         release|source) ;;
         *) err "update_mode must be release or source"; return 1 ;;
       esac
+      if [[ "$value" == "source" ]]; then
+        echo ""
+        warn "Source mode tracks the development branch (main)"
+        printf '  %b- Updates are frequent and may include untested changes%b\n' "${DIM}" "${RESET}"
+        printf '  %b- Not recommended for production environments%b\n' "${DIM}" "${RESET}"
+        printf '  %b- Can cause breaking changes without notice%b\n' "${DIM}" "${RESET}"
+        printf '  %b- Version numbers will be ahead of official releases%b\n' "${DIM}" "${RESET}"
+        printf '  %b- Switching back to release may require waiting for releases to catch up%b\n' "${DIM}" "${RESET}"
+        echo ""
+        printf '  %bSwitch to source mode? [y/N]%b ' "${YELLOW}" "${RESET}"
+        local _src_confirm=""
+        IFS= read -rsn1 _src_confirm || true
+        echo ""
+        case "$_src_confirm" in
+          y|Y) ;;
+          *)
+            info "Staying on release channel"
+            return 0
+            ;;
+        esac
+      fi
       global_config_set "$key" "\"$value\""
       ;;
     minimal)
@@ -470,9 +491,9 @@ cmd_settings() {
     echo ""
 
     if [[ "$_has_project" == "true" ]]; then
-      menu_select "Settings" "Project Settings" "Muster Settings" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
+      menu_select "Settings" "Project Settings" "Muster Settings" "Updates" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     else
-      menu_select "Settings" "Muster Settings" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
+      menu_select "Settings" "Muster Settings" "Updates" "Hook Security" "Fleet Groups" "Fleet Trust" "Projects" "Back"
     fi
 
     case "$MENU_RESULT" in
@@ -481,6 +502,9 @@ cmd_settings() {
         ;;
       "Muster Settings")
         _settings_muster_global
+        ;;
+      "Updates")
+        _settings_updates
         ;;
       "Hook Security")
         _settings_hook_security
