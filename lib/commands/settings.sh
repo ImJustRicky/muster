@@ -60,12 +60,12 @@ _settings_global_cli() {
 
   # Validate key
   case "$key" in
-    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|update_mode|minimal|machine_role|deploy_password) ;;
+    tui_mode|color_mode|log_color_mode|log_retention_days|default_stack|default_health_timeout|scanner_exclude|update_check|update_mode|minimal|machine_role|deploy_password|signing) ;;
     *)
       err "Unknown global setting: ${key}"
       echo "  Valid keys: tui_mode, color_mode, log_color_mode, log_retention_days, default_stack,"
       echo "              default_health_timeout, scanner_exclude, update_check, update_mode, minimal,"
-      echo "              machine_role, deploy_password"
+      echo "              machine_role, deploy_password, signing"
       return 1
       ;;
   esac
@@ -207,6 +207,13 @@ _settings_global_cli() {
       global_config_set "deploy_password_hash" "\"${_dp_hash}\""
       ok "Deploy password set"
       return 0
+      ;;
+    signing)
+      case "$value" in
+        on|off) ;;
+        *) err "signing must be on or off"; return 1 ;;
+      esac
+      global_config_set "$key" "\"$value\""
       ;;
   esac
 

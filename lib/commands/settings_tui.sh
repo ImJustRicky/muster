@@ -174,7 +174,7 @@ _toggle_select() {
 
 _settings_muster_global() {
   while true; do
-    local color_mode log_color_mode log_retention default_stack health_timeout update_check update_mode scanner_ex
+    local color_mode log_color_mode log_retention default_stack health_timeout update_check update_mode scanner_ex signing
 
     color_mode=$(global_config_get "color_mode" 2>/dev/null)
     : "${color_mode:=auto}"
@@ -190,6 +190,8 @@ _settings_muster_global() {
     : "${update_check:=on}"
     update_mode=$(global_config_get "update_mode" 2>/dev/null)
     : "${update_mode:=release}"
+    signing=$(global_config_get "signing" 2>/dev/null)
+    : "${signing:=off}"
     scanner_ex=$(global_config_get "scanner_exclude" 2>/dev/null)
     if [[ "$scanner_ex" == "[]" || -z "$scanner_ex" ]]; then
       scanner_ex="(none)"
@@ -278,6 +280,14 @@ _settings_muster_global() {
       *)  _TOG_STATES[7]=1 ;;
     esac
 
+    # Signing: off / on
+    _TOG_LABELS[8]="Fleet signing"
+    _TOG_OPTIONS[8]="off|on"
+    case "$signing" in
+      on) _TOG_STATES[8]=1 ;;
+      *)  _TOG_STATES[8]=0 ;;
+    esac
+
     echo ""
     _toggle_select "Muster Settings"
 
@@ -325,6 +335,11 @@ _settings_muster_global() {
       4) new_timeout=60 ;;
       *) new_timeout=10 ;;
     esac
+    local new_signing
+    case $(( _TOG_STATES[8] )) in
+      1) new_signing="on" ;;
+      *) new_signing="off" ;;
+    esac
 
     # Save all settings
     global_config_set "tui_mode" "\"$new_tui\""
@@ -335,6 +350,7 @@ _settings_muster_global() {
     global_config_set "default_stack" "\"$new_stack\""
     global_config_set "log_retention_days" "$new_retention"
     global_config_set "default_health_timeout" "$new_timeout"
+    global_config_set "signing" "\"$new_signing\""
 
     return 0
   done

@@ -20,7 +20,8 @@ _GLOBAL_DEFAULTS='{
   "cloud": {},
   "machine_role": "",
   "minimal": false,
-  "deploy_password_hash": ""
+  "deploy_password_hash": "",
+  "signing": "off"
 }'
 
 # Ensure global config exists with defaults

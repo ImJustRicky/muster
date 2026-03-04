@@ -371,6 +371,75 @@ _relay_guard_validate_just() {
   return 0
 }
 
+# ── Payload signature verification ──
+
+# Verify a hook's signature against authorized keys.
+# Reads MUSTER_HOOK_SIG env var. Checks authorized_keys for the project.
+# Args: hook_file project_fingerprint
+# Returns: 0=pass, 1=rejected
+_relay_guard_verify_sig() {
+  local hook_file="$1" project_fp="$2"
+
+  local sig="${MUSTER_HOOK_SIG:-}"
+
+  # Check if target requires signing
+  local require_signing
+  require_signing=$(global_config_get "require_signing" 2>/dev/null || echo "off")
+
+  if [[ -z "$sig" ]]; then
+    if [[ "$require_signing" == "on" ]]; then
+      _relay_guard_log_rejection "no signature, signing required" "$hook_file" ""
+      printf '%b  %bx%b relay guard: hook rejected — signing required but no signature provided\n' \
+        "" "$RED" "$RESET" >&2
+      return 1
+    fi
+    # No sig, not required — pass
+    return 0
+  fi
+
+  # Source signing library
+  local _guard_dir
+  _guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+  source "${_guard_dir}/payload_sign.sh"
+
+  local auth_file
+  auth_file=$(_payload_auth_keys_file "$project_fp")
+
+  if [[ ! -f "$auth_file" ]]; then
+    if [[ "$require_signing" == "on" ]]; then
+      _relay_guard_log_rejection "no authorized keys for project" "$hook_file" ""
+      printf '%b  %bx%b relay guard: no authorized keys for project\n' \
+        "" "$RED" "$RESET" >&2
+      return 1
+    fi
+    # Sig provided but no authorized keys and not required — pass
+    return 0
+  fi
+
+  # Try each authorized key
+  local key_count
+  key_count=$(jq '.keys | length' "$auth_file" 2>/dev/null || echo 0)
+
+  local i=0
+  while (( i < key_count )); do
+    local tmp_pub="/tmp/.muster_guard_pub_$$"
+    jq -r --argjson i "$i" '.keys[$i].pubkey' "$auth_file" 2>/dev/null > "$tmp_pub"
+
+    if payload_verify "$hook_file" "$sig" "$tmp_pub"; then
+      rm -f "$tmp_pub"
+      _relay_guard_log_rejection "signature verified OK" "$hook_file" ""
+      return 0
+    fi
+    rm -f "$tmp_pub"
+    i=$(( i + 1 ))
+  done
+
+  _relay_guard_log_rejection "signature verification failed (no matching key)" "$hook_file" ""
+  printf '%b  %bx%b relay guard: hook signature could not be verified\n' \
+    "" "$RED" "$RESET" >&2
+  return 1
+}
+
 # ── Internal helpers ──
 
 # Resolve a path to its real absolute path (no symlinks).

@@ -55,6 +55,36 @@ cmd_fleet() {
       shift
       _fleet_cmd_rollback "$@"
       ;;
+    sync)
+      shift
+      source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+      _fleet_cmd_sync "$@"
+      ;;
+    keygen)
+      shift
+      _fleet_cmd_keygen "$@"
+      ;;
+    trust-key)
+      shift
+      _fleet_cmd_trust_key "$@"
+      ;;
+    list-keys)
+      shift
+      _fleet_cmd_list_keys "$@"
+      ;;
+    revoke-key)
+      shift
+      _fleet_cmd_revoke_key "$@"
+      ;;
+    setup-user)
+      shift
+      source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+      _fleet_cmd_setup_user "$@"
+      ;;
+    edit)
+      shift
+      _fleet_cmd_edit "$@"
+      ;;
     --help|-h)
       _fleet_cmd_help
       ;;
@@ -92,8 +122,20 @@ _fleet_cmd_help() {
   echo ""
   echo "Operations:"
   echo "  deploy [target] [--parallel]  Deploy to fleet machines"
+  echo "  deploy [target] --sync        Sync hooks before deploying"
   echo "  status [target] [--json]      Check health across fleet"
   echo "  rollback [target]             Rollback fleet machines"
+  echo ""
+  echo "Hook Management:"
+  echo "  sync [target] [--dry-run]     Push local hooks to remote machines"
+  echo "  edit <name> [--sync|--manual] Change machine settings"
+  echo "  setup-user <name> [--user X]  Create dedicated deploy user on target"
+  echo ""
+  echo "Signing:"
+  echo "  keygen                        Generate signing keypair"
+  echo "  trust-key <name>              Distribute public key to target"
+  echo "  list-keys [name]              Show trusted signing keys on target"
+  echo "  revoke-key <name> --label X   Remove a signing key from target"
   echo ""
   echo "Transport:"
   echo "  SSH (default)     Direct SSH connection to each machine"
@@ -189,7 +231,7 @@ _fleet_cmd_init() {
 # ── add ──
 
 _fleet_cmd_add() {
-  local name="" userhost="" mode="push" port="22" path="" key="" transport="ssh"
+  local name="" userhost="" mode="push" port="22" path="" key="" transport="ssh" hook_mode="manual"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -198,6 +240,8 @@ _fleet_cmd_add() {
       --path) path="$2"; shift 2 ;;
       --key|-k) key="$2"; shift 2 ;;
       --transport|-t) transport="$2"; shift 2 ;;
+      --sync) hook_mode="sync"; shift ;;
+      --manual) hook_mode="manual"; shift ;;
       --help|-h)
         echo "Usage: muster fleet add <name> user@host [options]"
         echo ""
@@ -207,10 +251,16 @@ _fleet_cmd_add() {
         echo "  --port, -p <N>              SSH port (default: 22)"
         echo "  --path <dir>                Project directory on remote"
         echo "  --key, -k <file>            SSH identity file"
+        echo "  --sync                      Sync hooks from dev machine before deploy"
+        echo "  --manual                    Hooks already on remote (default)"
         echo ""
         echo "Modes:"
         echo "  muster   Remote has muster installed (SSH + muster deploy)"
         echo "  push     Pipe hook scripts over SSH (no muster needed)"
+        echo ""
+        echo "Hook Modes:"
+        echo "  --sync     Dev machine pushes hooks before deploy (target needs nothing)"
+        echo "  --manual   Hooks already exist on target (default)"
         echo ""
         echo "Transports:"
         echo "  ssh      Direct SSH connection (default)"
@@ -256,7 +306,7 @@ _fleet_cmd_add() {
     return 1
   fi
 
-  fleet_add_machine "$name" "$host" "$user" "$port" "$key" "$path" "$mode" "$transport" || return 1
+  fleet_add_machine "$name" "$host" "$user" "$port" "$key" "$path" "$mode" "$transport" "$hook_mode" || return 1
 
   if [[ "$transport" == "cloud" ]]; then
     # Cloud transport: check for muster-tunnel, validate cloud config
@@ -293,10 +343,28 @@ _fleet_cmd_add() {
       printf '%b\n' "  ${DIM}Machine added but not reachable. Check SSH config and try: muster fleet test ${name}${RESET}"
     fi
 
+    # Non-root check
+    _fleet_check_nonroot "$name"
+
     # Auto-pair for muster mode
     if [[ "$mode" == "muster" ]]; then
       echo ""
       fleet_auto_pair "$name"
+    fi
+
+    # Offer initial sync for sync-mode machines
+    if [[ "$hook_mode" == "sync" ]]; then
+      echo ""
+      printf '%b\n' "  ${DIM}Hook mode: sync (dev machine pushes hooks)${RESET}"
+      printf '  Run initial sync now? [y/N] '
+      local _sync_reply
+      read -r _sync_reply
+      case "$_sync_reply" in
+        y|Y)
+          source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+          _fleet_sync_one "$name" "false" ""
+          ;;
+      esac
     fi
   fi
 }
@@ -1020,4 +1088,237 @@ _fleet_cmd_rollback() {
     warn "Fleet rollback — ${succeeded} succeeded, ${failed} failed (${total} total)"
   fi
   echo ""
+}
+
+# ── keygen ──
+
+_fleet_cmd_keygen() {
+  source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+
+  if [[ -f "$_PAYLOAD_PRIVKEY" && "${1:-}" != "--force" ]]; then
+    local fp
+    fp=$(payload_fingerprint 2>/dev/null || echo "unknown")
+    echo ""
+    ok "Signing keypair already exists"
+    printf '%b\n' "  ${DIM}Fingerprint: ${fp}${RESET}"
+    printf '%b\n' "  ${DIM}Public key:  ${_PAYLOAD_PUBKEY}${RESET}"
+    printf '%b\n' "  ${DIM}Use --force to regenerate${RESET}"
+    echo ""
+    return 0
+  fi
+
+  if [[ "${1:-}" == "--force" && -f "$_PAYLOAD_PRIVKEY" ]]; then
+    rm -f "$_PAYLOAD_PRIVKEY" "$_PAYLOAD_PUBKEY" "$_PAYLOAD_KEYTYPE_FILE"
+  fi
+
+  _payload_ensure_keypair || return 1
+
+  local algo fp
+  algo=$(cat "$_PAYLOAD_KEYTYPE_FILE" 2>/dev/null || echo "unknown")
+  fp=$(payload_fingerprint 2>/dev/null || echo "unknown")
+
+  echo ""
+  ok "Signing keypair generated (${algo})"
+  printf '%b\n' "  ${DIM}Fingerprint: ${fp}${RESET}"
+  printf '%b\n' "  ${DIM}Public key:  ${_PAYLOAD_PUBKEY}${RESET}"
+  echo ""
+  printf '%b\n' "  ${DIM}Next: muster fleet trust-key <machine>${RESET}"
+  printf '%b\n' "  ${DIM}Then: muster settings --global signing on${RESET}"
+  echo ""
+}
+
+# ── trust-key ──
+
+_fleet_cmd_trust_key() {
+  local machine="${1:-}"
+  if [[ -z "$machine" ]]; then
+    err "Usage: muster fleet trust-key <machine>"
+    return 1
+  fi
+
+  if ! fleet_load_config; then
+    err "No remotes.json found"
+    return 1
+  fi
+
+  source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+
+  if [[ ! -f "$_PAYLOAD_PUBKEY" ]]; then
+    err "No signing keypair — run: muster fleet keygen"
+    return 1
+  fi
+
+  echo ""
+  info "Distributing public key to ${machine}..."
+
+  source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+  _fleet_sync_pubkey "$machine"
+
+  local fp
+  fp=$(payload_fingerprint 2>/dev/null || echo "unknown")
+  ok "Public key distributed (${fp})"
+  echo ""
+}
+
+# ── list-keys ──
+
+_fleet_cmd_list_keys() {
+  local machine="${1:-}"
+
+  source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+
+  if [[ -z "$machine" ]]; then
+    # Show local keypair info
+    echo ""
+    if [[ -f "$_PAYLOAD_PUBKEY" ]]; then
+      local fp algo
+      fp=$(payload_fingerprint 2>/dev/null || echo "unknown")
+      algo=$(cat "$_PAYLOAD_KEYTYPE_FILE" 2>/dev/null || echo "unknown")
+      printf '%b\n' "  ${BOLD}Local signing key${RESET}"
+      printf '%b\n' "  ${DIM}Algorithm:   ${algo}${RESET}"
+      printf '%b\n' "  ${DIM}Fingerprint: ${fp}${RESET}"
+      printf '%b\n' "  ${DIM}Public key:  ${_PAYLOAD_PUBKEY}${RESET}"
+    else
+      printf '%b\n' "  ${DIM}No local signing key — run: muster fleet keygen${RESET}"
+    fi
+    echo ""
+    return 0
+  fi
+
+  # Show keys on remote machine
+  if ! fleet_load_config; then
+    err "No remotes.json found"
+    return 1
+  fi
+
+  _fleet_load_machine "$machine"
+  _fleet_build_opts
+
+  echo ""
+  printf '%b\n' "  ${BOLD}Trusted keys on ${machine}${RESET}"
+  echo ""
+
+  # shellcheck disable=SC2086
+  ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" \
+    'for f in $HOME/.muster/fleet/authorized_keys/*.json; do [ -f "$f" ] || continue; echo "$(basename "$f" .json):"; jq -r ".keys[] | \"  \\(.label)  \\(.added)\"" "$f" 2>/dev/null; done' 2>/dev/null || {
+    warn "Could not read keys from ${machine}"
+  }
+  echo ""
+}
+
+# ── revoke-key ──
+
+_fleet_cmd_revoke_key() {
+  local machine="" label=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --label) label="$2"; shift 2 ;;
+      -*) err "Unknown flag: $1"; return 1 ;;
+      *) machine="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$machine" || -z "$label" ]]; then
+    err "Usage: muster fleet revoke-key <machine> --label <name>"
+    return 1
+  fi
+
+  if ! fleet_load_config; then
+    err "No remotes.json found"
+    return 1
+  fi
+
+  _fleet_load_machine "$machine"
+  _fleet_build_opts
+
+  # shellcheck disable=SC2086
+  ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "bash -s" <<REVOKE_EOF 2>/dev/null
+for f in \$HOME/.muster/fleet/authorized_keys/*.json; do
+  [ -f "\$f" ] || continue
+  if command -v jq >/dev/null 2>&1; then
+    TMP="\${f}.tmp"
+    jq --arg l "${label}" '.keys = [.keys[] | select(.label != \$l)]' "\$f" > "\$TMP" && mv "\$TMP" "\$f"
+  fi
+done
+REVOKE_EOF
+
+  ok "Key '${label}' revoked on ${machine}"
+}
+
+# ── edit ──
+
+_fleet_cmd_edit() {
+  local machine=""
+  local new_hook_mode="" new_user="" new_host="" new_port=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --sync)   new_hook_mode="sync"; shift ;;
+      --manual) new_hook_mode="manual"; shift ;;
+      --user)   new_user="$2"; shift 2 ;;
+      --host)   new_host="$2"; shift 2 ;;
+      --port)   new_port="$2"; shift 2 ;;
+      --help|-h)
+        echo "Usage: muster fleet edit <machine> [options]"
+        echo ""
+        echo "Options:"
+        echo "  --sync              Switch to sync hook mode"
+        echo "  --manual            Switch to manual hook mode"
+        echo "  --user <user>       Change SSH user"
+        echo "  --host <host>       Change host"
+        echo "  --port <port>       Change SSH port"
+        return 0
+        ;;
+      -*) err "Unknown flag: $1"; return 1 ;;
+      *) machine="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$machine" ]]; then
+    err "Usage: muster fleet edit <machine> [--sync|--manual] [--user X] [--host X] [--port X]"
+    return 1
+  fi
+
+  if ! fleet_load_config; then
+    err "No remotes.json found"
+    return 1
+  fi
+
+  local existing
+  existing=$(fleet_get ".machines.\"${machine}\" // empty")
+  if [[ -z "$existing" ]]; then
+    err "Machine '${machine}' not found"
+    return 1
+  fi
+
+  local changed=false
+
+  if [[ -n "$new_hook_mode" ]]; then
+    fleet_set ".machines.\"${machine}\".hook_mode" "\"${new_hook_mode}\""
+    ok "Hook mode set to '${new_hook_mode}' for ${machine}"
+    changed=true
+  fi
+
+  if [[ -n "$new_user" ]]; then
+    fleet_set ".machines.\"${machine}\".user" "\"${new_user}\""
+    ok "User set to '${new_user}' for ${machine}"
+    changed=true
+  fi
+
+  if [[ -n "$new_host" ]]; then
+    fleet_set ".machines.\"${machine}\".host" "\"${new_host}\""
+    ok "Host set to '${new_host}' for ${machine}"
+    changed=true
+  fi
+
+  if [[ -n "$new_port" ]]; then
+    fleet_set ".machines.\"${machine}\".port" "${new_port}"
+    ok "Port set to '${new_port}' for ${machine}"
+    changed=true
+  fi
+
+  if [[ "$changed" == "false" ]]; then
+    info "No changes specified. Use --help to see options."
+  fi
 }

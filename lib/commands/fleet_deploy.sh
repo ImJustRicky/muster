@@ -3,19 +3,23 @@
 # Extracted from fleet.sh: deploy, dry-run, sequential, parallel, summary.
 # shellcheck disable=SC2034
 
+# Module flag for --sync threading
+_FLEET_DEPLOY_FORCE_SYNC="false"
+
 # ── deploy ──
 
 _fleet_cmd_deploy() {
   # shellcheck disable=SC2034
-  local target="" parallel=false dry_run=false json_mode=false
+  local target="" parallel=false dry_run=false json_mode=false force_sync=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --parallel) parallel=true; shift ;;
       --dry-run) dry_run=true; shift ;;
       --json) json_mode=true; shift ;;
+      --sync) force_sync=true; shift ;;
       --help|-h)
-        echo "Usage: muster fleet deploy [target] [--parallel] [--dry-run] [--json]"
+        echo "Usage: muster fleet deploy [target] [--parallel] [--dry-run] [--sync] [--json]"
         echo ""
         echo "Deploy to fleet machines. Target can be a machine name, group name,"
         echo "or omitted to deploy to all machines following deploy_order."
@@ -23,6 +27,7 @@ _fleet_cmd_deploy() {
         echo "Options:"
         echo "  --parallel    Deploy to all target machines in parallel"
         echo "  --dry-run     Preview deploy plan without executing"
+        echo "  --sync        Force sync hooks before deploy (regardless of hook_mode)"
         echo "  --json        Output as NDJSON events"
         return 0
         ;;
@@ -110,6 +115,9 @@ _fleet_cmd_deploy() {
     _fleet_deploy_dry_run "${machines[@]}"
     return 0
   fi
+
+  # Thread --sync flag to deploy functions
+  _FLEET_DEPLOY_FORCE_SYNC="$force_sync"
 
   _load_env_file
 
@@ -278,10 +286,37 @@ _fleet_deploy_sequential() {
   _fleet_deploy_summary "$succeeded" "$failed" "$total"
 }
 
+# Auto-sync hooks if machine is in sync mode or --sync flag is set
+# Returns: 0=ok (or no sync needed), 1=sync failed
+_fleet_deploy_auto_sync() {
+  local machine="$1"
+
+  _fleet_load_machine "$machine"
+
+  # Sync if hook_mode is "sync" or --sync flag was passed
+  if [[ "$_FM_HOOK_MODE" != "sync" && "$_FLEET_DEPLOY_FORCE_SYNC" != "true" ]]; then
+    return 0
+  fi
+
+  # Source fleet_sync.sh for _fleet_sync_one
+  source "$MUSTER_ROOT/lib/commands/fleet_sync.sh"
+
+  printf '%b\n' "  ${DIM}syncing hooks to ${machine}...${RESET}"
+  if _fleet_sync_one "$machine" "false" ""; then
+    return 0
+  else
+    warn "Hook sync failed for ${machine}"
+    return 1
+  fi
+}
+
 # Deploy to a muster-mode machine
 _fleet_deploy_muster() {
   local machine="$1" log_file="$2"
   _fleet_load_machine "$machine"
+
+  # Auto-sync hooks before deploy if needed
+  _fleet_deploy_auto_sync "$machine" || return 1
 
   local token
   token=$(fleet_token_get "$machine")
@@ -335,6 +370,9 @@ _fleet_deploy_muster() {
 _fleet_deploy_push() {
   local machine="$1" log_file="$2"
   _fleet_load_machine "$machine"
+
+  # Auto-sync hooks before deploy if needed
+  _fleet_deploy_auto_sync "$machine" || return 1
 
   local project_dir
   project_dir="$(dirname "$CONFIG_FILE")"
@@ -425,6 +463,13 @@ _fleet_deploy_parallel() {
         local _rc=0
         local _start
         _start=$(date +%s)
+
+        # Auto-sync hooks before deploy if needed
+        if ! _fleet_deploy_auto_sync "$machine"; then
+          echo "1|0" > "$status_file"
+          _history_log_event "fleet:${machine}" "deploy" "failed" "sync failed"
+          exit 1
+        fi
 
         if [[ "$_FM_MODE" == "muster" ]]; then
           local _token

@@ -663,12 +663,20 @@ $(cat "$_hf" 2>/dev/null)"
         # shellcheck disable=SC2034
         FLEET_CONFIG_FILE="$_fleet_cfg"
 
-        local _fleet_ok=0 _fleet_fail=0 _fleet_total=0
+        local _fleet_ok=0 _fleet_fail=0 _fleet_total=0 _fleet_root=0
         while IFS= read -r _fm; do
           [[ -z "$_fm" ]] && continue
           _fleet_total=$(( _fleet_total + 1 ))
           if fleet_check "$_fm" 2>/dev/null; then
             _fleet_ok=$(( _fleet_ok + 1 ))
+            # Non-root check
+            local _uid
+            _uid=$(fleet_exec "$_fm" "id -u" 2>/dev/null | tr -d '[:space:]')
+            if [[ "$_uid" == "0" ]]; then
+              _fleet_root=$(( _fleet_root + 1 ))
+              _doc_warn "Fleet: ${_fm} running as root"
+              _doc_detail "Consider: muster fleet setup-user ${_fm}"
+            fi
           else
             _fleet_fail=$(( _fleet_fail + 1 ))
             _doc_fail "Fleet machine unreachable: ${_fm}"

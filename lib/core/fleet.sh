@@ -211,14 +211,14 @@ fleet_set() {
 # ── Machine config (batch read) ──
 
 # Vars set by _fleet_load_machine:
-_FM_HOST="" _FM_USER="" _FM_PORT="" _FM_IDENTITY="" _FM_PROJECT_DIR="" _FM_MODE="" _FM_TRANSPORT=""
+_FM_HOST="" _FM_USER="" _FM_PORT="" _FM_IDENTITY="" _FM_PROJECT_DIR="" _FM_MODE="" _FM_TRANSPORT="" _FM_HOOK_MODE=""
 
 # Load all config for a machine in one jq call
 _fleet_load_machine() {
   local name="$1"
   local data
   data=$(jq -r --arg n "$name" \
-    '.machines[$n] | "\(.host // "")\n\(.user // "")\n\(.port // 22)\n\(.identity_file // "")\n\(.project_dir // "")\n\(.mode // "push")\n\(.transport // "ssh")"' \
+    '.machines[$n] | "\(.host // "")\n\(.user // "")\n\(.port // 22)\n\(.identity_file // "")\n\(.project_dir // "")\n\(.mode // "push")\n\(.transport // "ssh")\n\(.hook_mode // "manual")"' \
     "$FLEET_CONFIG_FILE" 2>/dev/null)
 
   local i=0
@@ -231,6 +231,7 @@ _fleet_load_machine() {
       4) _FM_PROJECT_DIR="$_line" ;;
       5) _FM_MODE="$_line" ;;
       6) _FM_TRANSPORT="$_line" ;;
+      7) _FM_HOOK_MODE="$_line" ;;
     esac
     i=$(( i + 1 ))
   done <<< "$data"
@@ -241,6 +242,7 @@ _fleet_load_machine() {
   [[ "$_FM_PROJECT_DIR" == "null" ]] && _FM_PROJECT_DIR=""
   [[ -z "$_FM_MODE" || "$_FM_MODE" == "null" ]] && _FM_MODE="push"
   [[ -z "$_FM_TRANSPORT" || "$_FM_TRANSPORT" == "null" ]] && _FM_TRANSPORT="ssh"
+  [[ -z "$_FM_HOOK_MODE" || "$_FM_HOOK_MODE" == "null" ]] && _FM_HOOK_MODE="manual"
 }
 
 # List all machine names
@@ -267,7 +269,7 @@ fleet_deploy_order() {
 # ── CRUD ──
 
 fleet_add_machine() {
-  local name="$1" host="$2" user="$3" port="${4:-22}" identity="${5:-}" project_dir="${6:-}" mode="${7:-push}" transport="${8:-ssh}"
+  local name="$1" host="$2" user="$3" port="${4:-22}" identity="${5:-}" project_dir="${6:-}" mode="${7:-push}" transport="${8:-ssh}" hook_mode="${9:-manual}"
 
   # Validate mode
   case "$mode" in
@@ -305,7 +307,9 @@ fleet_add_machine() {
     --arg project_dir "$project_dir" \
     --arg mode "$mode" \
     --arg transport "$transport" \
+    --arg hook_mode "$hook_mode" \
     '{host: $host, user: $user, port: $port, mode: $mode} +
+     (if $hook_mode != "manual" then {hook_mode: $hook_mode} else {} end) +
      (if $transport != "ssh" then {transport: $transport} else {} end) +
      (if $identity != "" then {identity_file: $identity} else {} end) +
      (if $project_dir != "" then {project_dir: $project_dir} else {} end)')
@@ -432,6 +436,17 @@ fleet_exec() {
 fleet_push_hook() {
   local machine="$1" hook_file="$2" env_lines="${3:-}"
   _fleet_load_machine "$machine"
+
+  # Sign hook if signing is enabled
+  local _hook_sig=""
+  local _signing
+  _signing=$(global_config_get "signing" 2>/dev/null || echo "off")
+  if [[ "$_signing" == "on" && -f "$hook_file" ]]; then
+    source "$MUSTER_ROOT/lib/core/payload_sign.sh"
+    _payload_ensure_keypair 2>/dev/null
+    _hook_sig=$(payload_sign "$hook_file" 2>/dev/null || true)
+  fi
+
   case "$_FM_TRANSPORT" in
     ssh)
       _fleet_build_opts
@@ -445,6 +460,11 @@ fleet_push_hook() {
           done <<< "$env_lines"
         fi
 
+        # Export hook signature if signed
+        if [[ -n "$_hook_sig" ]]; then
+          printf 'export MUSTER_HOOK_SIG=%s\n' "$_hook_sig"
+        fi
+
         # cd to project directory if set
         if [[ -n "$_FM_PROJECT_DIR" ]]; then
           printf 'cd %s || exit 1\n' "$_FM_PROJECT_DIR"
@@ -455,8 +475,18 @@ fleet_push_hook() {
       } | ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "bash -s"
       ;;
     cloud)
+      # Pass sig as env var alongside hook
+      local _cloud_env="$env_lines"
+      if [[ -n "$_hook_sig" ]]; then
+        if [[ -n "$_cloud_env" ]]; then
+          _cloud_env="${_cloud_env}
+MUSTER_HOOK_SIG=${_hook_sig}"
+        else
+          _cloud_env="MUSTER_HOOK_SIG=${_hook_sig}"
+        fi
+      fi
       source "$MUSTER_ROOT/lib/core/cloud.sh"
-      _fleet_cloud_push "$machine" "$hook_file" "$env_lines"
+      _fleet_cloud_push "$machine" "$hook_file" "$_cloud_env"
       ;;
     *)
       err "Unknown transport: ${_FM_TRANSPORT} (machine: ${machine})"
@@ -490,4 +520,22 @@ fleet_desc() {
   local machine="$1"
   _fleet_load_machine "$machine"
   printf '%s@%s:%s' "$_FM_USER" "$_FM_HOST" "$_FM_PORT"
+}
+
+# Check if remote user is root — warn if so
+_fleet_check_nonroot() {
+  local machine="$1"
+  local remote_uid
+  remote_uid=$(fleet_exec "$machine" "id -u" 2>/dev/null)
+  remote_uid=$(printf '%s' "$remote_uid" | tr -d '[:space:]')
+
+  if [[ "$remote_uid" == "0" ]]; then
+    echo ""
+    warn "SSH user is root on $(fleet_desc "$machine")"
+    printf '%b\n' "  ${DIM}Root access increases blast radius on failed deploys.${RESET}"
+    printf '%b\n' "  ${DIM}Consider: muster fleet setup-user ${machine}${RESET}"
+    echo ""
+  elif [[ -n "$remote_uid" ]]; then
+    ok "Remote user is non-root (uid ${remote_uid})"
+  fi
 }
