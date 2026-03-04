@@ -287,12 +287,6 @@ cmd_deploy() {
   for svc in "${services[@]}"; do
     (( current++ ))
 
-    # Validate service key — block path traversal attacks
-    if type _hook_validate_service_key &>/dev/null && ! _hook_validate_service_key "$svc"; then
-      err "Invalid service key: ${svc} — skipping (possible path traversal)"
-      continue
-    fi
-
     local name
     name=$(config_get ".services.${svc}.name")
     local hook="${project_dir}/.muster/hooks/${svc}/deploy.sh"

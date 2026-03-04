@@ -70,12 +70,6 @@ cmd_rollback() {
     target="$MENU_RESULT"
   fi
 
-  # Validate service key — block path traversal attacks
-  if type _hook_validate_service_key &>/dev/null && ! _hook_validate_service_key "$target"; then
-    err "Invalid service key: ${target} — possible path traversal"
-    return 1
-  fi
-
   local hook="${project_dir}/.muster/hooks/${target}/rollback.sh"
   local _rb_hook_dir="${project_dir}/.muster/hooks/${target}"
   local _use_just=false
