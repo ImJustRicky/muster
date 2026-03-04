@@ -229,8 +229,10 @@ case "${1:-}" in
         _project=$(config_get '.project')
         echo "muster: ${_project}"
 
+        # shellcheck disable=SC2178
         _services=$(config_services)
         _svc_count=0; _healthy=0; _unhealthy=0; _disabled=0
+        # shellcheck disable=SC2128
         while IFS= read -r _svc; do
           [[ -z "$_svc" ]] && continue
           _svc_count=$(( _svc_count + 1 ))
