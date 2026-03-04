@@ -141,13 +141,13 @@ fleet_verify_pair() {
 
 # ── Config I/O ──
 
-# Find and load remotes.json from project directory
+# Find and load remotes.json (project dir first, then global)
 fleet_load_config() {
   if [[ -n "$FLEET_CONFIG_FILE" ]]; then
     return 0
   fi
 
-  # Use project dir from deploy.json if available
+  # Check project directory first
   local dir=""
   if [[ -n "$CONFIG_FILE" ]]; then
     dir="$(dirname "$CONFIG_FILE")"
@@ -158,6 +158,12 @@ fleet_load_config() {
   local path="${dir}/remotes.json"
   if [[ -f "$path" ]]; then
     FLEET_CONFIG_FILE="$path"
+    return 0
+  fi
+
+  # Fall back to global ~/.muster/remotes.json
+  if [[ -f "$HOME/.muster/remotes.json" ]]; then
+    FLEET_CONFIG_FILE="$HOME/.muster/remotes.json"
     return 0
   fi
 
@@ -172,7 +178,7 @@ fleet_has_config() {
   else
     dir="$(pwd)"
   fi
-  [[ -f "${dir}/remotes.json" ]]
+  [[ -f "${dir}/remotes.json" ]] || [[ -f "$HOME/.muster/remotes.json" ]]
 }
 
 # Create empty remotes.json

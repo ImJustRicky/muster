@@ -57,12 +57,13 @@ cmd_fleet_setup() {
     return 1
   fi
 
-  # Ensure fleet is initialized
-  local remotes_file=""
-  remotes_file=$(fleet_find_config 2>/dev/null || true)
-  if [[ -z "$remotes_file" ]]; then
-    fleet_init 2>/dev/null || true
+  # Ensure fleet config exists at ~/.muster/remotes.json
+  local _fleet_config="$HOME/.muster/remotes.json"
+  mkdir -p "$HOME/.muster"
+  if [[ ! -f "$_fleet_config" ]]; then
+    printf '{\n  "machines": {},\n  "groups": {},\n  "deploy_order": []\n}\n' > "$_fleet_config"
   fi
+  FLEET_CONFIG_FILE="$_fleet_config"
 
   _FLEET_SETUP_TOTAL=8
   local _fleet_mode="single"
