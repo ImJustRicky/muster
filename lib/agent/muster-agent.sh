@@ -5,7 +5,7 @@
 # Copyright 2026 Ricky Eipper. Licensed under Apache 2.0.
 set -uo pipefail
 
-AGENT_VERSION="0.5.50"
+AGENT_VERSION="0.5.51"
 
 # ── Paths ──
 _AGENT_BASE="${HOME}/.muster/agent"

@@ -119,9 +119,9 @@ if [[ -d "${INSTALL_DIR}/repo" ]]; then
   fi
 else
   if [[ -n "$_latest_tag" ]]; then
-    printf '  %bCloning muster %b%s%b%b...%b\n' "$_D" "$_R$_W" "$_latest_tag" "$_R" "$_D" "$_R"
+    printf '  %bDownloading muster %b%s%b%b...%b\n' "$_D" "$_R$_W" "$_latest_tag" "$_R" "$_D" "$_R"
   else
-    printf '  %bCloning muster...%b\n' "$_D" "$_R"
+    printf '  %bDownloading muster...%b\n' "$_D" "$_R"
   fi
   if ! git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo" 2>/dev/null; then
     git clone --quiet "https://github.com/${REPO_OLD}.git" "${INSTALL_DIR}/repo"

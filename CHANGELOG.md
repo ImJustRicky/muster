@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.51] - 2026-03-04
+
+### Fixed
+- Installer now says "Downloading" instead of "Cloning" for fresh installs
+- Minor bug fixes
+
 ## [0.5.50] - 2026-03-04
 
 ### Added
