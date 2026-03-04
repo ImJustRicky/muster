@@ -111,21 +111,25 @@ if [[ -d "${INSTALL_DIR}/repo" ]]; then
     (cd "${INSTALL_DIR}/repo" && git remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null) || true
   fi
   if [[ -n "$_latest_tag" ]]; then
-    printf '  %bInstalling release %s...%b\n' "$_D" "$_latest_tag" "$_R"
+    printf '  %bUpdating to release %b%s%b%b...%b\n' "$_D" "$_R$_W" "$_latest_tag" "$_R" "$_D" "$_R"
     (cd "${INSTALL_DIR}/repo" && git fetch --quiet --tags origin 2>/dev/null && git checkout --quiet "$_latest_tag" 2>/dev/null)
   else
     printf '  %b!%b Could not determine latest release, pulling latest source.\n' "$_Y" "$_R"
     (cd "${INSTALL_DIR}/repo" && git pull --quiet)
   fi
 else
-  printf '  %bCloning muster...%b\n' "$_D" "$_R"
+  if [[ -n "$_latest_tag" ]]; then
+    printf '  %bCloning muster %b%s%b%b...%b\n' "$_D" "$_R$_W" "$_latest_tag" "$_R" "$_D" "$_R"
+  else
+    printf '  %bCloning muster...%b\n' "$_D" "$_R"
+  fi
   if ! git clone --quiet "https://github.com/${REPO}.git" "${INSTALL_DIR}/repo" 2>/dev/null; then
     git clone --quiet "https://github.com/${REPO_OLD}.git" "${INSTALL_DIR}/repo"
   fi
-  # Checkout release tag instead of staying on HEAD
   if [[ -n "$_latest_tag" ]]; then
-    printf '  %bChecking out release %s...%b\n' "$_D" "$_latest_tag" "$_R"
     (cd "${INSTALL_DIR}/repo" && git fetch --quiet --tags origin 2>/dev/null && git checkout --quiet "$_latest_tag" 2>/dev/null)
+  else
+    printf '  %b!%b Could not determine latest release, installing from source.\n' "$_Y" "$_R"
   fi
 fi
 
