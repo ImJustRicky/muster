@@ -871,7 +871,7 @@ cmd_dashboard() {
       "Cancel fleet deploy")
         local _cancel_file="${project_dir}/.muster/.fleet_deploying"
         if [[ -f "$_cancel_file" ]]; then
-          # Kill the running deploy process tree via deploy lock PID
+          # Kill the running deploy process via deploy lock PID
           local _lock_file="${project_dir}/.muster/deploy.lock"
           if [[ -f "$_lock_file" ]]; then
             local _deploy_pid=""
@@ -881,32 +881,28 @@ cmd_dashboard() {
               _deploy_pid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$_lock_file" 2>/dev/null)
             fi
             if [[ -n "$_deploy_pid" ]] && kill -0 "$_deploy_pid" 2>/dev/null; then
-              # Kill entire process tree recursively
-              _cancel_kill_tree() {
-                local _pid="$1"
-                local _child
-                for _child in $(pgrep -P "$_pid" 2>/dev/null); do
-                  _cancel_kill_tree "$_child"
-                done
-                kill -TERM "$_pid" 2>/dev/null
-              }
-              _cancel_kill_tree "$_deploy_pid"
-              # Wait briefly, then force kill
-              local _kw=0
-              while (( _kw < 15 )) && kill -0 "$_deploy_pid" 2>/dev/null; do
-                sleep 0.2
-                _kw=$(( _kw + 1 ))
-              done
-              if kill -0 "$_deploy_pid" 2>/dev/null; then
-                kill -KILL -"$_deploy_pid" 2>/dev/null
-                kill -KILL "$_deploy_pid" 2>/dev/null
+              # Get process group ID — killing the group terminates ALL
+              # related processes including the SSH session's bash, which
+              # closes the SSH connection and stops the host immediately
+              local _pgid=""
+              _pgid=$(ps -o pgid= -p "$_deploy_pid" 2>/dev/null | tr -d ' ')
+
+              # SIGKILL the process group (immediate, bypasses all traps)
+              if [[ -n "$_pgid" && "$_pgid" != "0" && "$_pgid" != "1" ]]; then
+                kill -KILL -"$_pgid" 2>/dev/null
               fi
+
+              # Also SIGKILL the deploy PID directly
+              kill -KILL "$_deploy_pid" 2>/dev/null
+
+              # Fallback: kill any remaining muster deploy processes
+              pkill -KILL -f "muster deploy" 2>/dev/null
             fi
           fi
           rm -f "$_cancel_file"
           rm -f "$_lock_file"
           ok "Fleet deploy cancelled"
-          printf '  %bDeploy process killed. The host will see the deploy as failed.%b\n' "${DIM}" "${RESET}"
+          printf '  %bDeploy process and SSH session killed.%b\n' "${DIM}" "${RESET}"
         else
           info "No fleet deploy in progress"
         fi
