@@ -871,9 +871,29 @@ cmd_dashboard() {
       "Cancel fleet deploy")
         local _cancel_file="${project_dir}/.muster/.fleet_deploying"
         if [[ -f "$_cancel_file" ]]; then
+          # Kill the running deploy process via deploy lock PID
+          local _lock_file="${project_dir}/.muster/deploy.lock"
+          if [[ -f "$_lock_file" ]]; then
+            local _deploy_pid=""
+            if has_cmd jq; then
+              _deploy_pid=$(jq -r '.pid // empty' "$_lock_file" 2>/dev/null)
+            elif has_cmd python3; then
+              _deploy_pid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$_lock_file" 2>/dev/null)
+            fi
+            if [[ -n "$_deploy_pid" ]] && kill -0 "$_deploy_pid" 2>/dev/null; then
+              kill -TERM "$_deploy_pid" 2>/dev/null
+              # Wait briefly for cleanup
+              local _kw=0
+              while (( _kw < 10 )) && kill -0 "$_deploy_pid" 2>/dev/null; do
+                sleep 0.2
+                _kw=$(( _kw + 1 ))
+              done
+            fi
+          fi
           rm -f "$_cancel_file"
+          rm -f "$_lock_file"
           ok "Fleet deploy cancelled"
-          printf '  %bThe remote deployer will see the deploy as failed.%b\n' "${DIM}" "${RESET}"
+          printf '  %bDeploy process killed. The host will see the deploy as failed.%b\n' "${DIM}" "${RESET}"
         else
           info "No fleet deploy in progress"
         fi
