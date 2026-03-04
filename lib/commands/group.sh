@@ -1770,19 +1770,17 @@ REMOTECMD
   cmd="${cmd}; muster deploy --force & _dpid=\$!"
   cmd="${cmd}; while kill -0 \$_dpid 2>/dev/null; do"
   cmd="${cmd}   if [ ! -f .muster/.fleet_deploying ]; then"
-  cmd="${cmd}     exec 3>&2 2>/dev/null;"
   cmd="${cmd}     kill -KILL \$_dpid 2>/dev/null;"
   cmd="${cmd}     pkill -KILL -P \$_dpid 2>/dev/null;"
-  cmd="${cmd}     pkill -KILL -f 'docker build' 2>/dev/null;"
+  # Kill grandchildren (timeout→hook→docker) without pkill -f (which self-matches)
+  cmd="${cmd}     for _c in \$(pgrep -P \$_dpid 2>/dev/null); do pkill -KILL -P \$_c 2>/dev/null; done;"
   cmd="${cmd}     wait \$_dpid 2>/dev/null;"
-  cmd="${cmd}     exec 2>&3 3>&-;"
   cmd="${cmd}     rm -f .muster/.fleet_deploying .muster/deploy.lock;"
   cmd="${cmd}     exit 130;"
   cmd="${cmd}   fi; sleep 1;"
   cmd="${cmd} done"
-  cmd="${cmd}; exec 3>&2 2>/dev/null; wait \$_dpid 2>/dev/null; exec 2>&3 3>&-; _rc=\$?"
+  cmd="${cmd}; wait \$_dpid 2>/dev/null; _rc=\$?"
   # If .fleet_deploying was removed (cancel from dashboard), exit 130
-  # even if the deploy was killed externally (rc=137)
   cmd="${cmd}; if [ ! -f .muster/.fleet_deploying ]; then rm -f .muster/deploy.lock; exit 130; fi"
   # Clean up and signal dashboard to refresh back to normal
   cmd="${cmd}; rm -f .muster/.fleet_deploying"

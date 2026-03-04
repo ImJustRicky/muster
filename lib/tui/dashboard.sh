@@ -864,7 +864,7 @@ cmd_dashboard() {
     fi
     actions[${#actions[@]}]="Quit"
 
-    MENU_TIMEOUT=20
+    MENU_TIMEOUT=5
     menu_select "Actions" "${actions[@]}"
     MENU_TIMEOUT=0
 
