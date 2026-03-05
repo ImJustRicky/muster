@@ -187,7 +187,10 @@ cmd_deploy() {
     printf '  %b%bDeploying%b %b%s%b\n' "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}" "${WHITE}" "$project" "${RESET}"
     echo ""
 
-    # Build context overlap warning (read cache only, non-blocking)
+    # Build context overlap warning (detect if cache stale, then read)
+    if _build_context_cache_stale; then
+      _build_context_detect 2>/dev/null
+    fi
     if _build_context_read_cache; then
       local _bc_count=${#_BUILD_CONTEXT_ISSUES[@]}
       printf '  %b!%b %bBuild context overlap — %d issue%s (run muster doctor)%b\n' \
@@ -198,6 +201,9 @@ cmd_deploy() {
   fi
 
   if [[ "$MUSTER_MINIMAL" == "true" ]]; then
+    if _build_context_cache_stale; then
+      _build_context_detect 2>/dev/null
+    fi
     _build_context_warn_minimal
   fi
 
