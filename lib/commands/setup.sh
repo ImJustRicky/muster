@@ -46,7 +46,11 @@ _setup_bar() {
   (( pad_len < 1 )) && pad_len=1
   local pad
   printf -v pad '%*s' "$pad_len" ""
-  printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
+  if [[ -n "$BOLD" ]]; then
+    printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
+  else
+    printf ' %s%s%s\n' "$text" "$pad" "$right"
+  fi
 }
 
 # Current screen state for resize redraw
@@ -1170,17 +1174,17 @@ cmd_setup() {
       ;;
   esac
 
-  # ── Question 2: Environment ──
+  # ── Step 2: Environment ──
   local _setup_env="production"
   local _setup_health_timeout=10
   local _setup_cred_default="off"
 
-  clear
-  echo ""
-  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
-  echo ""
-  printf '%b\n' "  ${DIM}What environment is this?${RESET}"
-  echo ""
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}This determines default health check timeouts and credential settings.${RESET}"
+    ""
+  )
+  _setup_screen 1 "Environment"
 
   menu_select_desc "Environment" \
     "Production" \
@@ -1208,15 +1212,15 @@ cmd_setup() {
       ;;
   esac
 
-  # ── Question 3: What you're running ──
-  clear
-  echo ""
-  printf '%b\n' "  ${BOLD}${ACCENT_BRIGHT}muster${RESET} ${DIM}setup${RESET}"
-  echo ""
-  printf '%b\n' "  ${DIM}What does this project run?  (select all that apply)${RESET}"
-  echo ""
+  # ── Step 3: What you're running ──
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}Tell muster what your project runs so it can set up the right hooks.${RESET}"
+    ""
+  )
+  _setup_screen 2 "Components"
 
-  checklist_select --none "Components" \
+  checklist_select --none "What does this project run?" \
     "Web app / API" \
     "Background workers / queues" \
     "Database (managed here)" \
@@ -1229,13 +1233,17 @@ cmd_setup() {
     [[ -n "$_comp" ]] && _setup_components[${#_setup_components[@]}]="$_comp"
   done <<< "$CHECKLIST_RESULT"
 
-  # ── Step 1: Choose project location ──
+  # ── Step 3: Choose project location ──
   local _cwd_display
   _cwd_display="$(pwd)"
   _cwd_display="${_cwd_display/#$HOME/~}"
 
-  _SETUP_CUR_SUMMARY=("")
-  _setup_screen 1 "Get started"
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}Muster will create a muster.json config and .muster/ hooks directory here.${RESET}"
+    ""
+  )
+  _setup_screen 3 "Project location"
 
   menu_select "Where is your project?" "Setup here (${_cwd_display})" "Choose location" "Back"
 
@@ -1251,7 +1259,7 @@ cmd_setup() {
         ""
       )
       _SETUP_CUR_PROMPT="false"
-      _setup_screen 1 "Project location"
+      _setup_screen 3 "Project location"
       _read_path "  > "
       project_path="$REPLY"
 
@@ -1278,7 +1286,7 @@ cmd_setup() {
   # ── Check for existing config ──
   if [[ -f "${project_path}/muster.json" || -f "${project_path}/deploy.json" ]]; then
     _SETUP_CUR_SUMMARY=("")
-    _setup_screen 1 "Existing config found"
+    _setup_screen 3 "Existing config found"
     menu_select "Config already exists at ${project_path}. Overwrite?" "Overwrite" "Cancel"
     if [[ "$MENU_RESULT" == "Cancel" ]]; then
       info "Setup cancelled."
@@ -1287,7 +1295,11 @@ cmd_setup() {
   fi
 
   # ── Step 4: Scan + Smart Preview ──
-  _SETUP_CUR_SUMMARY=("")
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}Looking for Dockerfiles, k8s manifests, compose files, and services...${RESET}"
+    ""
+  )
   _setup_screen 4 "Scanning project"
   echo ""
   start_spinner "Scanning ${project_path}..."
@@ -1472,7 +1484,11 @@ cmd_setup() {
     fi
 
     # ── Step 5: Deploy order (auto-sort: infra first, then workers, then API/web) ──
-    _SETUP_CUR_SUMMARY=("")
+    _SETUP_CUR_SUMMARY=(
+      ""
+      "  ${DIM}Services deploy in this order. Infra (databases, caches) should go first.${RESET}"
+      ""
+    )
     _setup_screen 5 "Deploy order"
 
     if (( ${#selected_services[@]} > 1 )); then
@@ -1578,7 +1594,11 @@ cmd_setup() {
         _prefill_port=$(scan_get_port "$svc")
 
         # Health check
-        _SETUP_CUR_SUMMARY=("")
+        _SETUP_CUR_SUMMARY=(
+          ""
+          "  ${DIM}Health checks verify your services are running after each deploy.${RESET}"
+          ""
+        )
         _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
         menu_select "Health check for ${svc}?" "HTTP" "TCP" "Command" "None"
         local health_choice="$MENU_RESULT"
@@ -1622,6 +1642,9 @@ cmd_setup() {
         _SETUP_CUR_SUMMARY=(
           ""
           "  ${GREEN}*${RESET} Health: ${health_choice}"
+          ""
+          "  ${DIM}Credentials are used for secrets (API keys, tokens). Never stored in config.${RESET}"
+          ""
         )
         _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
         menu_select "Credentials for ${svc}?" "None" "Save always (keychain)" "Once per session" "Every time"
@@ -1964,45 +1987,49 @@ _setup_manual_flow() {
   echo ""
   sleep 1
 
-  # ── Step 3: Stack questions ──
+  # ── Step 4: Stack questions (manual path) ──
   local has_db="no" db_type="" has_api="no" api_type=""
   local has_workers="no" has_proxy="no" stack="bare"
 
-  _SETUP_CUR_SUMMARY=("")
-  _setup_screen 3 "Your stack"
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}Tell muster about your infrastructure so it can generate the right hooks.${RESET}"
+    ""
+  )
+  _setup_screen 4 "Your stack"
   menu_select "Do you manage a database here?" "Yes" "No"
   if [[ "$MENU_RESULT" == "Yes" ]]; then
     has_db="yes"
     _SETUP_CUR_SUMMARY=("")
-    _setup_screen 3 "Your stack"
+    _setup_screen 4 "Your stack"
     menu_select "What kind of database?" "PostgreSQL" "MySQL" "Redis" "MongoDB" "SQLite" "Other"
     db_type="$MENU_RESULT"
   fi
 
   _SETUP_CUR_SUMMARY=("")
-  _setup_screen 3 "Your stack"
+  _setup_screen 4 "Your stack"
   menu_select "Do you have a web server or API?" "Yes" "No"
   if [[ "$MENU_RESULT" == "Yes" ]]; then
     has_api="yes"
     _SETUP_CUR_SUMMARY=("")
-    _setup_screen 3 "Your stack"
+    _setup_screen 4 "Your stack"
     menu_select "What runs it?" "Docker" "Node.js" "Go" "Python" "Rust" "Other"
     # shellcheck disable=SC2034
     api_type="$MENU_RESULT"
   fi
 
   _SETUP_CUR_SUMMARY=("")
-  _setup_screen 3 "Your stack"
+  _setup_screen 4 "Your stack"
   menu_select "Any background workers or jobs?" "Yes" "No"
   [[ "$MENU_RESULT" == "Yes" ]] && has_workers="yes"
 
   _SETUP_CUR_SUMMARY=("")
-  _setup_screen 3 "Your stack"
+  _setup_screen 4 "Your stack"
   menu_select "Any reverse proxy (nginx, caddy, etc)?" "Yes" "No"
   [[ "$MENU_RESULT" == "Yes" ]] && has_proxy="yes"
 
   _SETUP_CUR_SUMMARY=("")
-  _setup_screen 3 "Your stack"
+  _setup_screen 4 "Your stack"
   menu_select "Do you use containers?" "Docker Compose" "Kubernetes" "Docker (standalone)" "Local dev" "None"
   case "$MENU_RESULT" in
     "Docker Compose")        stack="compose" ;;
@@ -2012,7 +2039,7 @@ _setup_manual_flow() {
     None)                    stack="bare" ;;
   esac
 
-  # ── Step 4: Build service list + select ──
+  # ── Step 5: Build service list + select ──
   local service_list=()
   [[ "$has_api" == "yes" ]] && service_list[${#service_list[@]}]="api"
   [[ "$has_db" == "yes" ]] && service_list[${#service_list[@]}]="$(_svc_to_key "$db_type")"
@@ -2024,8 +2051,12 @@ _setup_manual_flow() {
     return 1
   fi
 
-  _SETUP_CUR_SUMMARY=("")
-  _setup_screen 4 "Select services"
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${DIM}Services deploy in this order. Infra (databases, caches) should go first.${RESET}"
+    ""
+  )
+  _setup_screen 5 "Select services"
   checklist_select "Select services to manage" "${service_list[@]}"
 
   local selected_services=()
@@ -2041,7 +2072,7 @@ _setup_manual_flow() {
   # Deploy order
   if (( ${#selected_services[@]} > 1 )); then
     _SETUP_CUR_SUMMARY=("")
-    _setup_screen 4 "Deploy order"
+    _setup_screen 5 "Deploy order"
     order_select "What order should services deploy?" "${selected_services[@]}"
     selected_services=("${ORDER_RESULT[@]}")
   fi
@@ -2058,7 +2089,11 @@ _setup_manual_flow() {
     local key
     key=$(_svc_to_key "$svc")
 
-    _SETUP_CUR_SUMMARY=("")
+    _SETUP_CUR_SUMMARY=(
+      ""
+      "  ${DIM}Health checks verify your services are running after each deploy.${RESET}"
+      ""
+    )
     _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
     menu_select "Health check type for ${svc}?" "HTTP" "TCP" "Command" "None"
     local health_choice="$MENU_RESULT"
@@ -2093,6 +2128,9 @@ _setup_manual_flow() {
     _SETUP_CUR_SUMMARY=(
       ""
       "  ${GREEN}*${RESET} Health: ${health_choice}"
+      ""
+      "  ${DIM}Credentials are used for secrets (API keys, tokens). Never stored in config.${RESET}"
+      ""
     )
     _setup_screen 5 "Configure ${svc} (${svc_index}/${#selected_services[@]})"
     menu_select "Credentials for ${svc}?" "None" "Save always (keychain)" "Once per session" "Every time"
@@ -2215,27 +2253,47 @@ print(json.dumps(data, indent=2))
     printf '%s\n%s\n' '.muster/logs/' '.muster/pids/' > "$gitignore"
   fi
 
-  _SETUP_CUR_SUMMARY=(
-    ""
-    "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET}"
-    "  ${GREEN}*${RESET} Root:    ${project_path}"
-    "  ${GREEN}*${RESET} Config:  ${config_path}"
-    "  ${GREEN}*${RESET} Hooks:   ${muster_dir}/hooks/"
-    ""
-    "  ${ACCENT}Next steps:${RESET}"
-    "  ${DIM}1. Review hooks in .muster/hooks/ (look for TODO comments)${RESET}"
-    "  ${DIM}2. Run ${BOLD}muster${RESET}${DIM} to open the dashboard${RESET}"
-    ""
-    "  ${DIM}Press enter to exit${RESET}"
-    ""
-  )
-
   # Register project in global registry
   _registry_touch "$project_path"
 
   # Generate hook security manifest and lock hooks
   source "$MUSTER_ROOT/lib/core/hook_security.sh"
   _hook_manifest_generate "$project_path"
+
+  local stack_display=""
+  case "$stack" in
+    k8s)     stack_display="Kubernetes" ;;
+    compose) stack_display="Docker Compose" ;;
+    docker)  stack_display="Docker" ;;
+    bare)    stack_display="Bare metal" ;;
+    dev)     stack_display="Local dev" ;;
+  esac
+
+  _SETUP_CUR_SUMMARY=(
+    ""
+    "  ${GREEN}*${RESET} Project: ${BOLD}${project_name}${RESET}"
+    "  ${GREEN}*${RESET} Stack:   ${stack_display}"
+    "  ${GREEN}*${RESET} Config:  muster.json"
+    ""
+    "  ${BOLD}Services:${RESET}"
+  )
+
+  local _mi=0
+  for svc in "${selected_services[@]}"; do
+    _mi=$((_mi + 1))
+    local _mk
+    _mk=$(_svc_to_key "$svc")
+    _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${_mi}. ${svc}  ${DIM}.muster/hooks/${_mk}/${RESET}"
+  done
+
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${ACCENT}Next:${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${BOLD}muster${RESET}              Open the dashboard"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${BOLD}muster deploy${RESET}       Deploy all services"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="    ${BOLD}muster doctor${RESET}       Check everything is ready"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]="  ${DIM}Press enter to exit${RESET}"
+  _SETUP_CUR_SUMMARY[${#_SETUP_CUR_SUMMARY[@]}]=""
 
   _SETUP_CUR_PROMPT="false"
   _setup_screen 7 "Setup complete"

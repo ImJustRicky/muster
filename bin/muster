@@ -197,6 +197,46 @@ if [[ "$MUSTER_MINIMAL" != "true" ]]; then
   unset _min_val
 fi
 
+# ── First-run onboarding ──
+# Shows a welcome flow on the very first interactive `muster` invocation.
+# Writes ~/.muster/.first_run_done sentinel so it only runs once.
+_first_run_check() {
+  # Skip in minimal mode, non-TTY, or if already completed
+  [[ "$MUSTER_MINIMAL" == "true" ]] && return 1
+  [[ ! -t 0 ]] && return 1
+  [[ -f "$HOME/.muster/.first_run_done" ]] && return 1
+
+  # Matrix splash animation
+  source "$MUSTER_ROOT/lib/tui/matrix.sh"
+  _matrix_splash
+
+  echo ""
+  printf '  %b%bWelcome to muster%b — universal deploy framework\n' "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}"
+  echo ""
+  printf '  %b•%b Deploy any stack: Docker, Compose, Kubernetes, bare metal\n' "${ACCENT}" "${RESET}"
+  printf '  %b•%b Live health dashboard, rollbacks, and fleet deploys\n' "${ACCENT}" "${RESET}"
+  printf '  %b•%b Zero dependencies — pure bash, works everywhere\n' "${ACCENT}" "${RESET}"
+  echo ""
+
+  printf '  Would you like to set up a project now? [Y/n] '
+  local _answer=""
+  IFS= read -rsn1 _answer || true
+  printf '\n\n'
+
+  # Create sentinel (ensure ~/.muster exists)
+  mkdir -p "$HOME/.muster"
+  printf '' > "$HOME/.muster/.first_run_done"
+
+  case "$_answer" in
+    n|N)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 # ── Route commands ──
 case "${1:-}" in
   setup)
@@ -366,6 +406,12 @@ case "${1:-}" in
     echo "  muster settings --global minimal true"
     ;;
   "")
+    # First-run onboarding (skipped for --minimal and non-TTY)
+    if _first_run_check; then
+      source "$MUSTER_ROOT/lib/commands/setup.sh"
+      cmd_setup
+    fi
+
     # Minimal mode: plain text status, no TUI
     if [[ "$MUSTER_MINIMAL" == "true" ]]; then
       if find_config &>/dev/null; then
