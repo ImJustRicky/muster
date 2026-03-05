@@ -792,7 +792,8 @@ _deploy_lock_acquire() {
     _i=$((_i + 1))
   done
   local _tty_name
-  _tty_name=$(tty 2>/dev/null || echo "unknown")
+  _tty_name=$(tty 2>/dev/null || true)
+  [[ -z "$_tty_name" || "$_tty_name" == *"not a tty"* ]] && _tty_name="unknown"
   cat > "$lock_file" <<EOF
 {"user":"$(_deploy_identity)","pid":$$,"started":"$(date '+%Y-%m-%d %H:%M:%S')","terminal":"${_tty_name}","services":[${_svcs}]}
 EOF
@@ -960,7 +961,8 @@ _service_lock_acquire() {
   # Create lock
   mkdir -p "$(dirname "$lock_file")"
   local _tty_name _hostname
-  _tty_name=$(tty 2>/dev/null || echo "unknown")
+  _tty_name=$(tty 2>/dev/null || true)
+  [[ -z "$_tty_name" || "$_tty_name" == *"not a tty"* ]] && _tty_name="unknown"
   _hostname=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "unknown")
   local _source="${MUSTER_LOCK_SOURCE:-local}"
   cat > "$lock_file" <<EOF
