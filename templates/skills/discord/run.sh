@@ -2,19 +2,27 @@
 set -eo pipefail
 
 # Discord notification skill for muster
-# Sends deploy, rollback, and fleet notifications to a Discord channel.
+# Sends deploy, rollback, and fleet notifications as rich embeds to a Discord channel.
+# Uses Discord API v10 — https://discord.com/developers/docs/resources/message
 #
 # Required config:
-#   MUSTER_DISCORD_BOT_TOKEN  — Discord bot token
+#   MUSTER_DISCORD_BOT_TOKEN  — Bot token (discord.com/developers/applications)
 #   MUSTER_DISCORD_CHANNEL_ID — Target channel ID
 #
 # Supports all deploy hooks and fleet hooks.
 # Per-fleet config lets you send to different channels per fleet.
 
-[[ -z "${MUSTER_DISCORD_BOT_TOKEN:-}" ]] && exit 0
-[[ -z "${MUSTER_DISCORD_CHANNEL_ID:-}" ]] && exit 0
+if [[ -z "${MUSTER_DISCORD_BOT_TOKEN:-}" ]]; then
+  echo "[discord] No bot token configured, skipping."
+  exit 0
+fi
 
-# --- Build notification content ---
+if [[ -z "${MUSTER_DISCORD_CHANNEL_ID:-}" ]]; then
+  echo "[discord] No channel ID configured, skipping."
+  exit 0
+fi
+
+# --- Context ---
 
 HOOK="${MUSTER_HOOK:-unknown}"
 STATUS="${MUSTER_DEPLOY_STATUS:-unknown}"
@@ -23,124 +31,110 @@ FLEET="${MUSTER_FLEET_NAME:-}"
 MACHINE="${MUSTER_FLEET_MACHINE:-}"
 HOST="${MUSTER_FLEET_HOST:-}"
 STRATEGY="${MUSTER_FLEET_STRATEGY:-}"
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Colors: green=success, red=failed, orange=rollback, blue=info, grey=skip
-COLOR_GREEN=3066993
-COLOR_RED=15158332
-COLOR_ORANGE=15105570
-COLOR_BLUE=3447003
-COLOR_GREY=9807270
+# Discord embed colors (decimal)
+C_GREEN=3066993
+C_RED=15158332
+C_ORANGE=15105570
+C_BLUE=3447003
+C_GREY=9807270
 
-COLOR=$COLOR_GREY
+COLOR=$C_GREY
 TITLE=""
 DESC=""
 
+# --- Build notification based on hook type ---
+
 case "$HOOK" in
-  # --- Fleet hooks ---
+  # Fleet-level hooks
   fleet-deploy-start)
-    COLOR=$COLOR_BLUE
+    COLOR=$C_BLUE
     TITLE="Fleet deploy started: ${FLEET}"
     DESC="Strategy: ${STRATEGY}"
     ;;
   fleet-deploy-end)
     if [[ "$STATUS" == "ok" ]]; then
-      COLOR=$COLOR_GREEN
-      TITLE="Fleet deploy complete: ${FLEET}"
+      COLOR=$C_GREEN; TITLE="Fleet deploy complete: ${FLEET}"
     else
-      COLOR=$COLOR_RED
-      TITLE="Fleet deploy FAILED: ${FLEET}"
+      COLOR=$C_RED; TITLE="Fleet deploy FAILED: ${FLEET}"
     fi
     DESC="Strategy: ${STRATEGY}"
     ;;
   fleet-machine-deploy-start)
-    COLOR=$COLOR_BLUE
+    COLOR=$C_BLUE
     TITLE="Deploying to ${MACHINE}"
     DESC="Host: ${HOST}"
     ;;
   fleet-machine-deploy-end)
     if [[ "$STATUS" == "ok" ]]; then
-      COLOR=$COLOR_GREEN
-      TITLE="Deployed to ${MACHINE}"
+      COLOR=$C_GREEN; TITLE="Deployed to ${MACHINE}"
     else
-      COLOR=$COLOR_RED
-      TITLE="Deploy FAILED: ${MACHINE}"
+      COLOR=$C_RED; TITLE="Deploy FAILED: ${MACHINE}"
     fi
     DESC="Host: ${HOST}"
     ;;
   fleet-rollback-start)
-    COLOR=$COLOR_ORANGE
+    COLOR=$C_ORANGE
     TITLE="Fleet rollback started: ${FLEET}"
     ;;
   fleet-rollback-end)
     if [[ "$STATUS" == "ok" ]]; then
-      COLOR=$COLOR_GREEN
-      TITLE="Fleet rollback complete: ${FLEET}"
+      COLOR=$C_GREEN; TITLE="Fleet rollback complete: ${FLEET}"
     else
-      COLOR=$COLOR_RED
-      TITLE="Fleet rollback FAILED: ${FLEET}"
+      COLOR=$C_RED; TITLE="Fleet rollback FAILED: ${FLEET}"
     fi
     ;;
-  # --- Standard deploy hooks ---
+  # Standard deploy/rollback hooks
   post-deploy)
     case "$STATUS" in
-      success) COLOR=$COLOR_GREEN;  TITLE="Deployed ${SERVICE}" ;;
-      failed)  COLOR=$COLOR_RED;    TITLE="Deploy FAILED: ${SERVICE}" ;;
-      skipped) COLOR=$COLOR_GREY;   TITLE="Deploy skipped: ${SERVICE}" ;;
-      *)       COLOR=$COLOR_GREY;   TITLE="Deploy ${STATUS}: ${SERVICE}" ;;
+      success) COLOR=$C_GREEN;  TITLE="Deployed ${SERVICE}" ;;
+      failed)  COLOR=$C_RED;    TITLE="Deploy FAILED: ${SERVICE}" ;;
+      skipped) COLOR=$C_ORANGE; TITLE="Deploy skipped: ${SERVICE}" ;;
+      *)       COLOR=$C_GREY;   TITLE="Deploy ${STATUS}: ${SERVICE}" ;;
     esac
     ;;
   post-rollback)
     case "$STATUS" in
-      success) COLOR=$COLOR_GREEN;  TITLE="Rolled back ${SERVICE}" ;;
-      failed)  COLOR=$COLOR_RED;    TITLE="Rollback FAILED: ${SERVICE}" ;;
-      *)       COLOR=$COLOR_ORANGE; TITLE="Rollback ${STATUS}: ${SERVICE}" ;;
+      success) COLOR=$C_GREEN;  TITLE="Rolled back ${SERVICE}" ;;
+      failed)  COLOR=$C_RED;    TITLE="Rollback FAILED: ${SERVICE}" ;;
+      *)       COLOR=$C_ORANGE; TITLE="Rollback ${STATUS}: ${SERVICE}" ;;
     esac
     ;;
-  # --- Pre hooks (optional info) ---
-  pre-deploy)
-    COLOR=$COLOR_BLUE
-    TITLE="Deploying ${SERVICE}..."
-    ;;
-  pre-rollback)
-    COLOR=$COLOR_ORANGE
-    TITLE="Rolling back ${SERVICE}..."
-    ;;
   *)
-    TITLE="${HOOK}: ${SERVICE:-fleet}"
+    TITLE="${HOOK}: ${SERVICE:-${FLEET:-unknown}}"
     ;;
 esac
 
 # --- Build embed JSON ---
 
-# Escape double quotes in title and desc
-TITLE="${TITLE//\"/\\\"}"
-DESC="${DESC//\"/\\\"}"
+# Escape double quotes for JSON safety
+_esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
 
-EMBED="{\"title\":\"${TITLE}\",\"color\":${COLOR},\"timestamp\":\"${TIMESTAMP}\""
+EMBED="{\"title\":\"$(_esc "$TITLE")\",\"color\":${COLOR},\"timestamp\":\"${TIMESTAMP}\""
 
-# Add description if present
 if [[ -n "$DESC" ]]; then
-  EMBED="${EMBED},\"description\":\"${DESC}\""
+  EMBED="${EMBED},\"description\":\"$(_esc "$DESC")\""
 fi
 
-# Add fleet footer if this is a fleet event
+# Add fleet footer for fleet events
 if [[ -n "$FLEET" ]]; then
   FOOTER="Fleet: ${FLEET}"
   [[ -n "$STRATEGY" ]] && FOOTER="${FOOTER} | ${STRATEGY}"
-  FOOTER="${FOOTER//\"/\\\"}"
-  EMBED="${EMBED},\"footer\":{\"text\":\"${FOOTER}\"}"
+  EMBED="${EMBED},\"footer\":{\"text\":\"$(_esc "$FOOTER")\"}"
 fi
 
 EMBED="${EMBED}}"
 
-# --- Send to Discord ---
+# --- Send to Discord API v10 ---
 
-curl -sf -X POST \
+if ! curl -sf -X POST \
   "https://discord.com/api/v10/channels/${MUSTER_DISCORD_CHANNEL_ID}/messages" \
   -H "Authorization: Bot ${MUSTER_DISCORD_BOT_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "{\"embeds\":[${EMBED}]}" \
-  > /dev/null 2>&1 || true
+  > /dev/null 2>&1; then
+  echo "[discord] Failed to send notification (curl error). Continuing."
+fi
 
 exit 0

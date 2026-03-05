@@ -5,14 +5,18 @@ set -eo pipefail
 # Posts JSON payloads to any HTTP endpoint on deploy, rollback, and fleet events.
 #
 # Required config:
-#   MUSTER_WEBHOOK_URL     — Endpoint URL
-#   MUSTER_WEBHOOK_SECRET  — (optional) Sent as X-Webhook-Secret header
+#   MUSTER_WEBHOOK_URL    — Target endpoint URL
+#   MUSTER_WEBHOOK_SECRET — (optional) Sent as X-Webhook-Secret header
 #
-# Payload includes all available context: hook name, service, status, fleet info.
+# Payload includes all available context: hook, service, status, fleet info.
+# Works with any webhook consumer — Zapier, n8n, custom endpoints, etc.
 
-[[ -z "${MUSTER_WEBHOOK_URL:-}" ]] && exit 0
+if [[ -z "${MUSTER_WEBHOOK_URL:-}" ]]; then
+  echo "[webhook] No URL configured, skipping."
+  exit 0
+fi
 
-# --- Build JSON payload ---
+# --- Context ---
 
 HOOK="${MUSTER_HOOK:-unknown}"
 STATUS="${MUSTER_DEPLOY_STATUS:-}"
@@ -25,30 +29,31 @@ STRATEGY="${MUSTER_FLEET_STRATEGY:-}"
 MODE="${MUSTER_FLEET_MODE:-}"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Escape values for JSON
+# --- Build JSON payload ---
+
 _esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 PAYLOAD="{"
-PAYLOAD="$PAYLOAD\"event\":\"$(_esc "$HOOK")\""
-PAYLOAD="$PAYLOAD,\"timestamp\":\"$TIMESTAMP\""
+PAYLOAD="${PAYLOAD}\"event\":\"$(_esc "$HOOK")\""
+PAYLOAD="${PAYLOAD},\"timestamp\":\"${TIMESTAMP}\""
 
-[[ -n "$STATUS" ]]       && PAYLOAD="$PAYLOAD,\"status\":\"$(_esc "$STATUS")\""
-[[ -n "$SERVICE" ]]      && PAYLOAD="$PAYLOAD,\"service\":\"$(_esc "$SERVICE")\""
-[[ -n "$SERVICE_NAME" ]] && PAYLOAD="$PAYLOAD,\"service_name\":\"$(_esc "$SERVICE_NAME")\""
+[[ -n "$STATUS" ]]       && PAYLOAD="${PAYLOAD},\"status\":\"$(_esc "$STATUS")\""
+[[ -n "$SERVICE" ]]      && PAYLOAD="${PAYLOAD},\"service\":\"$(_esc "$SERVICE")\""
+[[ -n "$SERVICE_NAME" ]] && PAYLOAD="${PAYLOAD},\"service_name\":\"$(_esc "$SERVICE_NAME")\""
 
-# Fleet context
+# Fleet context as nested object
 if [[ -n "$FLEET" ]]; then
-  PAYLOAD="$PAYLOAD,\"fleet\":{\"name\":\"$(_esc "$FLEET")\""
-  [[ -n "$MACHINE" ]]  && PAYLOAD="$PAYLOAD,\"machine\":\"$(_esc "$MACHINE")\""
-  [[ -n "$HOST" ]]     && PAYLOAD="$PAYLOAD,\"host\":\"$(_esc "$HOST")\""
-  [[ -n "$STRATEGY" ]] && PAYLOAD="$PAYLOAD,\"strategy\":\"$(_esc "$STRATEGY")\""
-  [[ -n "$MODE" ]]     && PAYLOAD="$PAYLOAD,\"mode\":\"$(_esc "$MODE")\""
-  PAYLOAD="$PAYLOAD}"
+  PAYLOAD="${PAYLOAD},\"fleet\":{\"name\":\"$(_esc "$FLEET")\""
+  [[ -n "$MACHINE" ]]  && PAYLOAD="${PAYLOAD},\"machine\":\"$(_esc "$MACHINE")\""
+  [[ -n "$HOST" ]]     && PAYLOAD="${PAYLOAD},\"host\":\"$(_esc "$HOST")\""
+  [[ -n "$STRATEGY" ]] && PAYLOAD="${PAYLOAD},\"strategy\":\"$(_esc "$STRATEGY")\""
+  [[ -n "$MODE" ]]     && PAYLOAD="${PAYLOAD},\"mode\":\"$(_esc "$MODE")\""
+  PAYLOAD="${PAYLOAD}}"
 fi
 
-PAYLOAD="$PAYLOAD}"
+PAYLOAD="${PAYLOAD}}"
 
-# --- Send webhook ---
+# --- Send ---
 
 CURL_ARGS=(-sf -X POST "$MUSTER_WEBHOOK_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
 
@@ -57,6 +62,8 @@ if [[ -n "${MUSTER_WEBHOOK_SECRET:-}" ]]; then
   CURL_ARGS[${#CURL_ARGS[@]}]="X-Webhook-Secret: ${MUSTER_WEBHOOK_SECRET}"
 fi
 
-curl "${CURL_ARGS[@]}" > /dev/null 2>&1 || true
+if ! curl "${CURL_ARGS[@]}" > /dev/null 2>&1; then
+  echo "[webhook] Failed to send payload (curl error). Continuing."
+fi
 
 exit 0

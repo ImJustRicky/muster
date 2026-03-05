@@ -3,16 +3,20 @@ set -eo pipefail
 
 # Slack notification skill for muster
 # Sends deploy, rollback, and fleet notifications via Slack Incoming Webhook.
+# Uses Block Kit (modern) — https://docs.slack.dev/block-kit
 #
 # Required config:
-#   MUSTER_SLACK_WEBHOOK_URL — Slack incoming webhook URL
+#   MUSTER_SLACK_WEBHOOK — Slack incoming webhook URL
 #
 # Supports all deploy hooks and fleet hooks.
 # Per-fleet config lets you send to different Slack channels per fleet.
 
-[[ -z "${MUSTER_SLACK_WEBHOOK_URL:-}" ]] && exit 0
+if [[ -z "${MUSTER_SLACK_WEBHOOK:-}" ]]; then
+  echo "[slack] No webhook URL configured, skipping."
+  exit 0
+fi
 
-# --- Build notification ---
+# --- Context ---
 
 HOOK="${MUSTER_HOOK:-unknown}"
 STATUS="${MUSTER_DEPLOY_STATUS:-unknown}"
@@ -22,89 +26,106 @@ MACHINE="${MUSTER_FLEET_MACHINE:-}"
 HOST="${MUSTER_FLEET_HOST:-}"
 STRATEGY="${MUSTER_FLEET_STRATEGY:-}"
 
-# Slack colors: good=green, danger=red, warning=orange, #hex for custom
-COLOR=""
+# Emoji + text based on event type
+EMOJI=""
 TEXT=""
-FALLBACK=""
+CONTEXT=""
 
 case "$HOOK" in
-  # --- Fleet hooks ---
+  # Fleet hooks
+  fleet-deploy-start)
+    EMOJI=":rocket:"
+    TEXT="Fleet deploy started: *${FLEET}* (${STRATEGY})"
+    ;;
   fleet-deploy-end)
     if [[ "$STATUS" == "ok" ]]; then
-      COLOR="good"
-      TEXT="Fleet deploy complete: *${FLEET}* (${STRATEGY})"
+      EMOJI=":white_check_mark:"; TEXT="Fleet deploy complete: *${FLEET}*"
     else
-      COLOR="danger"
-      TEXT="Fleet deploy FAILED: *${FLEET}* (${STRATEGY})"
+      EMOJI=":x:"; TEXT="Fleet deploy FAILED: *${FLEET}*"
     fi
+    CONTEXT="Strategy: ${STRATEGY}"
+    ;;
+  fleet-machine-deploy-start)
+    EMOJI=":gear:"
+    TEXT="Deploying to *${MACHINE}*"
+    CONTEXT="Host: ${HOST}"
     ;;
   fleet-machine-deploy-end)
     if [[ "$STATUS" == "ok" ]]; then
-      COLOR="good"
-      TEXT="Deployed to *${MACHINE}* (${HOST})"
+      EMOJI=":white_check_mark:"; TEXT="Deployed to *${MACHINE}*"
     else
-      COLOR="danger"
-      TEXT="Deploy FAILED: *${MACHINE}* (${HOST})"
+      EMOJI=":x:"; TEXT="Deploy FAILED: *${MACHINE}*"
     fi
+    CONTEXT="Host: ${HOST}"
+    ;;
+  fleet-rollback-start)
+    EMOJI=":rewind:"
+    TEXT="Fleet rollback started: *${FLEET}*"
     ;;
   fleet-rollback-end)
     if [[ "$STATUS" == "ok" ]]; then
-      COLOR="good"
-      TEXT="Fleet rollback complete: *${FLEET}*"
+      EMOJI=":white_check_mark:"; TEXT="Fleet rollback complete: *${FLEET}*"
     else
-      COLOR="danger"
-      TEXT="Fleet rollback FAILED: *${FLEET}*"
+      EMOJI=":x:"; TEXT="Fleet rollback FAILED: *${FLEET}*"
     fi
     ;;
-  # --- Standard deploy hooks ---
+  # Standard hooks
   post-deploy)
     case "$STATUS" in
-      success) COLOR="good";    TEXT="Deployed *${SERVICE}*" ;;
-      failed)  COLOR="danger";  TEXT="Deploy FAILED: *${SERVICE}*" ;;
-      skipped) COLOR="#cccccc"; TEXT="Deploy skipped: *${SERVICE}*" ;;
-      *)       COLOR="#cccccc"; TEXT="Deploy ${STATUS}: *${SERVICE}*" ;;
+      success) EMOJI=":white_check_mark:"; TEXT="Deployed *${SERVICE}*" ;;
+      failed)  EMOJI=":x:";               TEXT="Deploy FAILED: *${SERVICE}*" ;;
+      skipped) EMOJI=":fast_forward:";     TEXT="Deploy skipped: *${SERVICE}*" ;;
+      *)       EMOJI=":grey_question:";    TEXT="Deploy ${STATUS}: *${SERVICE}*" ;;
     esac
     ;;
   post-rollback)
     case "$STATUS" in
-      success) COLOR="good";    TEXT="Rolled back *${SERVICE}*" ;;
-      failed)  COLOR="danger";  TEXT="Rollback FAILED: *${SERVICE}*" ;;
-      *)       COLOR="warning"; TEXT="Rollback ${STATUS}: *${SERVICE}*" ;;
+      success) EMOJI=":rewind:";           TEXT="Rolled back *${SERVICE}*" ;;
+      failed)  EMOJI=":x:";               TEXT="Rollback FAILED: *${SERVICE}*" ;;
+      *)       EMOJI=":grey_question:";    TEXT="Rollback ${STATUS}: *${SERVICE}*" ;;
     esac
     ;;
   *)
-    COLOR="#cccccc"
-    TEXT="${HOOK}: ${SERVICE:-${FLEET:-unknown}}"
+    EMOJI=":information_source:"
+    TEXT="${HOOK}: *${SERVICE:-${FLEET:-unknown}}*"
     ;;
 esac
 
-FALLBACK="${TEXT//\*/}"
+# --- Build Block Kit payload ---
 
-# --- Build Slack payload ---
+_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-# Escape for JSON
-TEXT="${TEXT//\\/\\\\}"
-TEXT="${TEXT//\"/\\\"}"
-FALLBACK="${FALLBACK//\\/\\\\}"
-FALLBACK="${FALLBACK//\"/\\\"}"
+# Main section block with emoji + text
+BLOCKS="[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"$(_esc "${EMOJI} ${TEXT}")\"}}"
 
-PAYLOAD="{\"attachments\":[{\"color\":\"${COLOR}\",\"text\":\"${TEXT}\",\"fallback\":\"${FALLBACK}\",\"mrkdwn_in\":[\"text\"]"
-
-# Add fleet context as footer
-if [[ -n "$FLEET" ]]; then
-  FOOTER="Fleet: ${FLEET}"
-  [[ -n "$STRATEGY" ]] && FOOTER="${FOOTER} | ${STRATEGY}"
-  FOOTER="${FOOTER//\"/\\\"}"
-  PAYLOAD="${PAYLOAD},\"footer\":\"${FOOTER}\""
+# Add context block for fleet info
+if [[ -n "$FLEET" || -n "$CONTEXT" ]]; then
+  CTX_PARTS=""
+  if [[ -n "$FLEET" ]]; then
+    CTX_PARTS="{\"type\":\"mrkdwn\",\"text\":\"Fleet: *$(_esc "$FLEET")*\"}"
+  fi
+  if [[ -n "$CONTEXT" ]]; then
+    [[ -n "$CTX_PARTS" ]] && CTX_PARTS="${CTX_PARTS},"
+    CTX_PARTS="${CTX_PARTS}{\"type\":\"mrkdwn\",\"text\":\"$(_esc "$CONTEXT")\"}"
+  fi
+  BLOCKS="${BLOCKS},{\"type\":\"context\",\"elements\":[${CTX_PARTS}]}"
 fi
 
-PAYLOAD="${PAYLOAD}}]}"
+BLOCKS="${BLOCKS}]"
+
+# Fallback text for notifications (no markdown)
+FALLBACK="${EMOJI} ${TEXT}"
+FALLBACK="${FALLBACK//\*/}"
+
+PAYLOAD="{\"text\":\"$(_esc "$FALLBACK")\",\"blocks\":${BLOCKS}}"
 
 # --- Send to Slack ---
 
-curl -sf -X POST "$MUSTER_SLACK_WEBHOOK_URL" \
+if ! curl -sf -X POST \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \
-  > /dev/null 2>&1 || true
+  "$MUSTER_SLACK_WEBHOOK" > /dev/null 2>&1; then
+  echo "[slack] Failed to send notification (curl error). Continuing."
+fi
 
 exit 0

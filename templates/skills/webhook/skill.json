@@ -23,7 +23,7 @@
     {
       "key": "MUSTER_WEBHOOK_SECRET",
       "label": "Webhook Secret (optional)",
-      "hint": "Sent as X-Webhook-Secret header for signature verification",
+      "hint": "Sent as X-Webhook-Secret header for verification",
       "secret": true
     }
   ]

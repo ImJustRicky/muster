@@ -1,21 +1,24 @@
 {
   "name": "slack",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Send deploy and fleet notifications to Slack",
   "author": "muster",
   "hooks": [
     "post-deploy",
     "post-rollback",
+    "fleet-deploy-start",
     "fleet-deploy-end",
+    "fleet-machine-deploy-start",
     "fleet-machine-deploy-end",
+    "fleet-rollback-start",
     "fleet-rollback-end"
   ],
   "requires": ["curl"],
   "config": [
     {
-      "key": "MUSTER_SLACK_WEBHOOK_URL",
+      "key": "MUSTER_SLACK_WEBHOOK",
       "label": "Slack Incoming Webhook URL",
-      "hint": "api.slack.com/apps > Incoming Webhooks > Webhook URL",
+      "hint": "api.slack.com/apps > Incoming Webhooks > Add New Webhook",
       "secret": true
     }
   ]

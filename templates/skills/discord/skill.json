@@ -1,6 +1,6 @@
 {
   "name": "discord",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Send deploy and fleet notifications to Discord",
   "author": "muster",
   "hooks": [
@@ -18,13 +18,23 @@
     {
       "key": "MUSTER_DISCORD_BOT_TOKEN",
       "label": "Discord Bot Token",
-      "hint": "discord.com/developers/applications > Bot > Token",
+      "hint": "discord.com/developers/applications > Your App > Bot > Token",
       "secret": true
     },
     {
       "key": "MUSTER_DISCORD_CHANNEL_ID",
-      "label": "Channel ID",
-      "hint": "Right-click channel > Copy Channel ID"
+      "label": "Discord Channel ID",
+      "hint": "Enable Developer Mode, right-click channel > Copy Channel ID"
+    },
+    {
+      "key": "MUSTER_DISCORD_APP_ID",
+      "label": "Discord Application ID (optional)",
+      "hint": "For slash commands — discord.com/developers/applications > Your App > General > Application ID"
+    },
+    {
+      "key": "MUSTER_DISCORD_GUILD_ID",
+      "label": "Discord Server ID (optional)",
+      "hint": "For slash commands — right-click server name > Copy Server ID"
     }
   ]
 }
