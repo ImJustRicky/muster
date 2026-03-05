@@ -23,7 +23,11 @@ _dashboard_bar() {
   (( pad_len < 1 )) && pad_len=1
   local pad
   printf -v pad '%*s' "$pad_len" ""
-  printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
+  if [[ -n "$BOLD" ]]; then
+    printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
+  else
+    printf ' %s%s%s\n' "$text" "$pad" "$right"
+  fi
 }
 
 # ── Thin separator ──
@@ -81,8 +85,10 @@ _dashboard_header() {
   # Branded header bar
   local _right="v${MUSTER_VERSION}  ${MUSTER_OS} ${MUSTER_ARCH}  "
   echo ""
-  _dashboard_bar "muster  ${project}" "$_right"
-  echo ""
+  _dashboard_bar "muster" "$_right"
+
+  # Project name banner
+  printf '\n  %b%b%s%b\n\n' "${BOLD}" "${ACCENT_BRIGHT}" "$project" "${RESET}"
 
   local services
   services=$(config_services)
@@ -450,8 +456,15 @@ _dashboard_home() {
 
       _dashboard_rule
     elif (( _gcount == 0 )); then
-      printf '  %bNo projects registered yet.%b\n' "${DIM}" "${RESET}"
-      printf '  %bRun '\''muster setup'\'' in a project directory.%b\n' "${DIM}" "${RESET}"
+      echo ""
+      printf '  %b%bWelcome to muster%b\n' "${BOLD}" "${ACCENT_BRIGHT}" "${RESET}"
+      echo ""
+      printf '  %bNo projects set up yet.%b\n' "${DIM}" "${RESET}"
+      printf '  %bcd into a project directory and run:%b\n' "${DIM}" "${RESET}"
+      echo ""
+      printf '  %b%bmuster setup%b\n' "${BOLD}" "${WHITE}" "${RESET}"
+      echo ""
+      printf '  %bto configure your first deploy.%b\n' "${DIM}" "${RESET}"
     fi
 
     echo ""
@@ -873,6 +886,8 @@ cmd_dashboard() {
       actions[${#actions[@]}]="Update muster"
     fi
     actions[${#actions[@]}]="Quit"
+
+    _dashboard_rule
 
     MENU_TIMEOUT=5
     menu_select "Actions" "${actions[@]}"
