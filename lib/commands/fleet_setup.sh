@@ -5,10 +5,36 @@
 source "$MUSTER_ROOT/lib/tui/checklist.sh"
 source "$MUSTER_ROOT/lib/core/templates.sh"
 
+# ── Rally phrases ──
+
+_fleet_phrases=(
+  "Mustering the troops"
+  "Assembling the fleet"
+  "Rally your machines. It's deploy time."
+  "Reporting for duty"
+  "All hands on deck"
+  "From chaos to formation in one setup"
+  "Your servers called. They want orders."
+  "Deploying confidence across the wire"
+  "One fleet to rule them all"
+  "Spreading mustard across the fleet"
+  "No machine left behind"
+  "Fleet command, standing by"
+  "Battle stations, everyone"
+)
+
+_fleet_pick_phrase() {
+  local count=${#_fleet_phrases[@]}
+  local idx=$(( RANDOM % count ))
+  echo "${_fleet_phrases[$idx]}"
+}
+
 # ── Visual helpers ──
 
 _FLEET_SETUP_STEP=1
 _FLEET_SETUP_TOTAL=5
+_FLEET_SETUP_PHRASE=""
+_FLEET_SETUP_LABEL=""
 
 _fleet_setup_bar() {
   local left="$1" right="${2:-}"
@@ -24,27 +50,56 @@ _fleet_setup_bar() {
   printf ' \033[48;5;178m\033[38;5;0m\033[1m%s%s%s\033[0m\n' "$text" "$pad" "$right"
 }
 
-_fleet_setup_screen() {
-  local step="$1" label="$2"
-  _FLEET_SETUP_STEP="$step"
+_fleet_setup_screen_inner() {
+  muster_tui_fullscreen
   clear
+  update_term_size
+
+  local step="$_FLEET_SETUP_STEP"
+
+  # Branded header bar
   echo ""
   _fleet_setup_bar "muster  fleet setup" "step ${step}/${_FLEET_SETUP_TOTAL}  "
 
+  # Progress bar (matches setup.sh style: ACCENT_BRIGHT filled, GRAY empty)
   local bar_w=$(( TERM_COLS - 6 ))
-  (( bar_w < 10 )) && bar_w=10
   (( bar_w > 50 )) && bar_w=50
+  (( bar_w < 10 )) && bar_w=10
   local filled=$(( step * bar_w / _FLEET_SETUP_TOTAL ))
-  local empty=$(( bar_w - filled ))
+  local empty_count=$(( bar_w - filled ))
   local bar_filled="" bar_empty=""
   local _bi=0
   while (( _bi < filled )); do bar_filled="${bar_filled}#"; _bi=$((_bi + 1)); done
   _bi=0
-  while (( _bi < empty )); do bar_empty="${bar_empty}-"; _bi=$((_bi + 1)); done
-  printf '  \033[38;5;178m%s\033[2m%s\033[0m\n' "$bar_filled" "$bar_empty"
+  while (( _bi < empty_count )); do bar_empty="${bar_empty}-"; _bi=$((_bi + 1)); done
+  printf '  %b%s%b%s%b\n' "${ACCENT_BRIGHT}" "$bar_filled" "${GRAY}" "$bar_empty" "${RESET}"
 
-  echo ""
-  printf '%b\n' "  ${BOLD}${label}${RESET}"
+  # Phrase subtitle
+  if [[ -n "$_FLEET_SETUP_PHRASE" ]]; then
+    printf '  %b%s%b\n' "${DIM}" "$_FLEET_SETUP_PHRASE" "${RESET}"
+  fi
+
+  # Step label
+  if [[ -n "$_FLEET_SETUP_LABEL" ]]; then
+    echo ""
+    printf '%b\n' "  ${BOLD}${_FLEET_SETUP_LABEL}${RESET}"
+  fi
+}
+
+_fleet_setup_redraw() {
+  _fleet_setup_screen_inner
+}
+
+_fleet_setup_screen() {
+  local step="$1" label="$2"
+  _FLEET_SETUP_STEP="$step"
+  _FLEET_SETUP_LABEL="$label"
+  if [[ -z "$_FLEET_SETUP_PHRASE" ]]; then
+    _FLEET_SETUP_PHRASE=$(_fleet_pick_phrase)
+  fi
+  # shellcheck disable=SC2034
+  MUSTER_REDRAW_FN="_fleet_setup_redraw"
+  _fleet_setup_screen_inner
   echo ""
 }
 
@@ -143,6 +198,56 @@ _fleet_setup_detect_remote() {
   return 0
 }
 
+# ── Boxed display helpers ──
+
+_fleet_box_top() {
+  local label="$1"
+  local w=$(( TERM_COLS - 4 ))
+  (( w > 50 )) && w=50
+  (( w < 10 )) && w=10
+  local label_pad_len=$(( w - ${#label} - 3 ))
+  (( label_pad_len < 1 )) && label_pad_len=1
+  local label_pad
+  printf -v label_pad '%*s' "$label_pad_len" ""
+  label_pad="${label_pad// /-}"
+  printf '  %b+-%b%s%b-%s+%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
+}
+
+_fleet_box_row() {
+  local icon_color="$1" icon="$2" text="$3" tag="${4:-}"
+  local w=$(( TERM_COLS - 4 ))
+  (( w > 50 )) && w=50
+  (( w < 10 )) && w=10
+  local inner=$(( w - 2 ))
+
+  local tag_len=${#tag}
+  local max_text=$(( inner - 4 - tag_len ))
+  (( max_text < 5 )) && max_text=5
+  if (( ${#text} > max_text )); then
+    text="${text:0:$((max_text - 2))}.."
+  fi
+
+  local content_len=$(( 4 + ${#text} + tag_len ))
+  local pad_len=$(( inner - content_len ))
+  (( pad_len < 0 )) && pad_len=0
+  local pad
+  printf -v pad '%*s' "$pad_len" ""
+
+  printf '  %b|%b  %b%s%b %s%s%b%s%b%b|%b\n' \
+    "${ACCENT}" "${RESET}" "$icon_color" "$icon" "${RESET}" \
+    "$text" "$pad" "${DIM}" "$tag" "${RESET}" "${ACCENT}" "${RESET}"
+}
+
+_fleet_box_bottom() {
+  local w=$(( TERM_COLS - 4 ))
+  (( w > 50 )) && w=50
+  (( w < 10 )) && w=10
+  local bottom
+  printf -v bottom '%*s' "$w" ""
+  bottom="${bottom// /-}"
+  printf '  %b+%s+%b\n' "${ACCENT}" "$bottom" "${RESET}"
+}
+
 # ── Main entry ──
 
 cmd_fleet_setup() {
@@ -165,11 +270,11 @@ cmd_fleet_setup() {
   local _strategy="sequential"
   local _is_existing_fleet=false
 
-  # ═══════════════════════════════════════════
-  # Step 1: Fleet Selection
-  # ═══════════════════════════════════════════
+  # ============================================
+  # Step 1: Name your fleet
+  # ============================================
   _FLEET_SETUP_TOTAL=5
-  _fleet_setup_screen 1 "Select fleet"
+  _fleet_setup_screen 1 "Name your fleet"
 
   # Check for existing fleets
   local _existing_fleets=()
@@ -178,7 +283,7 @@ cmd_fleet_setup() {
   done < <(fleets_list 2>/dev/null)
 
   if (( ${#_existing_fleets[@]} > 0 )); then
-    printf '%b\n' "  ${DIM}Add machines to an existing fleet, or create a new one.${RESET}"
+    printf '%b\n' "  ${DIM}Reinforce an existing fleet, or raise a new one.${RESET}"
     echo ""
 
     # Build menu with fleet info
@@ -187,24 +292,22 @@ cmd_fleet_setup() {
     while (( _fi < ${#_existing_fleets[@]} )); do
       local _ef_name="${_existing_fleets[$_fi]}"
       local _ef_count=0
-      # Count machines in this fleet
       local _ef_grp _ef_proj
       for _ef_grp in $(fleet_cfg_groups "$_ef_name" 2>/dev/null); do
         for _ef_proj in $(fleet_cfg_group_projects "$_ef_name" "$_ef_grp" 2>/dev/null); do
           _ef_count=$(( _ef_count + 1 ))
         done
       done
-      local _ef_label="${_ef_name}  ${DIM}(${_ef_count} machine"
-      (( _ef_count != 1 )) && _ef_label="${_ef_label}s"
-      _ef_label="${_ef_label})${RESET}"
-      _fleet_opts[${#_fleet_opts[@]}]="$_ef_name"
+      _fleet_opts[${#_fleet_opts[@]}]="${_ef_name}  (${_ef_count} machines)"
       _fi=$(( _fi + 1 ))
     done
-    _fleet_opts[${#_fleet_opts[@]}]="Create new fleet"
+    _fleet_opts[${#_fleet_opts[@]}]="+ Raise new fleet"
 
     menu_select "Fleet" "${_fleet_opts[@]}"
 
-    if [[ "$MENU_RESULT" == "Create new fleet" ]]; then
+    if [[ "$MENU_RESULT" == "+ Raise new fleet" ]]; then
+      echo ""
+      printf '%b\n' "  ${DIM}Name it after the environment it defends.${RESET}"
       echo ""
       printf '  %b>%b Fleet name %b(production)%b: ' "${ACCENT}" "${RESET}" "${DIM}" "${RESET}"
       IFS= read -r _fleet_name
@@ -212,12 +315,14 @@ cmd_fleet_setup() {
     elif [[ "$MENU_RESULT" == "__back__" ]]; then
       return 0
     else
-      _fleet_name="$MENU_RESULT"
+      # Strip the machine count suffix
+      _fleet_name="${MENU_RESULT%%  (*}"
       _is_existing_fleet=true
     fi
   else
-    printf '%b\n' "  ${DIM}A fleet deploys your project across multiple machines.${RESET}"
-    printf '%b\n' "  ${DIM}Name it after your environment.${RESET}"
+    printf '%b\n' "  ${DIM}A fleet is your deploy formation -- machines marching${RESET}"
+    printf '%b\n' "  ${DIM}in step toward the same mission. Name it after the${RESET}"
+    printf '%b\n' "  ${DIM}environment it defends.${RESET}"
     echo ""
     printf '  %b>%b Fleet name %b(production)%b: ' "${ACCENT}" "${RESET}" "${DIM}" "${RESET}"
     IFS= read -r _fleet_name
@@ -237,36 +342,44 @@ cmd_fleet_setup() {
     fi
   fi
 
-  # ═══════════════════════════════════════════
-  # Step 2: Add Machines
-  # ═══════════════════════════════════════════
+  # ============================================
+  # Step 2: Recruit machines
+  # ============================================
   while true; do
     local _machine_count=$(( ${#_machines[@]} + 1 ))
-    _fleet_setup_screen 2 "Add machines"
+    _fleet_setup_screen 2 "Recruit machines"
 
     # Show machines already in this fleet
+    local _roster_shown=false
     if [[ "$_is_existing_fleet" == "true" ]]; then
       local _existing_count=0
       local _ex_grp _ex_proj
       for _ex_grp in $(fleet_cfg_groups "$_fleet_name" 2>/dev/null); do
         for _ex_proj in $(fleet_cfg_group_projects "$_fleet_name" "$_ex_grp" 2>/dev/null); do
           if (( _existing_count == 0 )); then
-            printf '%b\n' "  ${DIM}Already in fleet:${RESET}"
+            printf '%b\n' "  ${ACCENT}Current roster:${RESET}"
           fi
           fleet_cfg_project_load "$_fleet_name" "$_ex_grp" "$_ex_proj"
-          printf '%b\n' "    ${GREEN}*${RESET} ${_ex_proj}  ${DIM}${_FP_USER}@${_FP_HOST}${RESET}"
+          printf '%b\n' "    ${GREEN}*${RESET} ${BOLD}${_ex_proj}${RESET}  ${DIM}${_FP_USER}@${_FP_HOST}${RESET}"
           _existing_count=$(( _existing_count + 1 ))
         done
       done
-      (( _existing_count > 0 )) && echo ""
+      if (( _existing_count > 0 )); then
+        echo ""
+        _roster_shown=true
+      fi
     fi
 
     # Show machines added this session
     if (( ${#_machines[@]} > 0 )); then
-      printf '%b\n' "  ${DIM}Added this session:${RESET}"
+      if [[ "$_roster_shown" == "false" ]]; then
+        printf '%b\n' "  ${ACCENT}New recruits:${RESET}"
+      else
+        printf '%b\n' "  ${ACCENT}Enlisted this session:${RESET}"
+      fi
       local _mi=0
       while (( _mi < ${#_machines[@]} )); do
-        printf '%b\n' "    ${GREEN}*${RESET} ${_machines[$_mi]}  ${DIM}${_machine_users[$_mi]}@${_machine_hosts[$_mi]}${RESET}"
+        printf '%b\n' "    ${GREEN}+${RESET} ${BOLD}${_machines[$_mi]}${RESET}  ${DIM}${_machine_users[$_mi]}@${_machine_hosts[$_mi]}${RESET}"
         _mi=$((_mi + 1))
       done
       echo ""
@@ -318,12 +431,15 @@ cmd_fleet_setup() {
         _si=$((_si + 1))
       done
 
-      menu_select "How to add?" "Import from SSH config" "Enter manually" "Done adding"
+      printf '%b\n' "  ${DIM}Found ${_ssh_count} host(s) in ~/.ssh/config ready for duty.${RESET}"
+      echo ""
+
+      menu_select "Enlist how?" "Import from SSH config" "Enter manually" "Done recruiting"
 
       case "$MENU_RESULT" in
         "Import from SSH config")
           echo ""
-          checklist_select --none "Select hosts" "${_import_labels[@]}"
+          checklist_select --none "Select recruits" "${_import_labels[@]}"
 
           while IFS= read -r _selected; do
             [[ -z "$_selected" ]] && continue
@@ -342,7 +458,7 @@ cmd_fleet_setup() {
 
                 # Test connection
                 echo ""
-                start_spinner "Testing ${_im_user}@${_im_host}..."
+                start_spinner "Hailing ${_im_name}..."
                 local _ssh_ok=false
                 local _sopts="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
                 [[ -n "$_im_key" ]] && _sopts="${_sopts} -i ${_im_key/#\~/$HOME}"
@@ -354,9 +470,9 @@ cmd_fleet_setup() {
                 stop_spinner
 
                 if [[ "$_ssh_ok" == "true" ]]; then
-                  printf '%b\n' "  ${GREEN}*${RESET} ${_im_name}  ${_im_user}@${_im_host}"
+                  printf '%b\n' "  ${GREEN}*${RESET} ${BOLD}${_im_name}${RESET} reporting for duty  ${DIM}${_im_user}@${_im_host}${RESET}"
                 else
-                  printf '%b\n' "  ${YELLOW}!${RESET} ${_im_name}  ${_im_user}@${_im_host}  ${DIM}(unreachable)${RESET}"
+                  printf '%b\n' "  ${YELLOW}!${RESET} ${BOLD}${_im_name}${RESET} not responding  ${DIM}${_im_user}@${_im_host}${RESET}"
                 fi
 
                 # Create project
@@ -387,13 +503,12 @@ cmd_fleet_setup() {
 
           continue
           ;;
-        "Done adding")
+        "Done recruiting")
           if (( ${#_machines[@]} == 0 )); then
-            # Check if existing fleet has machines
             if [[ "$_is_existing_fleet" == "true" ]]; then
               break
             fi
-            warn "At least one machine is required."
+            warn "Every fleet needs at least one machine, soldier."
             sleep 1
             continue
           fi
@@ -408,25 +523,25 @@ cmd_fleet_setup() {
       esac
       # Fall through to manual entry
     else
-      # No SSH config hosts — check if we have enough machines or need more
+      # No SSH config hosts
       if (( ${#_machines[@]} > 0 )); then
-        menu_select "Add another?" "Add machine" "Continue"
-        if [[ "$MENU_RESULT" == "Continue" || "$MENU_RESULT" == "__back__" ]]; then
+        menu_select "Recruit more?" "Add another" "Fall in (continue)"
+        if [[ "$MENU_RESULT" == "Fall in (continue)" || "$MENU_RESULT" == "__back__" ]]; then
           break
         fi
       fi
     fi
 
-    # ── Manual entry ──
-    printf '%b\n' "  ${DIM}Machine ${_machine_count}:${RESET}"
+    # -- Manual entry --
+    printf '%b\n' "  ${DIM}Recruit #${_machine_count}:${RESET}"
     echo ""
 
-    printf '  %b>%b Name: ' "${ACCENT}" "${RESET}"
+    printf '  %b>%b Callsign %b(name for this machine)%b: ' "${ACCENT}" "${RESET}" "${DIM}" "${RESET}"
     local _m_name=""
     IFS= read -r _m_name
     if [[ -z "$_m_name" ]]; then
-      if (( ${#_machines[@]} == 0 && _is_existing_fleet == false )); then
-        warn "At least one machine is required."
+      if (( ${#_machines[@]} == 0 )) && [[ "$_is_existing_fleet" == "false" ]]; then
+        warn "Every fleet needs at least one machine, soldier."
         sleep 1
         continue
       fi
@@ -437,7 +552,7 @@ cmd_fleet_setup() {
     local _m_host=""
     IFS= read -r _m_host
     if [[ -z "$_m_host" || "$_m_host" != *"@"* ]]; then
-      warn "Expected user@hostname format"
+      warn "Expected user@hostname format. Regroup and try again."
       sleep 1
       continue
     fi
@@ -452,7 +567,7 @@ cmd_fleet_setup() {
     IFS= read -r _m_port_in
     [[ -n "$_m_port_in" ]] && _m_port="$_m_port_in"
 
-    # SSH key — auto-detect
+    # SSH key -- auto-detect
     local _ssh_keys=()
     local _kf
     for _kf in "$HOME"/.ssh/id_ed25519 "$HOME"/.ssh/id_rsa "$HOME"/.ssh/deploy-key "$HOME"/.ssh/deploy; do
@@ -471,7 +586,7 @@ cmd_fleet_setup() {
       _key_opts[${#_key_opts[@]}]="Other"
       _key_opts[${#_key_opts[@]}]="None (SSH agent)"
 
-      menu_select "SSH key" "${_key_opts[@]}"
+      menu_select "Credentials" "${_key_opts[@]}"
       case "$MENU_RESULT" in
         "None (SSH agent)") _m_key="" ;;
         "Other")
@@ -484,7 +599,7 @@ cmd_fleet_setup() {
 
     # Test connection
     echo ""
-    start_spinner "Connecting to ${_m_user}@${_m_hostname}..."
+    start_spinner "Hailing ${_m_user}@${_m_hostname}..."
     local _ssh_ok=false
     local _ssh_opts="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
     [[ -n "$_m_key" ]] && _ssh_opts="${_ssh_opts} -i ${_m_key}"
@@ -496,10 +611,10 @@ cmd_fleet_setup() {
     stop_spinner
 
     if [[ "$_ssh_ok" == "true" ]]; then
-      printf '%b\n' "  ${GREEN}*${RESET} Connected to ${_m_user}@${_m_hostname}"
+      printf '%b\n' "  ${GREEN}*${RESET} ${BOLD}${_m_name}${RESET} reporting for duty"
     else
-      printf '%b\n' "  ${RED}x${RESET} Cannot reach ${_m_user}@${_m_hostname}"
-      printf '%b\n' "  ${DIM}Machine will be added — fix connectivity later.${RESET}"
+      printf '%b\n' "  ${RED}x${RESET} ${BOLD}${_m_name}${RESET} not responding"
+      printf '%b\n' "  ${DIM}Enlisted anyway. Fix connectivity before deploy.${RESET}"
     fi
 
     # Create project
@@ -524,32 +639,29 @@ cmd_fleet_setup() {
     _machine_hook_modes[${#_machine_hook_modes[@]}]="manual"
 
     echo ""
-    menu_select "Add another?" "Add another machine" "Continue"
-    [[ "$MENU_RESULT" == "Continue" || "$MENU_RESULT" == "__back__" ]] && break
+    menu_select "Recruit more?" "Add another" "Fall in (continue)"
+    [[ "$MENU_RESULT" == "Fall in (continue)" || "$MENU_RESULT" == "__back__" ]] && break
   done
 
   # If no new machines added to existing fleet, we're done with add step
   if (( ${#_machines[@]} == 0 )) && [[ "$_is_existing_fleet" == "false" ]]; then
-    warn "No machines added."
+    warn "No machines enlisted. Fleet disbanded."
     return 1
   fi
 
-  # ═══════════════════════════════════════════
-  # Step 3: Configure Each Machine
-  # ═══════════════════════════════════════════
+  # ============================================
+  # Step 3: Brief each machine
+  # ============================================
   local _mi=0
   while (( _mi < ${#_machines[@]} )); do
     local _mname="${_machines[$_mi]}"
     local _mhost="${_machine_hosts[$_mi]}"
     local _muser="${_machine_users[$_mi]}"
-    _fleet_setup_screen 3 "Configure ${_mname}"
+    _fleet_setup_screen 3 "Briefing: ${_mname}"
 
     # Auto-detect what's on the remote
     local _detected=false
-    printf '%b\n' "  ${DIM}Scanning ${_mname}...${RESET}"
-    echo ""
-
-    start_spinner "Detecting remote environment..."
+    start_spinner "Scouting ${_mname}..."
 
     # Need to load machine config for fleet_exec to work
     _fleet_load_machine "$_mname" 2>/dev/null || true
@@ -560,49 +672,50 @@ cmd_fleet_setup() {
     stop_spinner
 
     if [[ "$_detected" == "true" ]]; then
-      # Show detection results
-      printf '%b\n' "  ${GREEN}*${RESET} SSH connected"
+      # Show recon results
+      printf '%b\n' "  ${ACCENT}Recon report:${RESET}"
+      printf '%b\n' "  ${GREEN}*${RESET} Comms established ${DIM}(SSH OK)${RESET}"
 
       if [[ "$_DETECT_MUSTER" == "yes" ]]; then
-        printf '%b\n' "  ${GREEN}*${RESET} Muster installed on remote"
+        printf '%b\n' "  ${GREEN}*${RESET} Muster already deployed on target"
       fi
 
       case "$_DETECT_STACK" in
-        compose) printf '%b\n' "  ${GREEN}*${RESET} Docker Compose detected" ;;
-        k8s)     printf '%b\n' "  ${GREEN}*${RESET} Kubernetes detected" ;;
-        docker)  printf '%b\n' "  ${GREEN}*${RESET} Docker detected" ;;
-        bare)    printf '%b\n' "  ${DIM}  No container runtime detected${RESET}" ;;
+        compose) printf '%b\n' "  ${GREEN}*${RESET} Docker Compose on deck" ;;
+        k8s)     printf '%b\n' "  ${GREEN}*${RESET} Kubernetes cluster detected" ;;
+        docker)  printf '%b\n' "  ${GREEN}*${RESET} Docker engine running" ;;
+        bare)    printf '%b\n' "  ${DIM}  No container runtime found (bare metal)${RESET}" ;;
       esac
 
       if (( ${#_DETECT_PATHS[@]} > 0 )); then
         local _pi=0
         while (( _pi < ${#_DETECT_PATHS[@]} )); do
-          printf '%b\n' "  ${GREEN}*${RESET} Found project at ${DIM}${_DETECT_PATHS[$_pi]}${RESET}"
+          printf '%b\n' "  ${GREEN}*${RESET} Project found at ${DIM}${_DETECT_PATHS[$_pi]}${RESET}"
           _pi=$((_pi + 1))
         done
       fi
       echo ""
     else
-      printf '%b\n' "  ${YELLOW}!${RESET} Could not scan remote ${DIM}(SSH failed or timed out)${RESET}"
+      printf '%b\n' "  ${YELLOW}!${RESET} Recon failed ${DIM}(SSH unreachable -- configuring blind)${RESET}"
       echo ""
     fi
 
     # Recommend hook mode based on detection
     local _recommended_mode="sync"
     local _rec_label="Sync"
-    local _rec_desc="Muster creates deploy scripts locally and pushes them to the remote."
+    local _rec_desc="You command from HQ. Muster creates deploy scripts here and pushes them to the front line."
     local _alt_label="Manual"
-    local _alt_desc="The remote has muster set up with its own hooks."
+    local _alt_desc="The remote runs its own ops. Muster just gives the order to deploy."
 
     if [[ "$_DETECT_MUSTER" == "yes" ]]; then
       _recommended_mode="manual"
       _rec_label="Manual"
-      _rec_desc="Muster is already on the remote — trigger 'muster deploy' remotely."
+      _rec_desc="Muster's already stationed there. Just relay the deploy order."
       _alt_label="Sync"
-      _alt_desc="Override: create deploy scripts locally and push them to the remote."
+      _alt_desc="Override: take command from HQ. Create and push deploy scripts."
     fi
 
-    menu_select_desc "Hook management" \
+    menu_select_desc "Chain of command" \
       "${_rec_label} (recommended)" \
       "$_rec_desc" \
       "$_alt_label" \
@@ -618,11 +731,11 @@ cmd_fleet_setup() {
 
     case "$_chosen_mode" in
       sync)
-        # ── Sync mode: configure services + hooks ──
+        # -- Sync mode: configure services + hooks --
         echo ""
-        printf '%b\n' "  ${DIM}What services does ${_mname} run?${RESET}"
+        printf '%b\n' "  ${DIM}What's this machine's mission?${RESET}"
         echo ""
-        checklist_select --none "Services" \
+        checklist_select --none "Assign duties" \
           "Web app / API" \
           "Background workers" \
           "Database" \
@@ -634,7 +747,7 @@ cmd_fleet_setup() {
           [[ -n "$_rc" ]] && _remote_components[${#_remote_components[@]}]="$_rc"
         done <<< "$CHECKLIST_RESULT"
 
-        # Stack — pre-select from detection
+        # Stack -- pre-select from detection
         echo ""
         local _stack_default="Docker Compose"
         case "$_DETECT_STACK" in
@@ -651,7 +764,7 @@ cmd_fleet_setup() {
           [[ "$_so" != "$_stack_default" ]] && _stack_opts[${#_stack_opts[@]}]="$_so"
         done
 
-        menu_select "Stack on ${_mname}?" "${_stack_opts[@]}"
+        menu_select "Weapons platform" "${_stack_opts[@]}"
         local _remote_stack="compose"
         case "$MENU_RESULT" in
           "Docker Compose") _remote_stack="compose" ;;
@@ -689,14 +802,14 @@ cmd_fleet_setup() {
 
         echo ""
         if (( ${#_svc_names[@]} > 0 )); then
-          printf '%b\n' "  ${GREEN}*${RESET} Generated hooks:"
+          printf '%b\n' "  ${GREEN}*${RESET} Battle plans generated:"
           local _gi=0
           while (( _gi < ${#_svc_names[@]} )); do
-            printf '%b\n' "    ${DIM}${_svc_names[$_gi]}/${RESET}"
+            printf '%b\n' "    ${ACCENT}>${RESET} ${_svc_names[$_gi]}/"
             _gi=$((_gi + 1))
           done
           echo ""
-          printf '%b\n' "  ${DIM}Edit anytime at ~/.muster/fleets/${_fleet_name}/default/${_mname}/hooks/${RESET}"
+          printf '%b\n' "  ${DIM}Customize at ~/.muster/fleets/${_fleet_name}/default/${_mname}/hooks/${RESET}"
         fi
 
         # Remote project path for sync target
@@ -705,7 +818,7 @@ cmd_fleet_setup() {
           _sync_path="${_DETECT_PATHS[0]}"
         fi
         echo ""
-        printf '  %b>%b Remote project path %b(%s)%b: ' "${ACCENT}" "${RESET}" "${DIM}" "${_sync_path:-~/myapp}" "${RESET}"
+        printf '  %b>%b Deploy target %b(%s)%b: ' "${ACCENT}" "${RESET}" "${DIM}" "${_sync_path:-~/myapp}" "${RESET}"
         local _path_in=""
         IFS= read -r _path_in
         [[ -n "$_path_in" ]] && _sync_path="$_path_in"
@@ -728,7 +841,7 @@ cmd_fleet_setup() {
         ;;
 
       manual)
-        # ── Manual mode ──
+        # -- Manual mode --
         echo ""
         local _manual_path=""
         if (( ${#_DETECT_PATHS[@]} > 0 )); then
@@ -748,10 +861,10 @@ cmd_fleet_setup() {
     _mi=$((_mi + 1))
   done
 
-  # ═══════════════════════════════════════════
-  # Step 4: Deploy Strategy
-  # ═══════════════════════════════════════════
-  _fleet_setup_screen 4 "Deploy strategy"
+  # ============================================
+  # Step 4: Formation (deploy strategy)
+  # ============================================
+  _fleet_setup_screen 4 "Choose formation"
 
   # Count total machines (existing + new)
   local _total_machines=0
@@ -763,23 +876,23 @@ cmd_fleet_setup() {
   done
 
   if (( _total_machines <= 1 )); then
-    printf '%b\n' "  ${DIM}Single machine — sequential deploy.${RESET}"
+    printf '%b\n' "  ${DIM}Single soldier -- no formation needed. Sequential it is.${RESET}"
     _strategy="sequential"
     fleet_cfg_update "$_fleet_name" ".deploy_strategy = \"sequential\"" 2>/dev/null || true
     echo ""
-    printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
+    printf '%b\n' "  ${DIM}Press any key to advance...${RESET}"
     IFS= read -rsn1 || true
   else
-    printf '%b\n' "  ${DIM}How should deploys run across ${_total_machines} machines?${RESET}"
+    printf '%b\n' "  ${DIM}${_total_machines} machines in formation. How do they march?${RESET}"
     echo ""
 
-    menu_select_desc "Strategy" \
+    menu_select_desc "Battle plan" \
       "Sequential (recommended)" \
-      "Deploy one machine at a time. If something fails, you can fix it before it reaches the next machine." \
+      "One at a time. If a machine falls, halt the advance before it spreads." \
       "Parallel" \
-      "Deploy all machines at once. Fastest, but failures hit everything. Good for staging." \
+      "All at once. Fastest blitz, but if it goes wrong, it goes wrong everywhere." \
       "Rolling" \
-      "Deploy one, verify it's healthy, then continue. Catches bad deploys early."
+      "Advance one, confirm it's standing, then send the next. Safest for production."
 
     case "$MENU_RESULT" in
       *"Parallel"*) _strategy="parallel" ;;
@@ -790,26 +903,17 @@ cmd_fleet_setup() {
     fleet_cfg_update "$_fleet_name" ".deploy_strategy = \"${_strategy}\"" 2>/dev/null || true
   fi
 
-  # ═══════════════════════════════════════════
-  # Step 5: Summary
-  # ═══════════════════════════════════════════
-  _fleet_setup_screen 5 "Fleet ready"
+  # ============================================
+  # Step 5: Fleet assembled
+  # ============================================
+  _fleet_setup_screen 5 "Fleet assembled"
 
-  local w=$(( TERM_COLS - 4 ))
-  (( w > 50 )) && w=50
-  (( w < 10 )) && w=10
-  local inner=$(( w - 2 ))
+  printf '%b\n' "  ${DIM}All units accounted for. Here's your command post:${RESET}"
+  echo ""
 
-  # Fleet header box
-  local label="${_fleet_name}"
-  local label_pad_len=$(( w - ${#label} - 3 ))
-  (( label_pad_len < 1 )) && label_pad_len=1
-  local label_pad
-  printf -v label_pad '%*s' "$label_pad_len" ""
-  label_pad="${label_pad// /─}"
-  printf '  %b┌─%b%s%b─%s┐%b\n' "${ACCENT}" "${BOLD}" "$label" "${RESET}${ACCENT}" "$label_pad" "${RESET}"
+  # Fleet roster box
+  _fleet_box_top "${_fleet_name}"
 
-  # Show ALL machines in fleet (existing + new)
   for _tm_grp in $(fleet_cfg_groups "$_fleet_name" 2>/dev/null); do
     for _tm_proj in $(fleet_cfg_group_projects "$_fleet_name" "$_tm_grp" 2>/dev/null); do
       fleet_cfg_project_load "$_fleet_name" "$_tm_grp" "$_tm_proj"
@@ -820,46 +924,28 @@ cmd_fleet_setup() {
         manual) _hm_tag=" manual" ;;
       esac
 
-      local display="${_tm_proj}: ${_FP_USER}@${_FP_HOST}"
-      local tag_len=${#_hm_tag}
-      local max_display=$(( inner - 4 - tag_len ))
-      (( max_display < 5 )) && max_display=5
-      if (( ${#display} > max_display )); then
-        display="${display:0:$((max_display - 3))}..."
-      fi
-
-      local content_len=$(( 4 + ${#display} + tag_len ))
-      local pad_len=$(( inner - content_len ))
-      (( pad_len < 0 )) && pad_len=0
-      local pad
-      printf -v pad '%*s' "$pad_len" ""
-
-      printf '  %b│%b  %b*%b %s%s%b%s%b%b│%b\n' \
-        "${ACCENT}" "${RESET}" "${GREEN}" "${RESET}" \
-        "$display" "$pad" "${DIM}" "$_hm_tag" "${RESET}" "${ACCENT}" "${RESET}"
+      local _display="${_tm_proj}: ${_FP_USER}@${_FP_HOST}"
+      _fleet_box_row "${GREEN}" "*" "$_display" "$_hm_tag"
     done
   done
 
-  local bottom
-  printf -v bottom '%*s' "$w" ""
-  bottom="${bottom// /─}"
-  printf '  %b└%s┘%b\n' "${ACCENT}" "$bottom" "${RESET}"
+  _fleet_box_bottom
 
   echo ""
-  printf '%b\n' "  ${DIM}Strategy:${RESET} ${_strategy}"
-  printf '%b\n' "  ${DIM}Config:${RESET}   ~/.muster/fleets/${_fleet_name}/"
+  printf '%b\n' "  ${DIM}Strategy:${RESET}  ${BOLD}${_strategy}${RESET}"
+  printf '%b\n' "  ${DIM}Config:${RESET}    ~/.muster/fleets/${_fleet_name}/"
   echo ""
 
-  printf '%b\n' "  ${ACCENT}Next steps:${RESET}"
-  printf '%b\n' "    ${BOLD}muster fleet deploy${RESET}    Deploy to all machines"
-  printf '%b\n' "    ${BOLD}muster fleet status${RESET}    Check health across fleet"
-  printf '%b\n' "    ${BOLD}muster fleet sync${RESET}      Push hooks to remotes"
-  printf '%b\n' "    ${BOLD}muster fleet${RESET}           Interactive fleet manager"
+  printf '%b\n' "  ${ACCENT}Orders:${RESET}"
+  printf '%b\n' "    ${BOLD}muster fleet deploy${RESET}    Send the fleet"
+  printf '%b\n' "    ${BOLD}muster fleet status${RESET}    Check all positions"
+  printf '%b\n' "    ${BOLD}muster fleet sync${RESET}      Push battle plans"
+  printf '%b\n' "    ${BOLD}muster fleet${RESET}           Command center"
   echo ""
 
-  menu_select "Run a test deploy?" "Dry run" "Done"
+  menu_select "First orders?" "Dry run (test deploy)" "Dismissed"
 
-  if [[ "$MENU_RESULT" == "Dry run" ]]; then
+  if [[ "$MENU_RESULT" == "Dry run (test deploy)" ]]; then
     echo ""
     FLEET_CONFIG_FILE="__fleet_dirs__"
     _fleet_cmd_deploy --dry-run
