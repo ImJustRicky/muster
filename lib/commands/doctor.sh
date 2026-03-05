@@ -652,16 +652,28 @@ $(cat "$_hf" 2>/dev/null)"
       fi
     done <<< "$services"
 
-    # Fleet connectivity (remotes.json)
+    # Fleet connectivity (remotes.json or fleet dirs)
     local _fleet_cfg="${project_dir}/remotes.json"
-    if [[ -f "$_fleet_cfg" ]] && has_cmd jq; then
-      local _fleet_machines
-      _fleet_machines=$(jq -r '.machines | keys[]' "$_fleet_cfg" 2>/dev/null)
+    local _has_fleet_cfg=false
+    [[ -f "$_fleet_cfg" ]] && _has_fleet_cfg=true
+    fleet_cfg_has_any 2>/dev/null && _has_fleet_cfg=true
+
+    if [[ "$_has_fleet_cfg" == "true" ]] && has_cmd jq; then
+      local _fleet_machines=""
+      if fleet_cfg_has_any 2>/dev/null; then
+        _fleet_machines=$(fleet_machines 2>/dev/null)
+      elif [[ -f "$_fleet_cfg" ]]; then
+        _fleet_machines=$(jq -r '.machines | keys[]' "$_fleet_cfg" 2>/dev/null)
+      fi
       if [[ -n "$_fleet_machines" ]]; then
         _has_checks=true
         source "$MUSTER_ROOT/lib/core/fleet.sh"
-        # shellcheck disable=SC2034
-        FLEET_CONFIG_FILE="$_fleet_cfg"
+        if [[ -f "$_fleet_cfg" ]]; then
+          # shellcheck disable=SC2034
+          FLEET_CONFIG_FILE="$_fleet_cfg"
+        else
+          FLEET_CONFIG_FILE="__fleet_dirs__"
+        fi
 
         local _fleet_ok=0 _fleet_fail=0 _fleet_total=0 _fleet_root=0
         while IFS= read -r _fm; do
@@ -694,7 +706,14 @@ $(cat "$_hf" 2>/dev/null)"
         while IFS= read -r _am; do
           [[ -z "$_am" ]] && continue
           local _ai
-          _ai=$(jq -r --arg n "$_am" '.machines[$n].agent_installed // false' "$_fleet_cfg" 2>/dev/null)
+          _ai="false"
+          if fleet_cfg_find_project "$_am" 2>/dev/null; then
+            local _doc_pdir
+            _doc_pdir="$(fleet_cfg_project_dir "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT")"
+            _ai=$(jq -r '.agent_installed // false' "${_doc_pdir}/project.json" 2>/dev/null)
+          elif [[ -f "$_fleet_cfg" ]]; then
+            _ai=$(jq -r --arg n "$_am" '.machines[$n].agent_installed // false' "$_fleet_cfg" 2>/dev/null)
+          fi
           [[ "$_ai" != "true" ]] && continue
           _agent_total=$(( _agent_total + 1 ))
 

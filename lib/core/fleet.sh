@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # muster/lib/core/fleet.sh — Fleet config reader, SSH primitives, token storage
+# Config CRUD now delegated to fleet_config.sh. This file provides:
+# - Token storage (unchanged)
+# - _fleet_load_machine() shim (maps _FP_* → _FM_*)
+# - SSH execution primitives (unchanged)
+
+source "$MUSTER_ROOT/lib/core/fleet_config.sh"
 
 FLEET_CONFIG_FILE=""
 
@@ -66,19 +72,16 @@ fleet_token_delete() {
 }
 
 # Auto-pair: SSH in, create token on remote, store locally
-# Returns 0 on success, 1 on failure (prints instructions)
 fleet_auto_pair() {
   local machine="$1"
   _fleet_load_machine "$machine"
 
-  # 1. Check if remote has muster
   if ! fleet_exec "$machine" "command -v muster" &>/dev/null; then
     warn "Remote does not have muster installed"
     _fleet_pair_instructions "$machine"
     return 1
   fi
 
-  # 2. Check if remote already has tokens (can't bootstrap if tokens exist)
   local token_count
   token_count=$(fleet_exec "$machine" "{ test -f ~/.muster/tokens/auth.json && jq '.tokens | length' ~/.muster/tokens/auth.json 2>/dev/null; } || { test -f ~/.muster/tokens.json && jq '.tokens | length' ~/.muster/tokens.json 2>/dev/null; } || echo 0" 2>/dev/null)
   token_count=$(printf '%s' "$token_count" | tr -d '[:space:]')
@@ -89,7 +92,6 @@ fleet_auto_pair() {
     return 1
   fi
 
-  # 3. Create token on remote (bootstrap — first token needs no auth)
   local hostname_local
   hostname_local=$(hostname -s 2>/dev/null || echo "fleet")
   local raw_token
@@ -101,10 +103,8 @@ fleet_auto_pair() {
     return 1
   fi
 
-  # 4. Store token locally
   fleet_token_set "$machine" "$raw_token"
 
-  # 5. Verify token works
   if fleet_verify_pair "$machine"; then
     ok "Paired with $(fleet_desc "$machine")"
     return 0
@@ -116,7 +116,6 @@ fleet_auto_pair() {
   fi
 }
 
-# Print manual pair instructions
 _fleet_pair_instructions() {
   local machine="$1"
   echo ""
@@ -126,7 +125,6 @@ _fleet_pair_instructions() {
   echo ""
 }
 
-# Verify stored token works against remote
 fleet_verify_pair() {
   local machine="$1"
   local token
@@ -135,19 +133,18 @@ fleet_verify_pair() {
 
   local result
   result=$(fleet_exec "$machine" "MUSTER_TOKEN=${token} muster status --json" 2>/dev/null)
-  # If we got valid JSON back (not an error), the token works
   printf '%s' "$result" | jq -e '.services' &>/dev/null
 }
 
-# ── Config I/O ──
+# ── Config I/O (shim to fleet_config.sh) ──
 
-# Find and load remotes.json (project dir first, then global)
+# Find and load config — now uses fleet dirs
 fleet_load_config() {
   if [[ -n "$FLEET_CONFIG_FILE" ]]; then
     return 0
   fi
 
-  # Check project directory first
+  # Check for legacy remotes.json (project dir first, then global)
   local dir=""
   if [[ -n "$CONFIG_FILE" ]]; then
     dir="$(dirname "$CONFIG_FILE")"
@@ -155,22 +152,25 @@ fleet_load_config() {
     dir="$(pwd)"
   fi
 
-  local path="${dir}/remotes.json"
-  if [[ -f "$path" ]]; then
-    FLEET_CONFIG_FILE="$path"
+  if [[ -f "${dir}/remotes.json" ]]; then
+    FLEET_CONFIG_FILE="${dir}/remotes.json"
+    return 0
+  fi
+  if [[ -f "$HOME/.muster/remotes.json" ]]; then
+    FLEET_CONFIG_FILE="$HOME/.muster/remotes.json"
     return 0
   fi
 
-  # Fall back to global ~/.muster/remotes.json
-  if [[ -f "$HOME/.muster/remotes.json" ]]; then
-    FLEET_CONFIG_FILE="$HOME/.muster/remotes.json"
+  # Check for fleet dirs
+  fleets_ensure_dir
+  if fleet_cfg_has_any; then
+    FLEET_CONFIG_FILE="__fleet_dirs__"
     return 0
   fi
 
   return 1
 }
 
-# Check if fleet config exists (without erroring)
 fleet_has_config() {
   local dir=""
   if [[ -n "$CONFIG_FILE" ]]; then
@@ -178,229 +178,242 @@ fleet_has_config() {
   else
     dir="$(pwd)"
   fi
-  [[ -f "${dir}/remotes.json" ]] || [[ -f "$HOME/.muster/remotes.json" ]]
+  [[ -f "${dir}/remotes.json" ]] || [[ -f "$HOME/.muster/remotes.json" ]] || fleet_cfg_has_any 2>/dev/null
 }
 
-# Create empty remotes.json
+# Create empty fleet config
 fleet_init() {
-  local dir=""
-  if [[ -n "$CONFIG_FILE" ]]; then
-    dir="$(dirname "$CONFIG_FILE")"
-  else
-    dir="$(pwd)"
-  fi
-
-  local path="${dir}/remotes.json"
-  if [[ -f "$path" ]]; then
-    err "remotes.json already exists"
-    return 1
-  fi
-
-  printf '{\n  "machines": {},\n  "groups": {},\n  "deploy_order": []\n}\n' > "$path"
-  FLEET_CONFIG_FILE="$path"
-  ok "Created remotes.json"
+  fleets_ensure_dir
+  fleet_cfg_create "default" "default"
+  fleet_cfg_group_create "default" "default" "default"
+  FLEET_CONFIG_FILE="__fleet_dirs__"
+  ok "Fleet initialized"
 }
 
-# jq query on remotes.json
+# jq query on remotes.json (legacy compat)
 fleet_get() {
   local query="$1"
-  jq -r "$query" "$FLEET_CONFIG_FILE"
+  if [[ "$FLEET_CONFIG_FILE" == "__fleet_dirs__" ]]; then
+    return 1
+  fi
+  jq -r "$query" "$FLEET_CONFIG_FILE" 2>/dev/null
 }
 
-# Write value to remotes.json
+# Write value (legacy compat)
 fleet_set() {
   local path="$1" value="$2"
+  if [[ "$FLEET_CONFIG_FILE" == "__fleet_dirs__" ]]; then
+    return 1
+  fi
   local tmp="${FLEET_CONFIG_FILE}.tmp"
   jq "${path} = ${value}" "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
 }
 
-# ── Machine config (batch read) ──
+# ── Machine config (shim: _FP_* → _FM_*) ──
 
-# Vars set by _fleet_load_machine:
 _FM_HOST="" _FM_USER="" _FM_PORT="" _FM_IDENTITY="" _FM_PROJECT_DIR="" _FM_MODE="" _FM_TRANSPORT="" _FM_HOOK_MODE=""
 
-# Load all config for a machine in one jq call
 _fleet_load_machine() {
   local name="$1"
-  local data
-  data=$(jq -r --arg n "$name" \
-    '.machines[$n] | "\(.host // "")\n\(.user // "")\n\(.port // 22)\n\(.identity_file // "")\n\(.project_dir // "")\n\(.mode // "push")\n\(.transport // "ssh")\n\(.hook_mode // "manual")"' \
-    "$FLEET_CONFIG_FILE" 2>/dev/null)
 
-  local i=0
-  while IFS= read -r _line; do
-    case $i in
-      0) _FM_HOST="$_line" ;;
-      1) _FM_USER="$_line" ;;
-      2) _FM_PORT="$_line" ;;
-      3) _FM_IDENTITY="$_line" ;;
-      4) _FM_PROJECT_DIR="$_line" ;;
-      5) _FM_MODE="$_line" ;;
-      6) _FM_TRANSPORT="$_line" ;;
-      7) _FM_HOOK_MODE="$_line" ;;
+  # Try fleet dirs first
+  if fleet_cfg_find_project "$name" 2>/dev/null; then
+    _FM_HOST="$_FP_HOST"
+    _FM_USER="$_FP_USER"
+    _FM_PORT="$_FP_PORT"
+    _FM_IDENTITY="$_FP_IDENTITY"
+    _FM_PROJECT_DIR="$_FP_REMOTE_PATH"
+    _FM_TRANSPORT="$_FP_TRANSPORT"
+    _FM_HOOK_MODE="$_FP_HOOK_MODE"
+    # Map hook_mode to old mode field
+    case "$_FP_HOOK_MODE" in
+      manual) _FM_MODE="muster" ;;
+      sync)   _FM_MODE="push" ;;
+      local)  _FM_MODE="push" ;;
+      *)      _FM_MODE="push" ;;
     esac
-    i=$(( i + 1 ))
-  done <<< "$data"
+    return 0
+  fi
 
-  # Defaults
-  [[ -z "$_FM_PORT" || "$_FM_PORT" == "null" ]] && _FM_PORT="22"
-  [[ "$_FM_IDENTITY" == "null" ]] && _FM_IDENTITY=""
-  [[ "$_FM_PROJECT_DIR" == "null" ]] && _FM_PROJECT_DIR=""
-  [[ -z "$_FM_MODE" || "$_FM_MODE" == "null" ]] && _FM_MODE="push"
-  [[ -z "$_FM_TRANSPORT" || "$_FM_TRANSPORT" == "null" ]] && _FM_TRANSPORT="ssh"
-  [[ -z "$_FM_HOOK_MODE" || "$_FM_HOOK_MODE" == "null" ]] && _FM_HOOK_MODE="manual"
+  # Fall back to legacy remotes.json
+  if [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    local data
+    data=$(jq -r --arg n "$name" \
+      '.machines[$n] | "\(.host // "")\n\(.user // "")\n\(.port // 22)\n\(.identity_file // "")\n\(.project_dir // "")\n\(.mode // "push")\n\(.transport // "ssh")\n\(.hook_mode // "manual")"' \
+      "$FLEET_CONFIG_FILE" 2>/dev/null)
+
+    local i=0
+    while IFS= read -r _line; do
+      case $i in
+        0) _FM_HOST="$_line" ;;
+        1) _FM_USER="$_line" ;;
+        2) _FM_PORT="$_line" ;;
+        3) _FM_IDENTITY="$_line" ;;
+        4) _FM_PROJECT_DIR="$_line" ;;
+        5) _FM_MODE="$_line" ;;
+        6) _FM_TRANSPORT="$_line" ;;
+        7) _FM_HOOK_MODE="$_line" ;;
+      esac
+      i=$(( i + 1 ))
+    done <<< "$data"
+
+    [[ -z "$_FM_PORT" || "$_FM_PORT" == "null" ]] && _FM_PORT="22"
+    [[ "$_FM_IDENTITY" == "null" ]] && _FM_IDENTITY=""
+    [[ "$_FM_PROJECT_DIR" == "null" ]] && _FM_PROJECT_DIR=""
+    [[ -z "$_FM_MODE" || "$_FM_MODE" == "null" ]] && _FM_MODE="push"
+    [[ -z "$_FM_TRANSPORT" || "$_FM_TRANSPORT" == "null" ]] && _FM_TRANSPORT="ssh"
+    [[ -z "$_FM_HOOK_MODE" || "$_FM_HOOK_MODE" == "null" ]] && _FM_HOOK_MODE="manual"
+    return 0
+  fi
+
+  return 1
 }
 
-# List all machine names
+# List all machine names (from fleet dirs or legacy)
 fleet_machines() {
-  jq -r '.machines | keys[]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  if fleet_cfg_has_any 2>/dev/null; then
+    local fleet group project
+    for fleet in $(fleets_list); do
+      for group in $(fleet_cfg_groups "$fleet"); do
+        fleet_cfg_group_projects "$fleet" "$group"
+      done
+    done
+  elif [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    jq -r '.machines | keys[]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  fi
 }
 
-# List all group names
+# List all group names (from fleet dirs or legacy)
 fleet_groups() {
-  jq -r '.groups | keys[]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  if fleet_cfg_has_any 2>/dev/null; then
+    fleets_list
+  elif [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    jq -r '.groups | keys[]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  fi
 }
 
 # List machines in a group
 fleet_group_machines() {
   local group="$1"
-  jq -r --arg g "$group" '.groups[$g][]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  if fleet_cfg_has_any 2>/dev/null; then
+    # Group = fleet in new structure; return all projects
+    local grp proj
+    for grp in $(fleet_cfg_groups "$group"); do
+      fleet_cfg_group_projects "$group" "$grp"
+    done
+  elif [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    jq -r --arg g "$group" '.groups[$g][]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  fi
 }
 
 # Get ordered group list for deploy
 fleet_deploy_order() {
-  jq -r '.deploy_order[]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  if fleet_cfg_has_any 2>/dev/null; then
+    fleets_list
+  elif [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    jq -r '.deploy_order[]' "$FLEET_CONFIG_FILE" 2>/dev/null
+  fi
 }
 
-# ── CRUD ──
+# ── CRUD (delegated) ──
 
 fleet_add_machine() {
   local name="$1" host="$2" user="$3" port="${4:-22}" identity="${5:-}" project_dir="${6:-}" mode="${7:-push}" transport="${8:-ssh}" hook_mode="${9:-manual}"
 
-  # Validate mode
   case "$mode" in
     muster|push) ;;
-    *)
-      err "Invalid mode: ${mode} (must be muster or push)"
-      return 1
-      ;;
+    *) err "Invalid mode: ${mode} (must be muster or push)"; return 1 ;;
   esac
-
-  # Validate transport
   case "$transport" in
     ssh|cloud) ;;
-    *)
-      err "Invalid transport: ${transport} (must be ssh or cloud)"
-      return 1
-      ;;
+    *) err "Invalid transport: ${transport} (must be ssh or cloud)"; return 1 ;;
   esac
 
-  # Check if machine already exists
-  local existing
-  existing=$(jq -r --arg n "$name" '.machines[$n] // empty' "$FLEET_CONFIG_FILE" 2>/dev/null)
-  if [[ -n "$existing" ]]; then
-    err "Machine '${name}' already exists. Remove it first with: muster fleet remove ${name}"
-    return 1
+  fleets_ensure_dir
+
+  # Ensure default fleet exists
+  if ! fleet_cfg_has_any; then
+    fleet_cfg_create "default" "default"
+    fleet_cfg_group_create "default" "default" "default"
   fi
 
-  # Build machine JSON
-  local machine_json
-  machine_json=$(jq -n \
+  local _fleet
+  _fleet=$(fleets_list | head -1)
+
+  local _json
+  _json=$(jq -n \
+    --arg n "$name" \
     --arg host "$host" \
     --arg user "$user" \
     --argjson port "$port" \
     --arg identity "$identity" \
     --arg project_dir "$project_dir" \
-    --arg mode "$mode" \
     --arg transport "$transport" \
     --arg hook_mode "$hook_mode" \
-    '{host: $host, user: $user, port: $port, mode: $mode} +
-     (if $hook_mode != "manual" then {hook_mode: $hook_mode} else {} end) +
-     (if $transport != "ssh" then {transport: $transport} else {} end) +
-     (if $identity != "" then {identity_file: $identity} else {} end) +
-     (if $project_dir != "" then {project_dir: $project_dir} else {} end)')
+    '{name: $n, machine: ({host: $host, user: $user, port: $port, transport: $transport} +
+      (if $identity != "" then {identity_file: $identity} else {} end)),
+      hook_mode: $hook_mode} +
+      (if $project_dir != "" then {remote_path: $project_dir} else {} end)')
 
-  local tmp="${FLEET_CONFIG_FILE}.tmp"
-  jq --arg n "$name" --argjson m "$machine_json" \
-    '.machines[$n] = $m' "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
-
-  ok "Added machine '${name}' (${user}@${host}:${port}, mode: ${mode})"
+  fleet_cfg_project_create "$_fleet" "default" "$name" "$_json"
+  ok "Added machine '${name}' (${user}@${host}:${port})"
 }
 
 fleet_remove_machine() {
   local name="$1"
+  fleets_ensure_dir
 
-  # Check exists
-  local existing
-  existing=$(jq -r --arg n "$name" '.machines[$n] // empty' "$FLEET_CONFIG_FILE" 2>/dev/null)
-  if [[ -z "$existing" ]]; then
-    err "Machine '${name}' not found"
-    return 1
-  fi
-
-  # Get token key before removing config (needs machine config to build key)
-  local _token_key=""
-  _fleet_load_machine "$name"
-  _token_key="${_FM_USER}@${_FM_HOST}:${_FM_PORT}"
-
-  # Remove from machines and all groups
-  local tmp="${FLEET_CONFIG_FILE}.tmp"
-  jq --arg n "$name" '
-    del(.machines[$n]) |
-    .groups = (.groups | to_entries | map(.value = (.value | map(select(. != $n)))) | from_entries) |
-    .deploy_order = [.deploy_order[] | select(. != $n)]
-  ' "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
-
-  # Remove stored token
-  if [[ -n "$_token_key" ]]; then
+  # Find and remove
+  if fleet_cfg_find_project "$name"; then
+    # Remove token first
     _fleet_token_file
-    tmp="${FLEET_TOKENS_FILE}.tmp"
+    local _token_key="${_FP_USER}@${_FP_HOST}:${_FP_PORT}"
+    local tmp="${FLEET_TOKENS_FILE}.tmp"
     jq --arg k "$_token_key" 'del(.tokens[$k])' \
       "$FLEET_TOKENS_FILE" > "$tmp" && mv "$tmp" "$FLEET_TOKENS_FILE"
     chmod 600 "$FLEET_TOKENS_FILE"
-  fi
 
-  ok "Removed machine '${name}'"
+    fleet_cfg_project_delete "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT"
+    ok "Removed machine '${name}'"
+  else
+    err "Machine '${name}' not found"
+    return 1
+  fi
 }
 
 fleet_set_group() {
   local group_name="$1"
   shift
-  local machines_json="[]"
-  while [[ $# -gt 0 ]]; do
-    machines_json=$(printf '%s' "$machines_json" | jq --arg m "$1" '. + [$m]')
-    shift
-  done
-
-  local tmp="${FLEET_CONFIG_FILE}.tmp"
-  jq --arg g "$group_name" --argjson m "$machines_json" \
-    '.groups[$g] = $m' "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
-
-  ok "Group '${group_name}' updated"
+  # In new structure, groups are fleets. This is legacy compat.
+  fleets_ensure_dir
+  if [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    local machines_json="[]"
+    while [[ $# -gt 0 ]]; do
+      machines_json=$(printf '%s' "$machines_json" | jq --arg m "$1" '. + [$m]')
+      shift
+    done
+    local tmp="${FLEET_CONFIG_FILE}.tmp"
+    jq --arg g "$group_name" --argjson m "$machines_json" \
+      '.groups[$g] = $m' "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
+    ok "Group '${group_name}' updated"
+  fi
 }
 
 fleet_remove_group() {
   local group_name="$1"
-
-  local existing
-  existing=$(jq -r --arg g "$group_name" '.groups[$g] // empty' "$FLEET_CONFIG_FILE" 2>/dev/null)
-  if [[ -z "$existing" ]]; then
-    err "Group '${group_name}' not found"
-    return 1
+  fleets_ensure_dir
+  if [[ -n "$FLEET_CONFIG_FILE" && "$FLEET_CONFIG_FILE" != "__fleet_dirs__" && -f "$FLEET_CONFIG_FILE" ]]; then
+    local tmp="${FLEET_CONFIG_FILE}.tmp"
+    jq --arg g "$group_name" '
+      del(.groups[$g]) |
+      .deploy_order = [.deploy_order[] | select(. != $g)]
+    ' "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
+    ok "Removed group '${group_name}'"
   fi
-
-  local tmp="${FLEET_CONFIG_FILE}.tmp"
-  jq --arg g "$group_name" '
-    del(.groups[$g]) |
-    .deploy_order = [.deploy_order[] | select(. != $g)]
-  ' "$FLEET_CONFIG_FILE" > "$tmp" && mv "$tmp" "$FLEET_CONFIG_FILE"
-
-  ok "Removed group '${group_name}'"
 }
 
 # ── SSH execution ──
 
-# Build SSH options from _FM_* vars
 _fleet_build_opts() {
   _FLEET_SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
 
@@ -417,7 +430,6 @@ _fleet_build_opts() {
   fi
 }
 
-# Execute command on machine
 fleet_exec() {
   local machine="$1" cmd="$2"
   _fleet_load_machine "$machine"
@@ -438,12 +450,10 @@ fleet_exec() {
   esac
 }
 
-# Pipe hook script to machine
 fleet_push_hook() {
   local machine="$1" hook_file="$2" env_lines="${3:-}"
   _fleet_load_machine "$machine"
 
-  # Sign hook if signing is enabled
   local _hook_sig=""
   local _signing
   _signing=$(global_config_get "signing" 2>/dev/null || echo "off")
@@ -458,30 +468,22 @@ fleet_push_hook() {
       _fleet_build_opts
       # shellcheck disable=SC2086
       {
-        # Export env vars
         if [[ -n "$env_lines" ]]; then
           while IFS= read -r _env_line; do
             [[ -z "$_env_line" ]] && continue
             printf 'export %s\n' "$_env_line"
           done <<< "$env_lines"
         fi
-
-        # Export hook signature if signed
         if [[ -n "$_hook_sig" ]]; then
           printf 'export MUSTER_HOOK_SIG=%s\n' "$_hook_sig"
         fi
-
-        # cd to project directory if set
         if [[ -n "$_FM_PROJECT_DIR" ]]; then
           printf 'cd %s || exit 1\n' "$_FM_PROJECT_DIR"
         fi
-
-        # Pipe the hook script
         cat "$hook_file"
       } | ssh $_FLEET_SSH_OPTS "${_FM_USER}@${_FM_HOST}" "bash -s"
       ;;
     cloud)
-      # Pass sig as env var alongside hook
       local _cloud_env="$env_lines"
       if [[ -n "$_hook_sig" ]]; then
         if [[ -n "$_cloud_env" ]]; then
@@ -501,7 +503,6 @@ MUSTER_HOOK_SIG=${_hook_sig}"
   esac
 }
 
-# Connectivity test
 fleet_check() {
   local machine="$1"
   _fleet_load_machine "$machine"
@@ -521,14 +522,12 @@ fleet_check() {
   esac
 }
 
-# Display string: user@host:port
 fleet_desc() {
   local machine="$1"
   _fleet_load_machine "$machine"
   printf '%s@%s:%s' "$_FM_USER" "$_FM_HOST" "$_FM_PORT"
 }
 
-# Check if remote user is root — warn if so
 _fleet_check_nonroot() {
   local machine="$1"
   local remote_uid

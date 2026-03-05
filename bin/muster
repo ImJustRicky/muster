@@ -4,7 +4,7 @@
 # https://getmuster.dev | https://github.com/Muster-dev/muster
 set -uo pipefail
 
-MUSTER_VERSION="0.5.52"
+MUSTER_VERSION="0.5.53"
 
 # Resolve symlinks (macOS bash 3.2 has no readlink -f)
 _muster_self="${BASH_SOURCE[0]}"
@@ -185,6 +185,7 @@ source "$MUSTER_ROOT/lib/core/utils.sh"
 source "$MUSTER_ROOT/lib/core/config.sh"
 source "$MUSTER_ROOT/lib/core/platform.sh"
 source "$MUSTER_ROOT/lib/core/registry.sh"
+source "$MUSTER_ROOT/lib/core/fleet_config.sh"
 
 # ── Apply persistent minimal setting ──
 if [[ "$MUSTER_MINIMAL" != "true" ]]; then

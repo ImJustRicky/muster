@@ -367,7 +367,12 @@ launchctl load ~/Library/LaunchAgents/dev.getmuster.agent.plist' 2>/dev/null
   fi
 
   # Mark agent installed in fleet config
-  fleet_set ".machines.\"${machine}\".agent_installed" "true"
+  if fleet_cfg_find_project "$machine" 2>/dev/null; then
+    fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+      '.agent_installed = true'
+  else
+    fleet_set ".machines.\"${machine}\".agent_installed" "true"
+  fi
 
   echo ""
   ok "Agent installed on ${machine}"
@@ -430,7 +435,14 @@ _fleet_cmd_agent_status() {
 
     # Check if agent is installed
     local _as_installed
-    _as_installed=$(fleet_get ".machines.\"${_as_m}\".agent_installed // false" 2>/dev/null)
+    _as_installed="false"
+    if fleet_cfg_find_project "$_as_m" 2>/dev/null; then
+      local _as_pdir
+      _as_pdir="$(fleet_cfg_project_dir "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT")"
+      _as_installed=$(jq -r '.agent_installed // false' "${_as_pdir}/project.json" 2>/dev/null)
+    else
+      _as_installed=$(fleet_get ".machines.\"${_as_m}\".agent_installed // false" 2>/dev/null)
+    fi
     if [[ "$_as_installed" != "true" && -z "$machine" ]]; then
       continue
     fi
@@ -564,7 +576,12 @@ _fleet_cmd_remove_agent() {
   stop_spinner
 
   # Remove agent_installed flag
-  fleet_set ".machines.\"${machine}\".agent_installed" "false"
+  if fleet_cfg_find_project "$machine" 2>/dev/null; then
+    fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+      '.agent_installed = false'
+  else
+    fleet_set ".machines.\"${machine}\".agent_installed" "false"
+  fi
 
   ok "Agent removed from ${machine}"
   echo ""
@@ -586,7 +603,14 @@ _fleet_agent_menu() {
       while IFS= read -r _am_m; do
         [[ -z "$_am_m" ]] && continue
         local _am_installed
-        _am_installed=$(fleet_get ".machines.\"${_am_m}\".agent_installed // false" 2>/dev/null)
+        _am_installed="false"
+        if fleet_cfg_find_project "$_am_m" 2>/dev/null; then
+          local _am_pdir
+          _am_pdir="$(fleet_cfg_project_dir "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT")"
+          _am_installed=$(jq -r '.agent_installed // false' "${_am_pdir}/project.json" 2>/dev/null)
+        else
+          _am_installed=$(fleet_get ".machines.\"${_am_m}\".agent_installed // false" 2>/dev/null)
+        fi
         if [[ "$_am_installed" == "true" ]]; then
           printf '  %b●%b %s\n' "${GREEN}" "${RESET}" "$_am_m"
         else

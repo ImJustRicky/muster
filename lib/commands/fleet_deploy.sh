@@ -67,9 +67,7 @@ _fleet_cmd_deploy() {
       done <<< "$group_members"
     else
       # Single machine
-      local exists
-      exists=$(fleet_get ".machines.\"${target}\" // empty")
-      if [[ -z "$exists" ]]; then
+      if ! _fleet_load_machine "$target" 2>/dev/null; then
         err "Unknown machine or group: ${target}"
         return 1
       fi
@@ -129,7 +127,15 @@ _fleet_cmd_deploy() {
   # Read deploy_strategy from config if no CLI override
   if [[ -z "$_strategy_override" ]]; then
     local _cfg_strategy=""
-    _cfg_strategy=$(fleet_get '.deploy_strategy // "sequential"' 2>/dev/null || echo "sequential")
+    if fleet_cfg_has_any 2>/dev/null; then
+      local _first_fleet
+      _first_fleet=$(fleets_list | head -1)
+      if [[ -n "$_first_fleet" ]]; then
+        fleet_cfg_load "$_first_fleet"
+        _cfg_strategy="$_FL_STRATEGY"
+      fi
+    fi
+    [[ -z "$_cfg_strategy" ]] && _cfg_strategy=$(fleet_get '.deploy_strategy // "sequential"' 2>/dev/null || echo "sequential")
     case "$_cfg_strategy" in
       parallel) parallel=true ;;
       rolling)  rolling=true ;;

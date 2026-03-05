@@ -1,177 +1,160 @@
 #!/usr/bin/env bash
 # muster/lib/core/groups.sh — Fleet Groups config reader and CRUD
+# Now delegates to fleet_config.sh directory-based API.
+# Function signatures preserved for group.sh compat (~40 refs).
 
+source "$MUSTER_ROOT/lib/core/fleet_config.sh"
+
+# Legacy compat — no longer used directly, but some files reference it
 GROUPS_CONFIG_FILE="$HOME/.muster/groups.json"
+
+# Current fleet context (set by callers or defaulting to first fleet)
+_CURRENT_FLEET=""
+
+# Resolve _CURRENT_FLEET — use first available fleet if not set
+_groups_resolve_fleet() {
+  if [[ -n "$_CURRENT_FLEET" ]]; then
+    return 0
+  fi
+  fleets_ensure_dir
+  local _first
+  _first=$(fleets_list | head -1)
+  if [[ -n "$_first" ]]; then
+    _CURRENT_FLEET="$_first"
+    return 0
+  fi
+  return 1
+}
 
 # ── Config file management ──
 
 _groups_ensure_file() {
-  if [[ ! -d "$HOME/.muster" ]]; then
-    mkdir -p "$HOME/.muster"
-    chmod 700 "$HOME/.muster"
-  fi
-  if [[ ! -f "$GROUPS_CONFIG_FILE" ]]; then
-    printf '{"groups":{}}\n' > "$GROUPS_CONFIG_FILE"
-  fi
+  fleets_ensure_dir
 }
 
-# Read a jq query from groups.json
+# Read a jq query from groups config (legacy compat — reads from fleet dirs)
 groups_get() {
   local query="$1"
   _groups_ensure_file
-  jq -r "$query" "$GROUPS_CONFIG_FILE" 2>/dev/null
+  # Legacy compat: if old groups.json exists, read from it
+  if [[ -f "$GROUPS_CONFIG_FILE" ]]; then
+    jq -r "$query" "$GROUPS_CONFIG_FILE" 2>/dev/null
+  fi
 }
 
-# Write a value to groups.json (atomic tmp+mv)
+# Write a value (legacy compat — no-op, use fleet_cfg_* instead)
 groups_set() {
   local path="$1" value="$2"
   _groups_ensure_file
-  local tmp="${GROUPS_CONFIG_FILE}.tmp"
-  jq "${path} = ${value}" "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+  if [[ -f "$GROUPS_CONFIG_FILE" ]]; then
+    local tmp="${GROUPS_CONFIG_FILE}.tmp"
+    jq "${path} = ${value}" "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+  fi
 }
 
 # ── Read helpers ──
 
-# List all group names (newline-separated)
+# List all group names (these are now fleet names)
 groups_list() {
-  _groups_ensure_file
-  jq -r '.groups | keys[]' "$GROUPS_CONFIG_FILE" 2>/dev/null
+  fleets_ensure_dir
+  fleets_list
 }
 
-# Check if a group exists (returns 0/1)
+# Check if a group exists
 groups_exists() {
   local name="$1"
-  _groups_ensure_file
-  local val
-  val=$(jq -r --arg n "$name" '.groups[$n] // empty' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  [[ -n "$val" ]]
+  fleets_ensure_dir
+  local fdir
+  fdir="$(fleet_dir "$name")"
+  [[ -f "${fdir}/fleet.json" ]]
 }
 
-# Get number of projects in a group
+# Get number of projects in a group (fleet)
 groups_project_count() {
   local name="$1"
-  _groups_ensure_file
-  local count
-  count=$(jq -r --arg n "$name" '.groups[$n].projects | length' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  [[ -z "$count" || "$count" == "null" ]] && count=0
-  echo "$count"
+  fleets_ensure_dir
+  fleet_cfg_project_count "$name"
 }
 
-# Display string for a project entry (path for local, user@host for remote)
+# Display string for a project entry
 groups_project_desc() {
   local name="$1" index="$2"
   _groups_ensure_file
-  local _type
-  _type=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-
-  if [[ "$_type" == "local" ]]; then
-    jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null
-  else
-    local _user _host _port _cloud
-    _user=$(jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].user' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-    _host=$(jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].host' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-    _port=$(jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].port // 22' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-    _cloud=$(jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].cloud // false' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-    if [[ "$_cloud" == "true" ]]; then
-      printf '%s (cloud)' "$_host"
-    elif [[ "$_port" != "22" ]]; then
-      printf '%s@%s:%s' "$_user" "$_host" "$_port"
-    else
-      printf '%s@%s' "$_user" "$_host"
-    fi
+  if ! _groups_resolve_fleet; then
+    return 1
   fi
+
+  # Walk projects in deploy order to find by index
+  local _fleet="$name"
+  local _i=0
+  local group project
+  for group in $(fleet_cfg_groups "$_fleet"); do
+    for project in $(fleet_cfg_group_projects "$_fleet" "$group"); do
+      if (( _i == index )); then
+        fleet_cfg_project_load "$_fleet" "$group" "$project"
+        if [[ "$_FP_TRANSPORT" == "local" ]]; then
+          printf '%s' "$_FP_PATH"
+        elif [[ "$_FP_TRANSPORT" == "cloud" ]]; then
+          printf '%s (cloud)' "$_FP_HOST"
+        elif [[ "$_FP_PORT" != "22" ]]; then
+          printf '%s@%s:%s' "$_FP_USER" "$_FP_HOST" "$_FP_PORT"
+        else
+          printf '%s@%s' "$_FP_USER" "$_FP_HOST"
+        fi
+        return 0
+      fi
+      _i=$(( _i + 1 ))
+    done
+  done
+  return 1
 }
 
-# Get project name (from config on disk for local, from desc for remote)
+# Get project name
 groups_project_name() {
   local name="$1" index="$2"
-  local _type
-  _type=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
 
-  if [[ "$_type" == "local" ]]; then
-    local _path
-    _path=$(jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-    # Read project name from muster.json or deploy.json
-    local _config=""
-    [[ -f "${_path}/muster.json" ]] && _config="${_path}/muster.json"
-    [[ -z "$_config" && -f "${_path}/deploy.json" ]] && _config="${_path}/deploy.json"
-    if [[ -n "$_config" ]] && has_cmd jq; then
-      local _pname
-      _pname=$(jq -r '.project // ""' "$_config" 2>/dev/null)
-      if [[ -n "$_pname" && "$_pname" != "null" ]]; then
-        echo "$_pname"
-        return
+  local _fleet="$name"
+  local _i=0
+  local group project
+  for group in $(fleet_cfg_groups "$_fleet"); do
+    for project in $(fleet_cfg_group_projects "$_fleet" "$group"); do
+      if (( _i == index )); then
+        fleet_cfg_project_load "$_fleet" "$group" "$project"
+        if [[ -n "$_FP_NAME" && "$_FP_NAME" != "null" ]]; then
+          echo "$_FP_NAME"
+        else
+          echo "$project"
+        fi
+        return 0
       fi
-    fi
-    # Fallback to directory name
-    basename "$_path"
-  else
-    # Remote: use host as name (desc already shows user@host)
-    jq -r --arg n "$name" --argjson i "$index" \
-      '.groups[$n].projects[$i].host' "$GROUPS_CONFIG_FILE" 2>/dev/null
-  fi
+      _i=$(( _i + 1 ))
+    done
+  done
+  return 1
 }
 
 # ── CRUD ──
 
-# Create a new group
+# Create a new group (fleet)
 groups_create() {
   local name="$1"
   local display="${2:-$1}"
-  _groups_ensure_file
-
-  # Validate name
-  case "$name" in
-    *[^a-zA-Z0-9_-]*)
-      err "Group name must be alphanumeric, hyphens, or underscores"
-      return 1
-      ;;
-  esac
-
-  if groups_exists "$name"; then
-    err "Group '${name}' already exists"
-    return 1
-  fi
-
-  local group_json
-  group_json=$(jq -n --arg n "$display" '{"name": $n, "projects": [], "deploy_order": [], "deploy_phases": []}')
-
-  local tmp="${GROUPS_CONFIG_FILE}.tmp"
-  jq --arg g "$name" --argjson v "$group_json" \
-    '.groups[$g] = $v' "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
-
-  ok "Created group '${name}'"
+  fleets_ensure_dir
+  fleet_cfg_create "$name" "$display"
+  fleet_cfg_group_create "$name" "default" "default"
 }
 
-# Delete a group
+# Delete a group (fleet)
 groups_delete() {
   local name="$1"
-  _groups_ensure_file
-
-  if ! groups_exists "$name"; then
-    err "Group '${name}' not found"
-    return 1
-  fi
-
-  local tmp="${GROUPS_CONFIG_FILE}.tmp"
-  jq --arg g "$name" 'del(.groups[$g])' \
-    "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
-
-  ok "Deleted group '${name}'"
+  fleets_ensure_dir
+  fleet_cfg_delete "$name"
 }
 
 # Add a local project to a group
 groups_add_local() {
   local name="$1" path="$2"
-  _groups_ensure_file
+  fleets_ensure_dir
 
   if ! groups_exists "$name"; then
     err "Group '${name}' not found"
@@ -184,76 +167,58 @@ groups_add_local() {
     return 1
   fi
 
-  # Check for duplicates
-  local existing
-  existing=$(jq -r --arg g "$name" --arg p "$path" \
-    '[.groups[$g].projects[] | select(.type == "local" and .path == $p)] | length' \
-    "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  if [[ "$existing" != "0" ]]; then
-    err "Project already in group: ${path}"
-    return 1
-  fi
+  local _pname
+  _pname=$(basename "$path")
 
-  local project_json
-  project_json=$(jq -n --arg p "$path" '{"path": $p, "type": "local"}')
+  local _json
+  _json=$(jq -n --arg n "$_pname" --arg p "$path" \
+    '{name: $n, machine: {transport: "local"}, path: $p, hook_mode: "local"}')
 
-  local tmp="${GROUPS_CONFIG_FILE}.tmp"
-  jq --arg g "$name" --argjson p "$project_json" \
-    '.groups[$g].projects += [$p]' "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
-
+  fleet_cfg_project_create "$name" "default" "$_pname" "$_json"
   ok "Added local project: ${path}"
 }
 
 # Add a remote project to a group
-# Args: name host user [port] [identity] [project_dir] [cloud] [auth_method] [auth_mode]
 groups_add_remote() {
   local name="$1" host="$2" user="$3" port="${4:-22}" identity="${5:-}" project_dir="${6:-}"
   local cloud="${7:-false}" auth_method="${8:-}" auth_mode="${9:-}" hook_mode="${10:-manual}"
-  _groups_ensure_file
+  fleets_ensure_dir
 
   if ! groups_exists "$name"; then
     err "Group '${name}' not found"
     return 1
   fi
 
-  # Check for duplicates by host+user+port
-  local existing
-  existing=$(jq -r --arg g "$name" --arg h "$host" --arg u "$user" --argjson p "$port" \
-    '[.groups[$g].projects[] | select(.type == "remote" and .host == $h and .user == $u and .port == $p)] | length' \
-    "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  if [[ "$existing" != "0" ]]; then
-    err "Remote already in group: ${user}@${host}:${port}"
-    return 1
-  fi
-
-  # Default auth_method based on context
   [[ -z "$auth_method" && "$cloud" == "true" ]] && auth_method=""
   [[ -z "$auth_method" && -n "$identity" ]] && auth_method="key"
   [[ -z "$auth_method" ]] && auth_method="key"
 
-  local project_json
-  project_json=$(jq -n \
+  local _transport="ssh"
+  [[ "$cloud" == "true" ]] && _transport="cloud"
+
+  # Use host as dir name (sanitize dots/colons)
+  local _pdir_name
+  _pdir_name=$(printf '%s' "$host" | tr '.:' '-')
+
+  local _json
+  _json=$(jq -n \
+    --arg n "$_pdir_name" \
     --arg host "$host" \
     --arg user "$user" \
     --argjson port "$port" \
+    --arg transport "$_transport" \
     --arg identity "$identity" \
     --arg project_dir "$project_dir" \
-    --argjson cloud "$([ "$cloud" == "true" ] && echo true || echo false)" \
+    --arg hook_mode "$hook_mode" \
     --arg auth_method "$auth_method" \
     --arg auth_mode "$auth_mode" \
-    --arg hook_mode "$hook_mode" \
-    '{host: $host, user: $user, port: $port, type: "remote", cloud: $cloud, hook_mode: $hook_mode} +
-     (if $auth_method != "" then
-       {auth: ({method: $auth_method} +
-         (if $auth_method == "key" and $identity != "" then {identity_file: $identity} else {} end) +
-         (if $auth_method == "password" and $auth_mode != "" then {mode: $auth_mode} else {} end)
-       )}
-     else {} end) +
-     (if $project_dir != "" then {project_dir: $project_dir} else {} end)')
+    '{name: $n, machine: ({host: $host, user: $user, port: $port, transport: $transport} +
+      (if $identity != "" then {identity_file: $identity} else {} end)),
+      hook_mode: $hook_mode} +
+      (if $project_dir != "" then {remote_path: $project_dir} else {} end) +
+      (if $auth_method == "password" then {auth: {method: "password"} + (if $auth_mode != "" then {mode: $auth_mode} else {} end)} else {} end)')
 
-  local tmp="${GROUPS_CONFIG_FILE}.tmp"
-  jq --arg g "$name" --argjson p "$project_json" \
-    '.groups[$g].projects += [$p]' "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
+  fleet_cfg_project_create "$name" "default" "$_pdir_name" "$_json"
 
   if [[ "$cloud" == "true" ]]; then
     ok "Added cloud project: ${host}"
@@ -265,26 +230,23 @@ groups_add_remote() {
 # Remove a project from a group by index
 groups_remove_project() {
   local name="$1" index="$2"
-  _groups_ensure_file
+  fleets_ensure_dir
 
-  if ! groups_exists "$name"; then
-    err "Group '${name}' not found"
-    return 1
-  fi
-
-  local total
-  total=$(groups_project_count "$name")
-  if (( index < 0 || index >= total )); then
-    err "Invalid project index: ${index}"
-    return 1
-  fi
-
-  local tmp="${GROUPS_CONFIG_FILE}.tmp"
-  jq --arg g "$name" --argjson i "$index" \
-    '.groups[$g].projects = [.groups[$g].projects | to_entries[] | select(.key != $i) | .value]' \
-    "$GROUPS_CONFIG_FILE" > "$tmp" && mv "$tmp" "$GROUPS_CONFIG_FILE"
-
-  ok "Removed project from group '${name}'"
+  local _fleet="$name"
+  local _i=0
+  local group project
+  for group in $(fleet_cfg_groups "$_fleet"); do
+    for project in $(fleet_cfg_group_projects "$_fleet" "$group"); do
+      if (( _i == index )); then
+        fleet_cfg_project_delete "$_fleet" "$group" "$project"
+        ok "Removed project from group '${name}'"
+        return 0
+      fi
+      _i=$(( _i + 1 ))
+    done
+  done
+  err "Invalid project index: ${index}"
+  return 1
 }
 
 # ── Remote helpers for group projects (SSH, cloud, password auth) ──
@@ -296,37 +258,42 @@ _GP_CLOUD="" _GP_AUTH_METHOD="" _GP_AUTH_MODE="" _GP_PASSWORD=""
 # Load remote config from a group project entry
 _groups_load_remote() {
   local name="$1" index="$2"
-  _GP_HOST=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].host // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  _GP_USER=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].user // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  _GP_PORT=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].port // 22' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  _GP_PROJECT_DIR=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].project_dir // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
 
-  # Cloud flag
-  _GP_CLOUD=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].cloud // false' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  [[ "$_GP_CLOUD" != "true" ]] && _GP_CLOUD="false"
+  local _fleet="$name"
+  local _i=0
+  local group project
+  for group in $(fleet_cfg_groups "$_fleet"); do
+    for project in $(fleet_cfg_group_projects "$_fleet" "$group"); do
+      if (( _i == index )); then
+        fleet_cfg_project_load "$_fleet" "$group" "$project"
+        # Map _FP_* → _GP_*
+        _GP_HOST="$_FP_HOST"
+        _GP_USER="$_FP_USER"
+        _GP_PORT="$_FP_PORT"
+        _GP_IDENTITY="$_FP_IDENTITY"
+        _GP_PROJECT_DIR="$_FP_REMOTE_PATH"
+        _GP_CLOUD="false"
+        [[ "$_FP_TRANSPORT" == "cloud" ]] && _GP_CLOUD="true"
 
-  # Auth block (with backwards-compat fallback for identity_file)
-  _GP_AUTH_METHOD=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].auth.method // "key"' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  _GP_AUTH_MODE=$(jq -r --arg n "$name" --argjson i "$index" \
-    '.groups[$n].projects[$i].auth.mode // ""' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-  _GP_IDENTITY=$(jq -r --arg n "$name" --argjson i "$index" \
-    '(.groups[$n].projects[$i].auth.identity_file // .groups[$n].projects[$i].identity_file) // ""' \
-    "$GROUPS_CONFIG_FILE" 2>/dev/null)
+        # Auth from project.json
+        local cfg
+        cfg="$(fleet_cfg_project_dir "$_fleet" "$group" "$project")/project.json"
+        _GP_AUTH_METHOD=$(jq -r '.auth.method // "key"' "$cfg" 2>/dev/null)
+        _GP_AUTH_MODE=$(jq -r '.auth.mode // ""' "$cfg" 2>/dev/null)
 
-  [[ -z "$_GP_PORT" || "$_GP_PORT" == "null" ]] && _GP_PORT="22"
-  [[ "$_GP_IDENTITY" == "null" ]] && _GP_IDENTITY=""
-  [[ "$_GP_PROJECT_DIR" == "null" ]] && _GP_PROJECT_DIR=""
-  # Strip leading colons (common input mistake: user@host:/path → just the path part)
-  _GP_PROJECT_DIR="${_GP_PROJECT_DIR#:}"
-  [[ -z "$_GP_AUTH_METHOD" || "$_GP_AUTH_METHOD" == "null" ]] && _GP_AUTH_METHOD="key"
-  [[ "$_GP_AUTH_MODE" == "null" ]] && _GP_AUTH_MODE=""
-  _GP_PASSWORD=""
+        [[ -z "$_GP_PORT" || "$_GP_PORT" == "null" ]] && _GP_PORT="22"
+        [[ "$_GP_IDENTITY" == "null" ]] && _GP_IDENTITY=""
+        [[ "$_GP_PROJECT_DIR" == "null" ]] && _GP_PROJECT_DIR=""
+        _GP_PROJECT_DIR="${_GP_PROJECT_DIR#:}"
+        [[ -z "$_GP_AUTH_METHOD" || "$_GP_AUTH_METHOD" == "null" ]] && _GP_AUTH_METHOD="key"
+        [[ "$_GP_AUTH_MODE" == "null" ]] && _GP_AUTH_MODE=""
+        _GP_PASSWORD=""
+        return 0
+      fi
+      _i=$(( _i + 1 ))
+    done
+  done
+  return 1
 }
 
 # Load cloud config from global settings into FLEET_CLOUD_* vars
@@ -339,7 +306,6 @@ _groups_cloud_config() {
   [[ "$FLEET_CLOUD_ORG" == "null" ]] && FLEET_CLOUD_ORG=""
   [[ "$FLEET_CLOUD_TOKEN" == "null" ]] && FLEET_CLOUD_TOKEN=""
 
-  # Fallback: check token file by reference
   if [[ -z "$FLEET_CLOUD_TOKEN" ]]; then
     local _token_ref
     _token_ref=$(global_config_get "cloud.token_ref" 2>/dev/null)
@@ -351,7 +317,6 @@ _groups_cloud_config() {
 }
 
 # Load SSH password using the credential system
-# Requires _groups_load_remote() to have been called first
 _groups_load_ssh_password() {
   local cred_key="ssh_${_GP_USER}@${_GP_HOST}:${_GP_PORT}"
 
@@ -359,7 +324,6 @@ _groups_load_ssh_password() {
     save)
       _GP_PASSWORD=$(_cred_keychain_get "groups" "$cred_key" 2>/dev/null) || true
       if [[ -z "$_GP_PASSWORD" ]]; then
-        # Fallback: try session cache (background subshells can't access keychain on some systems)
         _GP_PASSWORD=$(_cred_session_get "$cred_key" 2>/dev/null) || true
       fi
       if [[ -z "$_GP_PASSWORD" ]]; then
@@ -388,7 +352,6 @@ _groups_load_ssh_password() {
 _groups_build_ssh_opts() {
   _GROUPS_SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
-  # BatchMode=yes prevents password prompts — only for key/agent auth
   if [[ "$_GP_AUTH_METHOD" != "password" ]]; then
     _GROUPS_SSH_OPTS="${_GROUPS_SSH_OPTS} -o BatchMode=yes"
   fi
@@ -406,7 +369,7 @@ _groups_build_ssh_opts() {
   fi
 }
 
-# Wrap a command with PATH setup for non-interactive SSH (muster installs to ~/.local/bin)
+# Wrap a command with PATH setup for non-interactive SSH
 _groups_wrap_cmd() {
   printf 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"; %s' "$1"
 }

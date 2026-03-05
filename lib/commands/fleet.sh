@@ -331,7 +331,12 @@ _fleet_edit_tui() {
   if [[ "$_edit_hm" != "$_FM_HOOK_MODE" ]]; then
     case "$_edit_hm" in
       manual|sync)
-        fleet_set ".machines.\"${machine}\".hook_mode" "\"${_edit_hm}\""
+        if fleet_cfg_find_project "$machine" 2>/dev/null; then
+          fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+            ".hook_mode = \"${_edit_hm}\""
+        else
+          fleet_set ".machines.\"${machine}\".hook_mode" "\"${_edit_hm}\""
+        fi
         ok "Hook mode: ${_edit_hm}"
         _edit_changed=true
         ;;
@@ -340,19 +345,34 @@ _fleet_edit_tui() {
   fi
 
   if [[ "$_edit_user" != "$_FM_USER" ]]; then
-    fleet_set ".machines.\"${machine}\".user" "\"${_edit_user}\""
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".machine.user = \"${_edit_user}\""
+    else
+      fleet_set ".machines.\"${machine}\".user" "\"${_edit_user}\""
+    fi
     ok "User: ${_edit_user}"
     _edit_changed=true
   fi
 
   if [[ "$_edit_host" != "$_FM_HOST" ]]; then
-    fleet_set ".machines.\"${machine}\".host" "\"${_edit_host}\""
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".machine.host = \"${_edit_host}\""
+    else
+      fleet_set ".machines.\"${machine}\".host" "\"${_edit_host}\""
+    fi
     ok "Host: ${_edit_host}"
     _edit_changed=true
   fi
 
   if [[ "$_edit_port" != "$_FM_PORT" ]]; then
-    fleet_set ".machines.\"${machine}\".port" "${_edit_port}"
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".machine.port = ${_edit_port}"
+    else
+      fleet_set ".machines.\"${machine}\".port" "${_edit_port}"
+    fi
     ok "Port: ${_edit_port}"
     _edit_changed=true
   fi
@@ -412,8 +432,14 @@ _fleet_machine_detail() {
     fi
 
     # Agent
-    local _md_agent_installed
-    _md_agent_installed=$(fleet_get ".machines.\"${machine}\".agent_installed // false" 2>/dev/null)
+    local _md_agent_installed="false"
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      local _md_pdir
+      _md_pdir="$(fleet_cfg_project_dir "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT")"
+      _md_agent_installed=$(jq -r '.agent_installed // false' "${_md_pdir}/project.json" 2>/dev/null)
+    else
+      _md_agent_installed=$(fleet_get ".machines.\"${machine}\".agent_installed // false" 2>/dev/null)
+    fi
     if [[ "$_md_agent_installed" == "true" ]]; then
       actions[${#actions[@]}]="Agent status"
       actions[${#actions[@]}]="Remove agent"
@@ -545,9 +571,7 @@ _fleet_manage_machines() {
         ;;
       *)
         # Check if it's a machine name
-        local _mm_exists
-        _mm_exists=$(fleet_get ".machines.\"${MENU_RESULT}\" // empty" 2>/dev/null)
-        if [[ -n "$_mm_exists" ]]; then
+        if _fleet_load_machine "$MENU_RESULT" 2>/dev/null; then
           _fleet_machine_detail "$MENU_RESULT"
         fi
         ;;
@@ -597,9 +621,7 @@ _fleet_sync_menu() {
         ;;
       *)
         # Single machine sync
-        local _sm_exists
-        _sm_exists=$(fleet_get ".machines.\"${MENU_RESULT}\" // empty" 2>/dev/null)
-        if [[ -n "$_sm_exists" ]]; then
+        if _fleet_load_machine "$MENU_RESULT" 2>/dev/null; then
           _fleet_sync_one "$MENU_RESULT" "false" ""
           echo ""
           printf '%b\n' "  ${DIM}Press any key to continue...${RESET}"
@@ -1026,10 +1048,8 @@ _fleet_cmd_pair() {
   fi
 
   # Verify machine exists
-  local existing
-  existing=$(fleet_get ".machines.\"${name}\" // empty")
-  if [[ -z "$existing" ]]; then
-    err "Machine '${name}' not found in remotes.json"
+  if ! _fleet_load_machine "$name" 2>/dev/null; then
+    err "Machine '${name}' not found"
     return 1
   fi
 
@@ -1063,7 +1083,21 @@ _fleet_cmd_list() {
   fi
 
   if [[ "$json_mode" == "true" ]]; then
-    jq '.' "$FLEET_CONFIG_FILE"
+    if [[ "$FLEET_CONFIG_FILE" == "__fleet_dirs__" ]]; then
+      # Build JSON from fleet dirs
+      printf '{"machines":{'
+      local _jfirst=true
+      while IFS= read -r _jm; do
+        [[ -z "$_jm" ]] && continue
+        _fleet_load_machine "$_jm"
+        [[ "$_jfirst" == "true" ]] && _jfirst=false || printf ','
+        printf '"%s":{"host":"%s","user":"%s","port":%s,"transport":"%s","hook_mode":"%s"}' \
+          "$_jm" "$_FM_HOST" "$_FM_USER" "$_FM_PORT" "$_FM_TRANSPORT" "$_FM_HOOK_MODE"
+      done < <(fleet_machines)
+      printf '}}\n'
+    else
+      jq '.' "$FLEET_CONFIG_FILE"
+    fi
     return 0
   fi
 
@@ -1388,10 +1422,8 @@ _fleet_cmd_group() {
   # Validate all machines exist
   local _m
   for _m in "$@"; do
-    local exists
-    exists=$(fleet_get ".machines.\"${_m}\" // empty")
-    if [[ -z "$exists" ]]; then
-      err "Machine '${_m}' not found in remotes.json"
+    if ! _fleet_load_machine "$_m" 2>/dev/null; then
+      err "Machine '${_m}' not found"
       return 1
     fi
   done
@@ -1886,9 +1918,7 @@ _fleet_cmd_edit() {
     return 1
   fi
 
-  local existing
-  existing=$(fleet_get ".machines.\"${machine}\" // empty")
-  if [[ -z "$existing" ]]; then
+  if ! _fleet_load_machine "$machine" 2>/dev/null; then
     err "Machine '${machine}' not found"
     return 1
   fi
@@ -1896,25 +1926,45 @@ _fleet_cmd_edit() {
   local changed=false
 
   if [[ -n "$new_hook_mode" ]]; then
-    fleet_set ".machines.\"${machine}\".hook_mode" "\"${new_hook_mode}\""
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".hook_mode = \"${new_hook_mode}\""
+    else
+      fleet_set ".machines.\"${machine}\".hook_mode" "\"${new_hook_mode}\""
+    fi
     ok "Hook mode set to '${new_hook_mode}' for ${machine}"
     changed=true
   fi
 
   if [[ -n "$new_user" ]]; then
-    fleet_set ".machines.\"${machine}\".user" "\"${new_user}\""
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".machine.user = \"${new_user}\""
+    else
+      fleet_set ".machines.\"${machine}\".user" "\"${new_user}\""
+    fi
     ok "User set to '${new_user}' for ${machine}"
     changed=true
   fi
 
   if [[ -n "$new_host" ]]; then
-    fleet_set ".machines.\"${machine}\".host" "\"${new_host}\""
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".machine.host = \"${new_host}\""
+    else
+      fleet_set ".machines.\"${machine}\".host" "\"${new_host}\""
+    fi
     ok "Host set to '${new_host}' for ${machine}"
     changed=true
   fi
 
   if [[ -n "$new_port" ]]; then
-    fleet_set ".machines.\"${machine}\".port" "${new_port}"
+    if fleet_cfg_find_project "$machine" 2>/dev/null; then
+      fleet_cfg_project_update "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT" \
+        ".machine.port = ${new_port}"
+    else
+      fleet_set ".machines.\"${machine}\".port" "${new_port}"
+    fi
     ok "Port set to '${new_port}' for ${machine}"
     changed=true
   fi

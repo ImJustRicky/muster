@@ -83,15 +83,26 @@ _fleet_sync_one() {
 
   _fleet_load_machine "$machine"
 
-  # Find local hooks dir
-  local project_dir
-  if [[ -n "$CONFIG_FILE" ]]; then
-    project_dir="$(dirname "$CONFIG_FILE")"
-  else
-    project_dir="$(pwd)"
+  # Find local hooks dir — fleet dirs first, then project dir
+  local hooks_dir=""
+  if fleet_cfg_find_project "$machine" 2>/dev/null; then
+    local _fleet_hooks
+    _fleet_hooks="$(fleet_cfg_project_hooks_dir "$_FP_FLEET" "$_FP_GROUP" "$_FP_PROJECT")"
+    if [[ -d "$_fleet_hooks" ]]; then
+      hooks_dir="$_fleet_hooks"
+    fi
   fi
 
-  local hooks_dir="${project_dir}/.muster/hooks"
+  if [[ -z "$hooks_dir" ]]; then
+    local project_dir
+    if [[ -n "$CONFIG_FILE" ]]; then
+      project_dir="$(dirname "$CONFIG_FILE")"
+    else
+      project_dir="$(pwd)"
+    fi
+    hooks_dir="${project_dir}/.muster/hooks"
+  fi
+
   if [[ ! -d "$hooks_dir" ]]; then
     warn "No hooks directory at ${hooks_dir}"
     return 1

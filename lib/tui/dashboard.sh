@@ -204,13 +204,22 @@ _dashboard_header() {
   _dashboard_rule
   echo ""
 
-  # Fleet panel (only if remotes.json exists)
+  # Fleet panel (remotes.json or fleet dirs)
   local _fleet_config="${project_dir}/remotes.json"
-  if [[ -f "$_fleet_config" ]] && has_cmd jq; then
+  local _has_fleet=false
+  [[ -f "$_fleet_config" ]] && _has_fleet=true
+  fleet_cfg_has_any 2>/dev/null && _has_fleet=true
+
+  if [[ "$_has_fleet" == "true" ]] && has_cmd jq; then
     printf '  %b%bFleet%b\n' "${BOLD}" "${WHITE}" "${RESET}"
 
-    local _fleet_machines
-    _fleet_machines=$(jq -r '.machines | keys[]' "$_fleet_config" 2>/dev/null)
+    # Collect machines from fleet dirs or legacy
+    local _fleet_machines=""
+    if fleet_cfg_has_any 2>/dev/null; then
+      _fleet_machines=$(fleet_machines 2>/dev/null)
+    elif [[ -f "$_fleet_config" ]]; then
+      _fleet_machines=$(jq -r '.machines | keys[]' "$_fleet_config" 2>/dev/null)
+    fi
 
     if [[ -z "$_fleet_machines" ]]; then
       printf '  %bNo machines configured%b\n' "${DIM}" "${RESET}"
@@ -225,16 +234,8 @@ _dashboard_header() {
         _fleet_keys[${#_fleet_keys[@]}]="$_fm"
 
         (
-          local _fm_data
-          _fm_data=$(jq -r --arg n "$_fm" '.machines[$n] | "\(.user // "")\n\(.host // "")\n\(.port // 22)\n\(.identity_file // "")"' "$_fleet_config" 2>/dev/null)
-          local _u="" _h="" _p="" _id=""
-          local _li=0
-          while IFS= read -r _line; do
-            case $_li in
-              0) _u="$_line" ;; 1) _h="$_line" ;; 2) _p="$_line" ;; 3) _id="$_line" ;;
-            esac
-            _li=$(( _li + 1 ))
-          done <<< "$_fm_data"
+          _fleet_load_machine "$_fm" 2>/dev/null || true
+          local _u="$_FM_USER" _h="$_FM_HOST" _p="$_FM_PORT" _id="$_FM_IDENTITY"
           [[ -z "$_p" || "$_p" == "null" ]] && _p="22"
           [[ "$_id" == "null" ]] && _id=""
 
@@ -242,6 +243,7 @@ _dashboard_header() {
           [[ -n "$_id" ]] && _sopts="${_sopts} -i ${_id/#\~/$HOME}"
           [[ "$_p" != "22" ]] && _sopts="${_sopts} -p ${_p}"
 
+          # shellcheck disable=SC2086
           if ssh -n $_sopts "${_u}@${_h}" "echo ok" &>/dev/null; then
             printf 'online' > "${_fleet_cache_dir}/${_fm}"
           else
@@ -254,10 +256,9 @@ _dashboard_header() {
       local _fi=0
       while (( _fi < ${#_fleet_keys[@]} )); do
         local _fm="${_fleet_keys[$_fi]}"
-        local _fm_data
-        _fm_data=$(jq -r --arg n "$_fm" '.machines[$n] | "\(.user)@\(.host) \(.mode // "push")"' "$_fleet_config" 2>/dev/null)
-        local _fm_host="${_fm_data% *}"
-        local _fm_mode="${_fm_data##* }"
+        _fleet_load_machine "$_fm" 2>/dev/null || true
+        local _fm_host="${_FM_USER}@${_FM_HOST}"
+        local _fm_mode="${_FM_MODE}"
 
         local _fm_status_icon="○" _fm_status_color="$YELLOW" _fm_status_label="checking"
         if [[ -f "${_fleet_cache_dir}/${_fm}" ]]; then
@@ -342,36 +343,28 @@ _dashboard_home() {
     local _gcount=0
     local _grouped_paths=""
 
-    if [[ -f "$GROUPS_CONFIG_FILE" ]] && has_cmd jq; then
-      _gcount=$(jq '.groups | length' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-      [[ -z "$_gcount" ]] && _gcount=0
+    # Use groups_list() which works with both fleet dirs and legacy groups.json
+    while IFS= read -r _gkey; do
+      [[ -z "$_gkey" ]] && continue
+      _group_keys[${#_group_keys[@]}]="$_gkey"
+      _group_displays[${#_group_displays[@]}]="$_gkey"
+      _gcount=$(( _gcount + 1 ))
 
-      local _gi=0
-      while (( _gi < _gcount )); do
-        local _gkey _gdisplay _gpcount
-        _gkey=$(jq -r ".groups | keys[$_gi]" "$GROUPS_CONFIG_FILE")
-        _gdisplay=$(jq -r --arg g "$_gkey" '.groups[$g].name // $g' "$GROUPS_CONFIG_FILE")
-        _gpcount=$(jq -r --arg g "$_gkey" '.groups[$g].projects | length' "$GROUPS_CONFIG_FILE")
-        _group_keys[${#_group_keys[@]}]="$_gkey"
-        _group_displays[${#_group_displays[@]}]="$_gdisplay"
-
-        # Collect local project paths from this group
-        local _gpi=0
-        while (( _gpi < _gpcount )); do
-          local _gp_type _gp_path
-          _gp_type=$(jq -r --arg g "$_gkey" --argjson i "$_gpi" \
-            '.groups[$g].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-          if [[ "$_gp_type" == "local" ]]; then
-            _gp_path=$(jq -r --arg g "$_gkey" --argjson i "$_gpi" \
-              '.groups[$g].projects[$i].path' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-            _grouped_paths="${_grouped_paths}|${_gp_path}|"
-          fi
-          _gpi=$(( _gpi + 1 ))
-        done
-
-        _gi=$(( _gi + 1 ))
+      # Collect local project paths from this group
+      local _gpcount
+      _gpcount=$(groups_project_count "$_gkey" 2>/dev/null)
+      [[ -z "$_gpcount" ]] && _gpcount=0
+      local _gpi=0
+      while (( _gpi < _gpcount )); do
+        local _gp_desc
+        _gp_desc=$(groups_project_desc "$_gkey" "$_gpi" 2>/dev/null)
+        # Only local transports have plain paths without @
+        if [[ -n "$_gp_desc" && "$_gp_desc" != *"@"* && "$_gp_desc" != *"(cloud)"* ]]; then
+          _grouped_paths="${_grouped_paths}|${_gp_desc}|"
+        fi
+        _gpi=$(( _gpi + 1 ))
       done
-    fi
+    done < <(groups_list 2>/dev/null)
 
     # ── Fleets section ──
     if (( _gcount > 0 )); then
@@ -382,7 +375,8 @@ _dashboard_home() {
         local _gdisplay="${_group_displays[$_gi]}"
         local _gkey="${_group_keys[$_gi]}"
         local _gpcount
-        _gpcount=$(jq -r --arg g "$_gkey" '.groups[$g].projects | length' "$GROUPS_CONFIG_FILE")
+        _gpcount=$(groups_project_count "$_gkey" 2>/dev/null)
+        [[ -z "$_gpcount" ]] && _gpcount=0
 
         local _right_text
         _right_text="${_gpcount} project$([ "$_gpcount" != "1" ] && echo "s")"
@@ -576,22 +570,29 @@ cmd_dashboard() {
   local _fleet_key="" _fleet_display=""
   local _project_abs
   _project_abs="$(cd "$(dirname "$CONFIG_FILE")" 2>/dev/null && pwd)"
-  if [[ -f "$GROUPS_CONFIG_FILE" ]] && has_cmd jq; then
-    local _gkeys
-    _gkeys=$(jq -r '.groups | keys[]' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-    while IFS= read -r _gk; do
-      [[ -z "$_gk" ]] && continue
-      local _match
-      _match=$(jq -r --arg g "$_gk" --arg p "$_project_abs" \
-        '[.groups[$g].projects[] | select(.type == "local" and .path == $p)] | length' \
-        "$GROUPS_CONFIG_FILE" 2>/dev/null)
-      if [[ "$_match" != "0" && -n "$_match" ]]; then
-        _fleet_key="$_gk"
-        _fleet_display=$(jq -r --arg g "$_gk" '.groups[$g].name // $g' "$GROUPS_CONFIG_FILE")
-        break
+  # Check fleet dirs first, then legacy groups.json
+  while IFS= read -r _gk; do
+    [[ -z "$_gk" ]] && continue
+    local _gpcount
+    _gpcount=$(groups_project_count "$_gk" 2>/dev/null)
+    [[ -z "$_gpcount" ]] && _gpcount=0
+    local _gpi=0
+    while (( _gpi < _gpcount )); do
+      local _gp_desc
+      _gp_desc=$(groups_project_desc "$_gk" "$_gpi" 2>/dev/null)
+      # Match local project paths
+      if [[ -n "$_gp_desc" && "$_gp_desc" != *"@"* && "$_gp_desc" != *"(cloud)"* ]]; then
+        local _gp_abs
+        _gp_abs="$(cd "$_gp_desc" 2>/dev/null && pwd)" || true
+        if [[ "$_gp_abs" == "$_project_abs" ]]; then
+          _fleet_key="$_gk"
+          _fleet_display="$_gk"
+          break 2
+        fi
       fi
-    done <<< "$_gkeys"
-  fi
+      _gpi=$(( _gpi + 1 ))
+    done
+  done < <(groups_list 2>/dev/null)
 
   # Save dashboard PID so fleet deploys can signal us to refresh
   local _dash_proj_dir
@@ -638,22 +639,17 @@ cmd_dashboard() {
       mkdir -p "$_status_dir" 2>/dev/null
 
       while (( _fi < _fleet_total )); do
-        local _ftype
-        _ftype=$(jq -r --arg g "$_fleet_key" --argjson i "$_fi" \
-          '.groups[$g].projects[$i].type' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+        local _fp_desc
+        _fp_desc=$(groups_project_desc "$_fleet_key" "$_fi" 2>/dev/null)
 
-        if [[ "$_ftype" == "remote" ]]; then
-          local _fhost _fuser _fport _fcloud
-          _fhost=$(jq -r --arg g "$_fleet_key" --argjson i "$_fi" \
-            '.groups[$g].projects[$i].host' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-          _fuser=$(jq -r --arg g "$_fleet_key" --argjson i "$_fi" \
-            '.groups[$g].projects[$i].user' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-          _fport=$(jq -r --arg g "$_fleet_key" --argjson i "$_fi" \
-            '.groups[$g].projects[$i].port // 22' "$GROUPS_CONFIG_FILE" 2>/dev/null)
-          _fcloud=$(jq -r --arg g "$_fleet_key" --argjson i "$_fi" \
-            '.groups[$g].projects[$i].cloud // false' "$GROUPS_CONFIG_FILE" 2>/dev/null)
+        # Show remote machines (desc contains @)
+        if [[ -n "$_fp_desc" && "$_fp_desc" == *"@"* ]]; then
+          local _machine_label="$_fp_desc"
+          local _fp_name
+          _fp_name=$(groups_project_name "$_fleet_key" "$_fi" 2>/dev/null)
 
-          local _cache_key="${_fuser}_${_fhost}_${_fport}"
+          local _cache_key
+          _cache_key=$(printf '%s' "$_fp_desc" | tr '@: ' '___')
           local _cache_file="${_status_dir}/${_cache_key}"
           local _machine_status="unknown"
 
@@ -662,11 +658,14 @@ cmd_dashboard() {
             _machine_status=$(cat "$_cache_file" 2>/dev/null)
           fi
 
-          # Kick off background check (non-blocking, refreshes cache)
-          if [[ "$_fcloud" != "true" ]]; then
-            ( ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-                -p "$_fport" "${_fuser}@${_fhost}" "echo online" >"$_cache_file" 2>/dev/null \
-              || printf 'offline' >"$_cache_file" ) &
+          # Kick off background check if not cloud
+          if [[ "$_fp_desc" != *"(cloud)"* ]]; then
+            _groups_load_remote "$_fleet_key" "$_fi" 2>/dev/null || true
+            if [[ -n "$_GP_HOST" ]]; then
+              ( ssh -o ConnectTimeout=3 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                  -p "${_GP_PORT:-22}" "${_GP_USER}@${_GP_HOST}" "echo online" >"$_cache_file" 2>/dev/null \
+                || printf 'offline' >"$_cache_file" ) &
+            fi
           fi
 
           local _status_icon _status_color
@@ -675,9 +674,6 @@ cmd_dashboard() {
             offline) _status_icon="●"; _status_color="$RED" ;;
             *)       _status_icon="○"; _status_color="$GRAY" ;;
           esac
-
-          local _machine_label="${_fuser}@${_fhost}"
-          [[ "$_fport" != "22" ]] && _machine_label="${_machine_label}:${_fport}"
 
           printf '    %b%s%b %s %b%s%b\n' \
             "$_status_color" "$_status_icon" "${RESET}" \
@@ -738,14 +734,22 @@ cmd_dashboard() {
     fi
     actions[${#actions[@]}]="$_doctor_label"
 
-    # Add Fleet action if remotes.json exists
-    if [[ -f "${project_dir}/remotes.json" ]]; then
+    # Add Fleet action if remotes.json or fleet dirs exist
+    if [[ -f "${project_dir}/remotes.json" ]] || fleet_cfg_has_any 2>/dev/null; then
       actions[${#actions[@]}]="Fleet"
     fi
 
     # Fleet action — show fleet this project belongs to, or generic Groups
     if [[ -n "$_fleet_key" ]]; then
       actions[${#actions[@]}]="Fleet: ${_fleet_display}"
+    elif fleet_cfg_has_any 2>/dev/null; then
+      local _fcount=0
+      while IFS= read -r _fl; do
+        [[ -n "$_fl" ]] && _fcount=$(( _fcount + 1 ))
+      done < <(fleets_list 2>/dev/null)
+      if (( _fcount > 0 )); then
+        actions[${#actions[@]}]="Groups"
+      fi
     elif [[ -f "$GROUPS_CONFIG_FILE" ]] && has_cmd jq; then
       local _gcount
       _gcount=$(jq '.groups | length' "$GROUPS_CONFIG_FILE" 2>/dev/null)
